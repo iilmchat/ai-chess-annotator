@@ -246,3 +246,71 @@ KI-001, KI-002, KI-006; они не блокируют продукт)
   rate limiting, маппинг `AppError` → HTTP.
 - При проектировании T-009 учесть KI-014 (бюджет 30 с на 40 ходов) и
   KI-013 (движок в Docker).
+
+---
+
+## Итерация 4 — API `/v1/analyze` и пул движков (T-009)
+
+**Дата:** 2026-10-28
+**Статус:** ✅ завершена. **KI-014 закрыт** (SLA выполнен с 2-кратным запасом)
+**Отчёты шагов:** `docs/development/reports/iteration-4/STEP-01…STEP-04`
+
+### Что сделано
+
+- [x] **KI-014 решён: `EnginePool`** (`app/engine/pool.py`) — 4 независимых
+      процесса Stockfish (настраивается `ENGINE_POOL_SIZE`, максимум 8),
+      очередь свободных (`asyncio.Queue`), параллельный анализ позиций
+      через `asyncio.gather` с сохранением порядка. Общие шаги «история
+      ходов → позиции» и «линии движка → `MoveAnalysis`» вынесены в
+      `prepare_positions()` / `build_move_analyses()`, чтобы пул и
+      последовательный `EngineService` считали одинаково.
+- [x] **`POST /v1/analyze`** (`app/api/v1/analyze.py`): `{pgn, level}` →
+      `{analysis_id, status, meta, moves_analyzed, time_taken_ms, summary}`;
+      сохранение `games` + 53 × `moves` (san, fen, eval_cp/eval_mate,
+      best_move_san, delta_cp, classification, engine_depth).
+- [x] **Глобальный обработчик `AppError`** → `HTTP 400/422/500/504` с телом
+      `{"detail", "code"}`; для ошибок движка `detail = "Engine unavailable"`.
+- [x] **Rate limiting** (`app/api/ratelimit.py`): Redis `INCR`+`EXPIRE`,
+      10 запросов/мин на IP для `POST /v1/analyze`, заголовки
+      `Retry-After`/`X-RateLimit-*`, fail-open при недоступном Redis.
+- [x] **Lifespan**: пул движков и Redis-клиент создаются на старте и
+      закрываются на остановке; `create_app(settings)` принимает настройки
+      (нужно тестам).
+- [x] **Тесты:** `tests/unit/test_engine_pool.py` (7), 
+      `tests/unit/test_rate_limit.py` (7), 
+      `tests/integration/test_api_analyze.py` (4, включая SLA).
+- [x] **Документация:** отчёты `reports/iteration-4/`, `CHANGELOG.md`,
+      `KNOWN_ISSUES.md` (KI-014 → Closed, +KI-015…KI-018), `README.md`,
+      `docs/README.md`, `PROMPT_CURRENT.md`.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Публичные UUID-идентификаторы анализа | В схеме SPEC §4 нет `public_id`; менять схему вне T-009 не стали | KI-016 |
+| Гарантия SLA для партий 160+ полуходов | Время растёт линейно с длиной; бюджета запроса нет | KI-017 |
+| Сохранение MultiPV-линий в `moves.multipv` | `MoveAnalysis` не несёт линии наружу; понадобятся в T-011/T-012 | KI-018 |
+| TCP-режим движка | Не входил в T-009 | KI-013 |
+
+### Метрики
+
+- **SLA (KI-014):** `example.pgn` (53 полухода), уровень `club`, пул 4 —
+  **14 646 мс** при лимите 30 000 мс (ответ API `time_taken_ms` = 14646,
+  настенное время 14 660 мс). Прежняя оценка последовательного анализа —
+  ≈ 41 с на 40 ходов, т.е. ускорение ≈ ×3.7.
+- **Backend-тесты:** **83 passed, 1 xfailed** (7 файлов; +18 к итерации 3).
+  Полный прогон — 26.28 с (из них 15 с — SLA-тест).
+- **ruff:** 0 ошибок. **mypy (strict):** 0 ошибок, **21** файл.
+- **Ошибки API:** битый PGN → 400 `invalid_pgn`, неизвестный уровень →
+  422, движок недоступен → 500 `Engine unavailable`.
+- **CI:** конфигурация не менялась; в Actions не запускался (нет push).
+- **Время итерации:** ≈ 0.2 ч.
+
+### Что дальше
+
+- **T-010. Motif Detector:** `app/motifs/` — эвристики `python-chess`
+  (слабые поля, проходные, открытые линии, безопасность короля) +
+  фичи движка → структурированные мотивы, привязанные к ходам;
+  recall ≥ 80% на 20 тестовых позициях.
+- Учесть KI-018: мотивам и Policy нужны MultiPV-линии — расширить
+  `MoveAnalysis`/`moves.multipv` в T-010/T-011.

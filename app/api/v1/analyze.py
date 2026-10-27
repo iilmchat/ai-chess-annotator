@@ -1,0 +1,178 @@
+"""`POST /v1/analyze` — разбор партии движком и сохранение в БД (T-009).
+
+Контракт (SPEC.md §5): принимает PGN + уровень, возвращает структурированный
+анализ **без LLM** (быстро) и `analysis_id` для следующих вызовов.
+
+Позиции анализируются через пул движков (`EnginePool`), поэтому партия из
+40 ходов укладывается в SLA SPEC §9 (KI-014).
+
+Партии с FEN-стартом поддерживаются через PGN-заголовки
+``[SetUp "1"] [FEN "..."]``: ingestion читает их и отдаёт
+``ParsedGame.initial_fen``.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import Game, Move
+from app.db.session import get_session
+from app.engine.models import MoveAnalysis
+from app.engine.pool import EnginePool
+from app.errors import EngineError
+from app.ingestion import ParsedGame, parse_pgn
+
+router = APIRouter(tags=["analyze"])
+
+#: Верхняя граница тела PGN (защита от гигантских запросов).
+MAX_PGN_CHARS = 100_000
+
+LevelName = Literal["beginner", "club", "gm"]
+
+
+class AnalyzeRequest(BaseModel):
+    """Тело запроса `/v1/analyze`."""
+
+    pgn: str = Field(
+        min_length=1,
+        max_length=MAX_PGN_CHARS,
+        description="PGN партии (допускается FEN-старт через [SetUp]/[FEN])",
+    )
+    level: LevelName = Field(
+        default="club", description="Уровень ассистента: beginner | club | gm"
+    )
+
+
+class AnalyzeMeta(BaseModel):
+    """Метаданные разобранной партии."""
+
+    white: str | None = None
+    black: str | None = None
+    eco: str | None = None
+
+
+class AnalyzeSummary(BaseModel):
+    """Сводка по «плохим» ходам (для быстрого обзора партии)."""
+
+    blunders: int = 0
+    mistakes: int = 0
+    inaccuracies: int = 0
+
+
+class AnalyzeResponse(BaseModel):
+    """Ответ `/v1/analyze`."""
+
+    analysis_id: str = Field(description="ID сохранённой партии (games.id)")
+    status: Literal["completed"] = "completed"
+    meta: AnalyzeMeta
+    moves_analyzed: int = Field(ge=0)
+    time_taken_ms: int = Field(ge=0)
+    summary: AnalyzeSummary
+
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(
+    payload: AnalyzeRequest,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AnalyzeResponse:
+    """Разобрать PGN, оценить ходы движком и сохранить партию.
+
+    Raises:
+        InvalidPgnError: PGN пуст, не распознан или содержит нелегальный ход (→ 400).
+        EngineError: пул движков недоступен или Stockfish сломан (→ 500).
+    """
+    started = time.perf_counter()
+
+    parsed = parse_pgn(payload.pgn)
+    pool = _engine_pool(request)
+    analyses = await pool.analyze_game_moves(
+        parsed.moves, payload.level, initial_fen=parsed.initial_fen
+    )
+    analysis_id = await _persist(session, payload.pgn, parsed, analyses)
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return AnalyzeResponse(
+        analysis_id=str(analysis_id),
+        status="completed",
+        meta=AnalyzeMeta(
+            white=parsed.metadata.white,
+            black=parsed.metadata.black,
+            eco=parsed.eco_code,
+        ),
+        moves_analyzed=len(analyses),
+        time_taken_ms=elapsed_ms,
+        summary=_summarize(analyses),
+    )
+
+
+def _engine_pool(request: Request) -> EnginePool:
+    """Пул движков из lifespan-состояния приложения."""
+    pool = getattr(request.app.state, "engine_pool", None)
+    if not isinstance(pool, EnginePool):
+        raise EngineError("Пул движков не инициализирован (lifespan не выполнен)")
+    return pool
+
+
+async def _persist(
+    session: AsyncSession,
+    pgn: str,
+    parsed: ParsedGame,
+    analyses: list[MoveAnalysis],
+) -> int:
+    """Сохранить партию и оценки ходов одной транзакцией.
+
+    Returns:
+        `games.id` сохранённой партии.
+    """
+    game = Game(
+        pgn=pgn,
+        eco_code=parsed.eco_code,
+        phase_breakdown=parsed.phase_breakdown.model_dump(),
+    )
+    session.add(game)
+    await session.flush()
+
+    moves: list[Move] = []
+    for index, analysis in enumerate(analyses):
+        eval_cp, eval_mate = _db_eval(analysis)
+        moves.append(
+            Move(
+                game_id=game.id,
+                ply=analysis.ply,
+                san=analysis.played_move_san,
+                fen=parsed.moves[index].fen,
+                eval_cp=eval_cp,
+                eval_mate=eval_mate,
+                best_move_san=analysis.best_move_san,
+                delta_cp=analysis.delta_cp,
+                classification=analysis.classification,
+                engine_depth=analysis.engine_depth,
+            )
+        )
+    session.add_all(moves)
+    await session.commit()
+    return game.id
+
+
+def _db_eval(analysis: MoveAnalysis) -> tuple[int | None, int | None]:
+    """Оценка **с точки зрения белых** после хода: ``(eval_cp, eval_mate)``."""
+    if analysis.mate_after is not None:
+        return None, analysis.mate_after
+    mover_sign = 1 if analysis.ply % 2 == 1 else -1
+    return analysis.eval_after * mover_sign, None
+
+
+def _summarize(analyses: list[MoveAnalysis]) -> AnalyzeSummary:
+    """Посчитать blunder/mistake/inaccuracy по классификациям."""
+    blunders = sum(1 for item in analyses if item.classification == "blunder")
+    mistakes = sum(1 for item in analyses if item.classification == "mistake")
+    inaccuracies = sum(1 for item in analyses if item.classification == "inaccuracy")
+    return AnalyzeSummary(
+        blunders=blunders, mistakes=mistakes, inaccuracies=inaccuracies
+    )

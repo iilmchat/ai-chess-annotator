@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -49,6 +49,8 @@ __all__ = [
     "ENGINE_PROFILES",
     "EngineProfile",
     "EngineService",
+    "build_move_analyses",
+    "prepare_positions",
     "resolve_profile",
 ]
 
@@ -209,7 +211,9 @@ class EngineService:
         """Прогнать партию через движок и оценить каждый полуход.
 
         Каждая позиция (до первого хода, после каждого хода) анализируется
-        один раз: ``N + 1`` вызовов движка на ``N`` полуходов.
+        один раз: ``N + 1`` вызовов движка на ``N`` полуходов. Здесь поиски
+        идут **последовательно** (один процесс); для параллельного анализа
+        партии используйте `app.engine.pool.EnginePool`.
 
         Args:
             moves: полуходы из `app.ingestion.parse_pgn`.
@@ -229,68 +233,17 @@ class EngineService:
         if not moves:
             return []
 
-        board = chess.Board(parse_fen(initial_fen or STARTING_FEN).fen())
-        boards: list[chess.Board] = [board.copy()]
-        played_uci: list[str] = []
-
-        for index, parsed in enumerate(moves, start=1):
-            try:
-                move = board.parse_san(parsed.san)
-            except ValueError as exc:
-                raise InvalidPgnError(
-                    f"Ход {parsed.san!r} нелегален в позиции "
-                    f"{board.fen()!r} (полуход {index})"
-                ) from exc
-            board.push(move)
-            if board.fen() != parsed.fen:
-                raise InvalidPgnError(
-                    f"История ходов расходится на полуходе {index}: ожидался "
-                    f"{parsed.fen!r}, получен {board.fen()!r}"
-                )
-            played_uci.append(move.uci())
-            boards.append(board.copy())
-
-        white_scores: list[int] = []
-        best_lines: list[EngineLine] = []
-        for position in boards:
-            lines = await self.analyze(position.fen(), level)
-            best = lines[0]
-            best_lines.append(best)
-            white_scores.append(_white_cp(best, position.turn))
-
-        analyses: list[MoveAnalysis] = []
-        for index, parsed in enumerate(moves, start=1):
-            before = boards[index - 1]
-            mover_sign = 1 if before.turn == chess.WHITE else -1
-            eval_before = white_scores[index - 1] * mover_sign
-            eval_after = white_scores[index] * mover_sign
-            delta_cp = max(0, eval_before - eval_after)
-
-            best = best_lines[index - 1]
-            try:
-                best_move = before.parse_uci(best.move_uci)
-                best_san = before.san(best_move)
-            except ValueError as exc:
-                raise EngineError(
-                    f"Движок вернул недопустимый ход {best.move_uci!r} "
-                    f"для позиции {before.fen()!r}"
-                ) from exc
-
-            is_best = played_uci[index - 1] == best.move_uci
-            analyses.append(
-                MoveAnalysis(
-                    ply=parsed.ply,
-                    played_move_san=parsed.san,
-                    played_move_uci=played_uci[index - 1],
-                    eval_before=eval_before,
-                    eval_after=eval_after,
-                    best_move_uci=best.move_uci,
-                    best_move_san=best_san,
-                    delta_cp=delta_cp,
-                    classification=self.classify_move(delta_cp, is_best),
-                )
-            )
-        return analyses
+        boards, played_uci = prepare_positions(moves, initial_fen=initial_fen)
+        lines_by_position = [
+            await self.analyze(position.fen(), level) for position in boards
+        ]
+        return build_move_analyses(
+            moves,
+            boards,
+            played_uci,
+            lines_by_position,
+            classify=self.classify_move,
+        )
 
     async def aclose(self) -> None:
         """Остановить процесс движка (безопасно вызывать повторно)."""
@@ -508,3 +461,109 @@ def _white_cp(line: EngineLine, turn: chess.Color) -> int:
     else:
         cp = line.score_cp or 0
     return cp if turn == chess.WHITE else -cp
+
+
+def prepare_positions(
+    moves: Sequence[ParsedMove], *, initial_fen: str | None = None
+) -> tuple[list[chess.Board], list[str]]:
+    """Восстановить доски (до первого хода и после каждого) и UCI ходов.
+
+    Сверяет результат с ``ParsedMove.fen``: расхождение означает, что
+    история ходов и ``initial_fen`` несовместимы.
+
+    Returns:
+        ``(boards, played_uci)``: ``len(boards) == len(moves) + 1``.
+
+    Raises:
+        InvalidPgnError: ход нелегален или история расходится с FEN-ами.
+    """
+    board = chess.Board(parse_fen(initial_fen or STARTING_FEN).fen())
+    boards: list[chess.Board] = [board.copy()]
+    played_uci: list[str] = []
+
+    for index, parsed in enumerate(moves, start=1):
+        try:
+            move = board.parse_san(parsed.san)
+        except ValueError as exc:
+            raise InvalidPgnError(
+                f"Ход {parsed.san!r} нелегален в позиции "
+                f"{board.fen()!r} (полуход {index})"
+            ) from exc
+        board.push(move)
+        if board.fen() != parsed.fen:
+            raise InvalidPgnError(
+                f"История ходов расходится на полуходе {index}: ожидался "
+                f"{parsed.fen!r}, получен {board.fen()!r}"
+            )
+        played_uci.append(move.uci())
+        boards.append(board.copy())
+
+    return boards, played_uci
+
+
+def build_move_analyses(
+    moves: Sequence[ParsedMove],
+    boards: Sequence[chess.Board],
+    played_uci: Sequence[str],
+    lines_by_position: Sequence[Sequence[EngineLine]],
+    *,
+    classify: Callable[[int, bool], MoveClassification],
+) -> list[MoveAnalysis]:
+    """Собрать `MoveAnalysis` из готовых линий движка (по позициям).
+
+    Отдельная функция — чтобы и последовательный `EngineService`
+    (`analyze_game_moves`), и `EnginePool` использовали одну и ту же
+    арифметику дельт/классификации.
+
+    Raises:
+        EngineError: движок вернул недопустимый ход.
+    """
+    white_scores = [
+        _white_cp(lines[0], position.turn)
+        for lines, position in zip(lines_by_position, boards, strict=True)
+    ]
+
+    analyses: list[MoveAnalysis] = []
+    for index, parsed in enumerate(moves, start=1):
+        before = boards[index - 1]
+        mover_sign = 1 if before.turn == chess.WHITE else -1
+        eval_before = white_scores[index - 1] * mover_sign
+        eval_after = white_scores[index] * mover_sign
+        delta_cp = max(0, eval_before - eval_after)
+
+        best = lines_by_position[index - 1][0]
+        try:
+            best_move = before.parse_uci(best.move_uci)
+            best_san = before.san(best_move)
+        except ValueError as exc:
+            raise EngineError(
+                f"Движок вернул недопустимый ход {best.move_uci!r} "
+                f"для позиции {before.fen()!r}"
+            ) from exc
+
+        after_line = lines_by_position[index][0]
+        mate_after = None
+        if after_line.mate is not None:
+            mate_after = (
+                after_line.mate
+                if boards[index].turn == chess.WHITE
+                else -after_line.mate
+            )
+
+        is_best = played_uci[index - 1] == best.move_uci
+        analyses.append(
+            MoveAnalysis(
+                ply=parsed.ply,
+                played_move_san=parsed.san,
+                played_move_uci=played_uci[index - 1],
+                eval_before=eval_before,
+                eval_after=eval_after,
+                best_move_uci=best.move_uci,
+                best_move_san=best_san,
+                delta_cp=delta_cp,
+                classification=classify(delta_cp, is_best),
+                engine_depth=best.depth,
+                mate_after=mate_after,
+            )
+        )
+    return analyses

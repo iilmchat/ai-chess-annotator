@@ -8,6 +8,25 @@
 
 ### Added
 
+- **`POST /v1/analyze` (T-009):** PGN + `level` → структурированный анализ
+  (moves, evals, классификация) с сохранением в `games`/`moves` и
+  `analysis_id` в ответе; партии с FEN-стартом поддерживаются через
+  PGN-заголовки `[SetUp]`/`[FEN]`.
+- **`EnginePool` (T-009, KI-014 закрыт):** 4 параллельных процесса
+  Stockfish (`ENGINE_POOL_SIZE`, до 8), очередь свободных, порядок
+  результатов сохраняется; SLA на 53 полухода — 14.6 с (лимит 30 с).
+- **Глобальный обработчик доменных ошибок:** `AppError` →
+  `{"detail", "code"}` с кодами 400/422/500/504; ошибки движка отдают
+  `Engine unavailable`.
+- **Rate limiting:** Redis `INCR`+`EXPIRE`, 10 запросов/мин на IP для
+  `/v1/analyze`, `Retry-After`/`X-RateLimit-*`, fail-open при недоступном
+  Redis (KI-015).
+- **Lifespan приложения:** пул движков и Redis-клиент создаются/закрываются
+  с приложением; `create_app(settings)` для тестовой конфигурации.
+- **Тесты:** `tests/unit/test_engine_pool.py` (7),
+  `tests/unit/test_rate_limit.py` (7),
+  `tests/integration/test_api_analyze.py` (4, включая SLA и проверку БД).
+
 - **Engine Service (T-008):** пакет `app/engine/` — async-обёртка над
   Stockfish: `EngineService.analyze()` (MultiPV, параметры по уровню из
   SPEC §2.2), `classify_move()` (best/good/inaccuracy/mistake/blunder),
@@ -79,6 +98,14 @@
   добавлен `asyncio_default_fixture_loop_scope`.
 - `web/pnpm-workspace.yaml`: `allowBuilds: esbuild` — pnpm 12 не выполняет
   postinstall-скрипты зависимостей без явного разрешения.
+
+### Changed
+
+- Ошибки движка в HTTP теперь отдают **500** (`EngineError`,
+  `EngineNotFoundError`) и **504** (`EngineTimeoutError`) вместо 503 —
+  как требует контракт T-009; текст для пользователя — `Engine unavailable`.
+- `create_app()` принимает `Settings`, а создание пула движков и
+  Redis-клиента перенесено в lifespan (корректное закрытие ресурсов).
 
 ### Fixed
 

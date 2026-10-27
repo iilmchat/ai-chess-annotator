@@ -60,14 +60,14 @@ class EngineError(AppError):
     """Базовый класс ошибок движка (Stockfish недоступен или сломан)."""
 
     code = "engine_error"
-    http_status = 503
+    http_status = 500
 
 
 class EngineNotFoundError(EngineError):
     """Бинарник Stockfish не найден по пути из настроек (см. KI-006)."""
 
     code = "engine_not_found"
-    http_status = 503
+    http_status = 500
 
 
 class EngineTimeoutError(EngineError):

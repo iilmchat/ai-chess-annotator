@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     stockfish_path: str = "/usr/bin/stockfish"
     stockfish_host: str | None = None
     stockfish_port: int | None = None
+    #: Число параллельных процессов Stockfish (KI-014 / SPEC §9).
+    engine_pool_size: int = 4
+
+    # Rate limiting (T-009)
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = 10
+    rate_limit_window_s: int = 60
 
     # LLM
     llm_provider_local: str = "vllm"

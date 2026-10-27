@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-65_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-83_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-0_yet-orange.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -208,15 +208,16 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*` и `/runs/*` (SSE) на
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP, в разработке) |
-| Итерация | **3 — Engine Service (T-008)** завершена; итерации 1–2 закрыты |
-| Backend-тесты | **65 passed, 1 xfailed** (4 файла: `tests/test_health.py`, `tests/test_models.py`, `tests/unit/test_ingestion.py`, `tests/unit/test_engine.py`; `xfailed` — маркер KI-012) |
+| Итерация | **4 — API `/v1/analyze` (T-009)** завершена; итерации 1–3 закрыты |
+| Backend-тесты | **83 passed, 1 xfailed** (7 файлов: health, schema, unit ingestion/engine/pool/rate-limit, integration analyze; `xfailed` — маркер KI-012) |
 | Frontend-тесты | **0** (0 файлов) — CI использует `--passWithNoTests`, см. KI-008 |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **8** (`alembic` ревизия `b802598c3778`) |
 | Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
-| Engine | Stockfish 17.1 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; бенчмарк «клуб» ≈ 1.0 с |
+| Engine | Stockfish 17.1 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; пул из 4 процессов |
+| API | `POST /v1/analyze`: PGN + уровень → JSON, сохранение в `games`/`moves`; SLA 53 полухода «клуб» ≈ 14.6 с (лимит 30 с); rate limit 10/мин |
 | Ключевых моментов в анализе | определяется движком (delta ≥ 200 cp) |
-| KI-реестр | **14** записей (KI-001…KI-014, все Open) |
+| KI-реестр | **18** записей: 17 Open, 1 Closed (KI-014 закрыт в T-009) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test |
 | Docker | multi-stage образ + `docker-compose.prod.yml`, публикация в GHCR |
 

@@ -80,3 +80,13 @@ class MoveAnalysis(BaseModel):
     best_move_san: str = Field(min_length=1)
     delta_cp: int = Field(ge=0, description="Потеря в сантипешках (≥ 0)")
     classification: MoveClassification
+    engine_depth: int | None = Field(
+        default=None, description="Глубина лучшей линии в позиции до хода"
+    )
+    mate_after: int | None = Field(
+        default=None,
+        description=(
+            "Мат в N ходов в позиции после хода (знак — за кого, с точки "
+            "зрения белых); None — мата нет"
+        ),
+    )
