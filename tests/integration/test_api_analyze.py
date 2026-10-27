@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
-from app.db.models import Game, Move
+from app.db.models import Game, Motif, Move
 from app.main import create_app
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -36,6 +36,17 @@ EXAMPLE_PGN = (FIXTURES / "example.pgn").read_text(encoding="utf-8")
 #: SLA из SPEC §9: партия из 40 ходов ≤ 30 с (у нас 53 полухода).
 SLA_LIMIT_MS = 30_000
 CLASSIFICATIONS = {"best", "brilliant", "good", "inaccuracy", "mistake", "blunder"}
+MOTIF_TYPES = {
+    "passed_pawn",
+    "weak_square",
+    "open_file",
+    "open_diagonal",
+    "king_safety",
+    "fork",
+    "pin",
+    "mate_threat",
+    "winning_capture",
+}
 
 
 def _engine_available() -> bool:
@@ -91,6 +102,23 @@ async def _read_game(game_id: int) -> tuple[Game | None, list[Move]]:
     return game, list(moves)
 
 
+async def _read_motifs(game_id: int) -> list[Motif]:
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            motifs = (
+                await session.scalars(
+                    select(Motif)
+                    .join(Move, Motif.move_id == Move.id)
+                    .where(Move.game_id == game_id)
+                )
+            ).all()
+    finally:
+        await engine.dispose()
+    return list(motifs)
+
+
 async def _delete_game(game_id: int) -> None:
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
     try:
@@ -142,6 +170,18 @@ def test_analyze_example_pgn_meets_sla_and_persists(client: TestClient) -> None:
             assert move.best_move_san
             assert move.delta_cp is not None and move.delta_cp >= 0
             assert move.engine_depth is not None and move.engine_depth >= 1
+            # KI-018: PV-линии сохраняются (уровень club — до 3 линий).
+            assert move.multipv, f"multipv пуст на полуходе {move.ply}"
+            assert len(move.multipv) <= 3
+            first_line = move.multipv[0]
+            assert first_line["multipv"] == 1
+            assert first_line["pv"]
+
+        # T-010: мотивы привязаны к ходам и сохранены.
+        motifs = asyncio.run(_read_motifs(game_id))
+        assert motifs, "мотивы не сохранились"
+        assert all(motif.type in MOTIF_TYPES for motif in motifs)
+        assert all(1 <= motif.importance <= 5 for motif in motifs)
     finally:
         asyncio.run(_delete_game(game_id))
 

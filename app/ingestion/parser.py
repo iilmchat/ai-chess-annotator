@@ -101,8 +101,13 @@ def parse_fen(fen_string: str) -> chess.Board:
         raise InvalidFenError(f"Некорректный FEN: {exc}") from exc
 
     if not board.is_valid():
-        reasons = board.status()
-        raise InvalidFenError(f"Невозможная позиция в FEN: {reasons}")
+        status = board.status()
+        reasons = ", ".join(
+            str(flag.name) for flag in type(status) if flag & status
+        )
+        raise InvalidFenError(
+            f"Невозможная позиция в FEN: {reasons or 'invalid position'}"
+        )
 
     return board
 

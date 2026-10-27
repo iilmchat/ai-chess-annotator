@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Game, Move
+from app.db.models import Motif as MotifRow
 from app.db.session import get_session
 from app.engine.models import MoveAnalysis
 from app.engine.pool import EnginePool
@@ -138,24 +139,46 @@ async def _persist(
     session.add(game)
     await session.flush()
 
-    moves: list[Move] = []
+    move_rows: list[tuple[Move, MoveAnalysis]] = []
     for index, analysis in enumerate(analyses):
         eval_cp, eval_mate = _db_eval(analysis)
-        moves.append(
-            Move(
-                game_id=game.id,
-                ply=analysis.ply,
-                san=analysis.played_move_san,
-                fen=parsed.moves[index].fen,
-                eval_cp=eval_cp,
-                eval_mate=eval_mate,
-                best_move_san=analysis.best_move_san,
-                delta_cp=analysis.delta_cp,
-                classification=analysis.classification,
-                engine_depth=analysis.engine_depth,
+        move_rows.append(
+            (
+                Move(
+                    game_id=game.id,
+                    ply=analysis.ply,
+                    san=analysis.played_move_san,
+                    fen=parsed.moves[index].fen,
+                    eval_cp=eval_cp,
+                    eval_mate=eval_mate,
+                    best_move_san=analysis.best_move_san,
+                    delta_cp=analysis.delta_cp,
+                    classification=analysis.classification,
+                    engine_depth=analysis.engine_depth,
+                    # KI-018: PV-линии позиции ДО хода (альтернативы игрока).
+                    multipv=[line.model_dump(mode="json") for line in analysis.lines]
+                    or None,
+                ),
+                analysis,
             )
         )
-    session.add_all(moves)
+    session.add_all([row[0] for row in move_rows])
+    await session.flush()
+
+    # Мотивы (T-010): привязка к move_id, каскадно удаляются вместе с ходом.
+    motif_rows: list[MotifRow] = [
+        MotifRow(
+            move_id=move.id,
+            type=motif.type,
+            description=motif.description,
+            importance=motif.importance,
+        )
+        for move, analysis in move_rows
+        for motif in analysis.motifs
+    ]
+    if motif_rows:
+        session.add_all(motif_rows)
+
     await session.commit()
     return game.id
 

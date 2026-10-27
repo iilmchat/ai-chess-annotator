@@ -44,6 +44,7 @@ from app.errors import (
 )
 from app.ingestion.models import STARTING_FEN, ParsedMove
 from app.ingestion.parser import parse_fen
+from app.motifs.detector import detect_motifs
 
 __all__ = [
     "ENGINE_PROFILES",
@@ -551,6 +552,10 @@ def build_move_analyses(
             )
 
         is_best = played_uci[index - 1] == best.move_uci
+        lines_before = list(lines_by_position[index - 1])
+        motifs = detect_motifs(
+            boards[index].fen(), list(lines_by_position[index])
+        )
         analyses.append(
             MoveAnalysis(
                 ply=parsed.ply,
@@ -564,6 +569,8 @@ def build_move_analyses(
                 classification=classify(delta_cp, is_best),
                 engine_depth=best.depth,
                 mate_after=mate_after,
+                lines=lines_before,
+                motifs=motifs,
             )
         )
     return analyses

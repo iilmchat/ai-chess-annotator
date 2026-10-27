@@ -18,6 +18,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.motifs.models import Motif
+
 __all__ = [
     "MATE_CP_BASE",
     "EngineLine",
@@ -89,4 +91,12 @@ class MoveAnalysis(BaseModel):
             "Мат в N ходов в позиции после хода (знак — за кого, с точки "
             "зрения белых); None — мата нет"
         ),
+    )
+    lines: list[EngineLine] = Field(
+        default_factory=list,
+        description="MultiPV позиции ДО хода (альтернативы игрока)",
+    )
+    motifs: list[Motif] = Field(
+        default_factory=list,
+        description="Мотивы позиции ПОСЛЕ хода (T-010)",
     )

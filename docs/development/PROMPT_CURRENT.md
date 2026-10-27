@@ -1,6 +1,6 @@
 # PROMPT_CURRENT — актуальные системные инструкции
 
-> **Версия:** 1.3 · **Синхронизировано:** 2026-10-28 (итерация 4, T-009)
+> **Версия:** 1.4 · **Синхронизировано:** 2026-10-28 (итерация 5, T-010/T-011)
 > **Источник:** `docs/development/PROMPT_FOR_DSH.md` (копия 1:1, ниже — без
 > изменений) + метрики и правила текущей итерации.
 >
@@ -13,14 +13,14 @@
 
 | Показатель | Значение | Проверка |
 | :--- | :--- | :--- |
-| Итерация | 4 — API `/v1/analyze` (T-009) завершена; следующая — T-010 | `TODO.md` |
-| Backend-тесты | 83 passed + 1 xfailed (7 файлов) | `pytest -q` |
+| Итерация | 5 — Motif Detector + Policy (T-010, T-011) завершена; следующая — T-012 | `TODO.md` |
+| Backend-тесты | 111 passed + 1 xfailed (9 файлов) | `pytest -q` |
 | Frontend-тесты | 0 (0 файлов, KI-008) | `pnpm --dir web test` |
 | `ruff check .` | 0 ошибок | CI job `backend` |
-| `mypy app` | 0 ошибок (strict), 21 файл | CI job `backend` |
+| `mypy app` | 0 ошибок (strict), 25 файлов | CI job `backend` |
 | Миграции | 1 ревизия `b802598c3778`, 8 таблиц | `alembic current`, `alembic check` |
 | Healthcheck | `degraded` (db/redis/stockfish `ok`, llm `skipped`) | `GET /v1/health` |
-| Открытых KI | 17 открыто, 1 закрыт (KI-014) — см. `docs/KNOWN_ISSUES.md` | реестр |
+| Открытых KI | 18 открыто, 2 закрыто (KI-014, KI-018) — см. `docs/KNOWN_ISSUES.md` | реестр |
 
 ---
 
@@ -123,5 +123,13 @@
    Ограничения: SLA не гарантируется для 160+ полуходов (KI-017),
    `moves.multipv` не заполняется (KI-018), `analysis_id` — bigint
    строкой (KI-016), rate limit fail-open (KI-015).
-7. **Следующая итерация** — T-010 (Motif Detector), требует T-008
-   (закрыт).
+7. **Мотивы готовы (T-010)** — `app/motifs/`: `detect_motifs` (проходные
+   пешки, слабые поля, открытые линии/диагонали, безопасность короля,
+   вилки/связки, мат/выигрыш материала); мотивы пишутся в таблицу `motifs`;
+   PV-линии — в `moves.multipv` (KI-018 закрыт). Ограничение: recall не
+   измерен (KI-019).
+8. **Policy готова (T-011)** — `app/engine/policy.py`:
+   `choose_recommended_move(multipv, level, fen=...)`; в API пока не
+   выводится (T-012). Ограничение: новичок без SEE (KI-020).
+9. **Следующая итерация** — T-012: расширить `/v1/analyze` мотивами и
+   `recommended_move`, обновить OpenAPI и тесты.

@@ -8,7 +8,21 @@
 
 ### Added
 
-- **`POST /v1/analyze` (T-009):** PGN + `level` → структурированный анализ
+- **Motif Detector (T-010):** пакет `app/motifs/` — `detect_motifs(fen, multipv)`
+  находит проходные пешки, слабые поля у короля, открытые линии и диагонали,
+  проблемы безопасности короля, вилки/связки по доске, мат и выигрыш
+  материала по лучшей линии движка (дедупликация, лимит 6 мотивов).
+- **Мотивы в БД:** `MoveAnalysis.motifs` → таблица `motifs` (type,
+  description, importance, move_id) в транзакции анализа.
+- **Policy Layer (T-011):** `app/engine/policy.py` — `choose_recommended_move`
+  для трёх уровней: `gm` (топ-1), `club` (альтернатива при разнице < 20 cp),
+  `beginner` (отбрасывание раннего ферзя и «зевков», приоритет развитию,
+  центру и рокировке).
+- **PV-линии в БД (KI-018 закрыт):** `MoveAnalysis.lines` → `moves.multipv`
+  (JSONB, до 3 линий на уровне `club`); отдельная миграция не потребовалась —
+  колонка была создана в T-004.
+- **Тесты:** `tests/unit/test_motifs.py` (13), `tests/unit/test_policy.py` (15).
+- **``POST /v1/analyze`` (T-009):** PGN + `level` → структурированный анализ
   (moves, evals, классификация) с сохранением в `games`/`moves` и
   `analysis_id` в ответе; партии с FEN-стартом поддерживаются через
   PGN-заголовки `[SetUp]`/`[FEN]`.

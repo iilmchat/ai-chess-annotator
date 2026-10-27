@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-83_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-111_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-0_yet-orange.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -208,16 +208,18 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*` и `/runs/*` (SSE) на
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP, в разработке) |
-| Итерация | **4 — API `/v1/analyze` (T-009)** завершена; итерации 1–3 закрыты |
-| Backend-тесты | **83 passed, 1 xfailed** (7 файлов: health, schema, unit ingestion/engine/pool/rate-limit, integration analyze; `xfailed` — маркер KI-012) |
+| Итерация | **5 — Motif Detector + Policy (T-010, T-011)** завершена; итерации 1–4 закрыты |
+| Backend-тесты | **111 passed, 1 xfailed** (9 файлов: health, schema, unit ingestion/engine/pool/rate-limit/motifs/policy, integration analyze; `xfailed` — маркер KI-012) |
 | Frontend-тесты | **0** (0 файлов) — CI использует `--passWithNoTests`, см. KI-008 |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **8** (`alembic` ревизия `b802598c3778`) |
 | Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
 | Engine | Stockfish 17.1 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; пул из 4 процессов |
 | API | `POST /v1/analyze`: PGN + уровень → JSON, сохранение в `games`/`moves`; SLA 53 полухода «клуб» ≈ 14.6 с (лимит 30 с); rate limit 10/мин |
+| Motifs | Проходные пешки, слабые поля, открытые линии/диагонали, безопасность короля, вилки/связки, мат — в таблице `motifs` (до 6 на позицию) |
+| Policy | `choose_recommended_move`: gm — топ-1, club — альтернатива при разнице < 20 cp, beginner — фильтр раннего ферзя и зевков |
 | Ключевых моментов в анализе | определяется движком (delta ≥ 200 cp) |
-| KI-реестр | **18** записей: 17 Open, 1 Closed (KI-014 закрыт в T-009) |
+| KI-реестр | **20** записей: 18 Open, 2 Closed (KI-014, KI-018) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test |
 | Docker | multi-stage образ + `docker-compose.prod.yml`, публикация в GHCR |
 
