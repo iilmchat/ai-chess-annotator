@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,14 +15,16 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
 
     # DB
-    postgres_host: str = "localhost"
+    # 127.0.0.1, а не localhost: на Windows localhost резолвится сначала в ::1,
+    # а docker-compose публикует порты только на IPv4-loopback.
+    postgres_host: str = "127.0.0.1"
     postgres_port: int = 5434
     postgres_db: str = "chessannotator"
     postgres_user: str = "chess"
     postgres_password: str = "chess_dev_password"
 
     # Redis
-    redis_url: str = "redis://localhost:6380/0"
+    redis_url: str = "redis://127.0.0.1:6380/0"
 
     # Auth
     jwt_secret: str = "dev_secret_change_me"

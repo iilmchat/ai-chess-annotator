@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-pending-lightgrey.svg)](docs/development/RELEASES.md)
-[![Frontend tests](https://img.shields.io/badge/frontend_tests-pending-lightgrey.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-5_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Frontend tests](https://img.shields.io/badge/frontend_tests-0_yet-orange.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
 > **Ассистент-комментатор шахматных партий.** Загрузите PGN — получите
@@ -195,6 +195,12 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*` и `/runs/*` (SSE) на
 | [CHANGELOG.md](docs/CHANGELOG.md) | все | История версий (Keep a Changelog) |
 | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) | все | Реестр известных проблем и ограничений |
 
+> Часть ссылок в таблице выше ведёт на документы, которые появятся к T-026
+> (`USER_GUIDE.md`, `ASSISTANT_LEVELS.md`, `MANUAL_TESTING_GUIDE.md`,
+> `ARCHITECTURE.md`, `DESIGN_V010.md`). Актуальный статус документации и
+> список «планируется» — в [docs/README.md](docs/README.md); расхождение
+> зафиксировано в KI-009.
+
 ---
 
 ## Статус проекта
@@ -202,12 +208,14 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*` и `/runs/*` (SSE) на
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP, в разработке) |
-| Backend-тесты | **0** (0 файлов) — заполняется по мере итераций |
-| Frontend-тесты | **0** (0 файлов) — заполняется по мере итераций |
+| Итерация | **1 — Bootstrap (T-001…T-006)** завершена |
+| Backend-тесты | **5 passed** (2 файла: `tests/test_health.py`, `tests/test_models.py`) |
+| Frontend-тесты | **0** (0 файлов) — CI использует `--passWithNoTests`, см. KI-008 |
 | Уровней ассистента | **3** (beginner / club / gm) |
+| Таблиц в БД | **8** (`alembic` ревизия `b802598c3778`) |
 | Ключевых моментов в анализе | определяется движком (delta ≥ 200 cp) |
-| KI-реестр | **KI-001** — заведён; заполняется по мере итераций |
-| CI | GitHub Actions: build, typecheck, migrations, tests (backend + web) |
+| KI-реестр | **9** записей (KI-001…KI-009, все Open) |
+| CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test |
 | Docker | multi-stage образ + `docker-compose.prod.yml`, публикация в GHCR |
 
 ---

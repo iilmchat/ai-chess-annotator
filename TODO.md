@@ -10,7 +10,7 @@
 
 ## Фаза 0. Foundation (1 неделя)
 
-### [ ] T-001. Инициализация репозитория
+### [x] T-001. Инициализация репозитория
 - **Зависит от:** —
 - **Что:** создать структуру репо (`app/`, `web/`, `docs/`, `tests/`,
   `.github/workflows/`), `pyproject.toml`, `web/package.json`,
@@ -21,7 +21,7 @@
   заглушки проходят).
 - **Оценка:** 0.5
 
-### [ ] T-002. Docker Compose (dev)
+### [x] T-002. Docker Compose (dev)
 - **Зависит от:** T-001
 - **Что:** `docker-compose.yml` с сервисами `postgres` (pgvector),
   `redis`, `stockfish`, `vllm` (опционально, профиль `llm-local`).
@@ -29,7 +29,7 @@
   healthcheck'и зелёные, порты проброшены на loopback.
 - **Оценка:** 0.5
 
-### [ ] T-003. Базовый FastAPI + healthcheck
+### [x] T-003. Базовый FastAPI + healthcheck
 - **Зависит от:** T-001, T-002
 - **Что:** `app/main.py`, `app/config.py` (pydantic-settings),
   `/v1/health` (проверяет БД, Redis, движок, LLM).
@@ -37,7 +37,7 @@
   статусы всех зависимостей; unit-тест на healthcheck.
 - **Оценка:** 0.5
 
-### [ ] T-004. SQLAlchemy + Alembic + начальная миграция
+### [x] T-004. SQLAlchemy + Alembic + начальная миграция
 - **Зависит от:** T-002, T-003
 - **Что:** модели из SPEC.md §4 (users, games, moves, motifs,
   annotated_games, retrieval_cache, commentaries, edits),
@@ -46,14 +46,14 @@
   повторный upgrade проходят; тест на миграции в CI.
 - **Оценка:** 1
 
-### [ ] T-005. CI (GitHub Actions)
+### [x] T-005. CI (GitHub Actions)
 - **Зависит от:** T-001…T-004
 - **Что:** workflow `ci.yml`: `ruff`, `mypy`, `pytest`, `alembic upgrade`,
   `pnpm --dir web build`, `pnpm --dir web test`.
 - **DoD:** CI зелёный на `main`; PR-чек обязателен.
 - **Оценка:** 0.5
 
-### [ ] T-006. Базовые документы из `docs/`
+### [x] T-006. Базовые документы из `docs/`
 - **Зависит от:** T-001
 - **Что:** создать `docs/development/RULES.md`,
   `docs/development/PROMPT_CURRENT.md` (копия PROMPT_FOR_DSH),

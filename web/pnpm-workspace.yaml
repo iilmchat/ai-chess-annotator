@@ -1,0 +1,7 @@
+# Настройки pnpm 12 (ключи `pnpm.*` из package.json больше не читаются,
+# см. https://pnpm.io/settings). esbuild ставит нативный бинарник
+# postinstall-скриптом; pnpm 12 блокирует такие сборки без явного
+# разрешения (ERR_PNPM_IGNORED_BUILDS). `onlyBuiltDependencies` →
+# `allowBuilds` в pnpm 11+.
+allowBuilds:
+  esbuild: true

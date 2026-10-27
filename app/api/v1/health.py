@@ -29,16 +29,20 @@ async def _check_db(session: AsyncSession) -> ComponentHealth:
     try:
         await session.execute(text("SELECT 1"))
         return ComponentHealth(status="ok")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ComponentHealth(status="error", detail=str(exc))
 
 
 async def _check_redis(settings: Settings) -> ComponentHealth:
-    client = aioredis.from_url(settings.redis_url, socket_timeout=2)
+    # redis-py 5.x поставляет py.typed, но `from_url` в нём остаётся без
+    # аннотаций — это upstream-пробел, а не наш код (см. KI-004).
+    client: aioredis.Redis = aioredis.from_url(  # type: ignore[no-untyped-call]
+        settings.redis_url, socket_timeout=2
+    )
     try:
         await client.ping()
         return ComponentHealth(status="ok")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ComponentHealth(status="error", detail=str(exc))
     finally:
         await client.aclose()
@@ -71,5 +75,9 @@ async def health(
         "stockfish": _check_stockfish(settings),
         "llm": _check_llm(settings),
     }
-    overall = "ok" if all(c.status != "error" for c in components.values()) else "degraded"
-    return HealthResponse(status=overall, components=components)  # type: ignore[arg-type]
+    # Любой компонент не в статусе "ok" (error или skipped) — сервис
+    # работоспособен, но неполон: healthcheck отдаёт "degraded".
+    overall: Literal["ok", "degraded"] = (
+        "ok" if all(c.status == "ok" for c in components.values()) else "degraded"
+    )
+    return HealthResponse(status=overall, components=components)

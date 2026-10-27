@@ -1,0 +1,164 @@
+"""Схема БД: метаданные моделей и поведение ORM (T-004).
+
+Тесты делятся на два уровня:
+
+* чистые unit-тесты метаданных (не требуют БД) — проверяют, что в
+  ``Base.metadata`` есть все 8 таблиц SPEC.md §4, индексы и размерность
+  эмбеддинга;
+* интеграционные тесты на живой PostgreSQL — проверяют server_default'ы
+  и каскадное удаление. Если БД недоступна, они помечаются ``skipped``
+  и не роняют локальный прогон (в CI БД поднята сервисом).
+"""
+
+from collections.abc import AsyncIterator
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
+from app.config import get_settings
+from app.db.base import Base
+from app.db.models import (
+    EMBEDDING_DIM,
+    AnnotatedGame,
+    Commentary,
+    Edit,
+    Game,
+    Level,
+    Motif,
+    Move,
+    RetrievalCache,
+    User,
+)
+
+SPEC_TABLES = {
+    "annotated_games",
+    "commentaries",
+    "edits",
+    "games",
+    "motifs",
+    "moves",
+    "retrieval_cache",
+    "users",
+}
+
+PGN = '[Event "Test"]\n\n1. e4 e5 2. Nf3 Nc6 1/2-1/2\n'
+
+
+def test_metadata_contains_exactly_spec_tables() -> None:
+    assert set(Base.metadata.tables) == SPEC_TABLES
+
+
+def test_moves_index_and_embedding_dimension() -> None:
+    moves = Base.metadata.tables["moves"]
+    indexes = {index.name for index in moves.indexes}
+    assert "ix_moves_game_id_ply" in indexes
+
+    embedding = Base.metadata.tables["annotated_games"].c.embedding
+    assert getattr(embedding.type, "dim", None) == EMBEDDING_DIM == 1024
+
+    level_column = Base.metadata.tables["users"].c.level
+    assert level_column.nullable is False
+
+
+def test_level_enum_values() -> None:
+    assert [level.value for level in Level] == ["beginner", "club", "gm"]
+    assert Level("gm") is Level.gm
+
+
+@pytest.fixture
+async def session() -> AsyncIterator[AsyncSession]:
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except Exception as exc:
+        await engine.dispose()
+        pytest.skip(f"PostgreSQL недоступен: {exc}")
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as db_session:
+        try:
+            yield db_session
+        finally:
+            await db_session.rollback()
+    await engine.dispose()
+
+
+async def test_server_defaults_and_cascade_delete(session: AsyncSession) -> None:
+    user = User(email=f"user-{uuid4().hex}@example.com")
+    game = Game(pgn=PGN, user=user)
+    session.add(game)
+    await session.flush()
+
+    assert user.id is not None
+    # Server defaults читаем отдельным запросом: Session.refresh() «просрочил»
+    # бы связанные объекты и следующий доступ к game.id сходил бы в БД из
+    # синхронного контекста (MissingGreenlet).
+    level = await session.scalar(select(User.level).where(User.id == user.id))
+    created_at = await session.scalar(select(User.created_at).where(User.id == user.id))
+    assert level is Level.club
+    assert created_at is not None
+
+    move = Move(game_id=game.id, ply=1, san="e4", fen="8/8/8/8/8/8/8/8 w - - 0 1")
+    session.add(move)
+    await session.flush()
+
+    motif = Motif(move_id=move.id, type="center_control")
+    commentary = Commentary(
+        game_id=game.id, level=Level.gm, text="Текст", model="stub-model"
+    )
+    session.add_all([motif, commentary])
+    await session.flush()
+
+    validated = await session.scalar(
+        select(Commentary.validated).where(Commentary.id == commentary.id)
+    )
+    human_edited = await session.scalar(
+        select(Commentary.human_edited).where(Commentary.id == commentary.id)
+    )
+    assert validated is False
+    assert human_edited is False
+
+    edit = Edit(
+        commentary_id=commentary.id,
+        original_text="a",
+        edited_text="b",
+        editor_id=user.id,
+    )
+    session.add_all(
+        [
+            edit,
+            RetrievalCache(fen_hash="0" * 64, top_k_ids=[game.id]),
+            AnnotatedGame(
+                source="test",
+                pgn=PGN,
+                white="White",
+                black="Black",
+                year=2026,
+                embedding=[0.0] * EMBEDDING_DIM,
+            ),
+        ]
+    )
+    await session.flush()
+
+    game_id, move_id = game.id, move.id
+    await session.delete(game)
+    await session.flush()
+
+    move_count = await session.scalar(
+        select(func.count()).select_from(Move).where(Move.game_id == game_id)
+    )
+    motif_count = await session.scalar(
+        select(func.count()).select_from(Motif).where(Motif.move_id == move_id)
+    )
+    commentary_count = await session.scalar(
+        select(func.count())
+        .select_from(Commentary)
+        .where(Commentary.game_id == game_id)
+    )
+    assert move_count == 0
+    assert motif_count == 0
+    assert commentary_count == 0
