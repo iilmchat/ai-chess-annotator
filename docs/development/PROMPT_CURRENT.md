@@ -1,6 +1,6 @@
 # PROMPT_CURRENT — актуальные системные инструкции
 
-> **Версия:** 1.4 · **Синхронизировано:** 2026-10-28 (итерация 5, T-010/T-011)
+> **Версия:** 1.5 · **Синхронизировано:** 2026-10-28 (итерация 6, T-012/T-013)
 > **Источник:** `docs/development/PROMPT_FOR_DSH.md` (копия 1:1, ниже — без
 > изменений) + метрики и правила текущей итерации.
 >
@@ -13,14 +13,14 @@
 
 | Показатель | Значение | Проверка |
 | :--- | :--- | :--- |
-| Итерация | 5 — Motif Detector + Policy (T-010, T-011) завершена; следующая — T-012 | `TODO.md` |
-| Backend-тесты | 111 passed + 1 xfailed (9 файлов) | `pytest -q` |
+| Итерация | 6 — API с мотивами + LLM-адаптер (T-012, T-013) завершена; следующая — T-014 | `TODO.md` |
+| Backend-тесты | 130 passed + 1 xfailed (11 файлов) | `pytest -q` |
 | Frontend-тесты | 0 (0 файлов, KI-008) | `pnpm --dir web test` |
 | `ruff check .` | 0 ошибок | CI job `backend` |
-| `mypy app` | 0 ошибок (strict), 25 файлов | CI job `backend` |
+| `mypy app` | 0 ошибок (strict), 29 файлов | CI job `backend` |
 | Миграции | 1 ревизия `b802598c3778`, 8 таблиц | `alembic current`, `alembic check` |
 | Healthcheck | `degraded` (db/redis/stockfish `ok`, llm `skipped`) | `GET /v1/health` |
-| Открытых KI | 18 открыто, 2 закрыто (KI-014, KI-018) — см. `docs/KNOWN_ISSUES.md` | реестр |
+| Открытых KI | 19 открыто, 3 закрыто (KI-014, KI-018, KI-020) — см. `docs/KNOWN_ISSUES.md` | реестр |
 
 ---
 
@@ -131,5 +131,13 @@
 8. **Policy готова (T-011)** — `app/engine/policy.py`:
    `choose_recommended_move(multipv, level, fen=...)`; в API пока не
    выводится (T-012). Ограничение: новичок без SEE (KI-020).
-9. **Следующая итерация** — T-012: расширить `/v1/analyze` мотивами и
-   `recommended_move`, обновить OpenAPI и тесты.
+9. **API расширен (T-012)** — `/v1/analyze` отдаёт `moves` с мотивами и
+   `recommended_move` (Policy под уровень). KI-020 закрыт: `mate > 0`
+   разрешён новичку всегда.
+10. **LLM готов (T-013)** — `app/llm/`: `beginner`/`club` → LM Studio
+    (`http://127.0.0.1:8034/v1`, `qwen/qwen3-4b-2507`, ключ-заглушка
+    `lm-studio`), `gm` → DeepSeek (`deepseek-chat`). Живой тест пройден:
+    ≈1.7 с и ≈1.6 с, ответы «Привет, шахматы!». Стоимость не считается
+    (KI-021), первый запрос к LM Studio ≈12 с (KI-022).
+11. **Следующая итерация** — T-014: системные промпты трёх уровней +
+    сборка «пакета фактов» из анализа.

@@ -21,6 +21,9 @@ __all__ = [
     "InvalidFenError",
     "InvalidLevelError",
     "InvalidPgnError",
+    "LLMError",
+    "LLMNotConfiguredError",
+    "LLMTimeoutError",
 ]
 
 
@@ -74,4 +77,25 @@ class EngineTimeoutError(EngineError):
     """Движок не уложился в отведённое время и был перезапущен."""
 
     code = "engine_timeout"
+    http_status = 504
+
+
+class LLMError(AppError):
+    """Базовый класс ошибок LLM-провайдеров (T-013)."""
+
+    code = "llm_error"
+    http_status = 503
+
+
+class LLMNotConfiguredError(LLMError):
+    """Для выбранного уровня не задан API-ключ / провайдер."""
+
+    code = "llm_not_configured"
+    http_status = 503
+
+
+class LLMTimeoutError(LLMError):
+    """LLM не ответила в отведённый таймаут."""
+
+    code = "llm_timeout"
     http_status = 504

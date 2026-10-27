@@ -8,6 +8,21 @@
 
 ### Added
 
+- **`/v1/analyze`: разбор по ходам (T-012).** В ответ добавлен `moves`:
+  `ply`, `san`, `uci`, `eval_cp`, `mate`, `best_move_san`, `delta_cp`,
+  `classification`, `motifs` и `recommended_move` (san/uci/eval_cp/mate) —
+  рекомендация Policy Layer под запрошенный уровень.
+- **LLM-адаптер (T-013):** пакет `app/llm/` — `BaseLLMClient`
+  (`generate`/`complete`/`aclose`), `OpenAICompatibleClient` для
+  OpenAI-совместимых API (LM Studio, DeepSeek), фабрика
+  `get_llm_client(level)`: `beginner`/`club` → LM Studio,
+  `gm` → DeepSeek; таймауты, ретраи на 429/5xx с `Retry-After`, учёт
+  токенов (`LLMUsage`).
+- **Ошибки LLM:** `LLMError`, `LLMNotConfiguredError`, `LLMTimeoutError`
+  (503/503/504).
+- **Тесты:** `tests/unit/test_llm.py` (13, моки `httpx.MockTransport`),
+  `tests/integration/test_llm_live.py` (2 живых, со skip), +4 теста policy
+  (KI-020 и различие рекомендаций beginner/gm).
 - **Motif Detector (T-010):** пакет `app/motifs/` — `detect_motifs(fen, multipv)`
   находит проходные пешки, слабые поля у короля, открытые линии и диагонали,
   проблемы безопасности короля, вилки/связки по доске, мат и выигрыш
@@ -115,6 +130,11 @@
 
 ### Changed
 
+- Локальный LLM-провайдер — **LM Studio** (`http://127.0.0.1:8034/v1`,
+  модель `qwen/qwen3-4b-2507`, ключ-заглушка `lm-studio`); облачный —
+  **DeepSeek** (`deepseek-chat`). Новые настройки: `vllm_api_key`,
+  `deepseek_base_url`, `deepseek_model`, `llm_max_tokens`.
+- Policy новичка: ход с `mate > 0` разрешён всегда, даже если это жертва (KI-020 закрыт).
 - Ошибки движка в HTTP теперь отдают **500** (`EngineError`,
   `EngineNotFoundError`) и **504** (`EngineTimeoutError`) вместо 503 —
   как требует контракт T-009; текст для пользователя — `Engine unavailable`.

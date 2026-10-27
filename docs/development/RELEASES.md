@@ -383,3 +383,90 @@ KI-001, KI-002, KI-006; они не блокируют продукт)
   `motifs` по ходам и `recommended_move` под уровень (по
   `choose_recommended_move`), обновить OpenAPI-схему и тесты.
 - При выдаче рекомендаций учесть KI-020 (жертвы) и KI-018 (линии уже есть).
+
+---
+
+## Итерация 6 — API с мотивами и Policy + LLM-адаптер (T-012, T-013)
+
+**Дата:** 2026-10-28
+**Статус:** ✅ завершена. **KI-020 закрыт**; живой тест LLM пройден на обоих
+провайдерах (LM Studio и DeepSeek)
+**Отчёты шагов:** `docs/development/reports/iteration-6/STEP-01…STEP-04`
+
+### Что сделано
+
+- [x] **T-012. `/v1/analyze` с мотивами и рекомендацией.** В ответ добавлен
+      блок `moves`: по каждому полуходу `ply`, `san`, `uci`, `eval_cp`,
+      `mate`, `best_move_san`, `delta_cp`, `classification`, `motifs`
+      (список `Motif`) и `recommended_move` (`san`, `uci`, `eval_cp`,
+      `mate`) — результат `choose_recommended_move` для позиции **до** хода
+      с учётом уровня запроса.
+- [x] **KI-020 закрыт:** линия с `EngineLine.mate > 0` (мат в свою пользу)
+      возвращается Policy **до** любых фильтров — жертва, ведущая к мату,
+      разрешена новичку всегда. Отрицательный мат фильтры не обходит.
+- [x] **T-013. LLM-адаптер.** Пакет `app/llm/`:
+      - `base.py` — `BaseLLMClient` (`generate`, `complete`, `aclose`),
+        `LLMResult`, `LLMUsage`;
+      - `openai_client.py` — `OpenAICompatibleClient` (LM Studio / DeepSeek /
+        OpenAI): `httpx.AsyncClient`, таймаут, ретраи на 429/5xx с
+        `Retry-After`, разбор `choices` и `usage`, логи без текста промпта;
+      - `factory.py` — маршрутизация: `beginner`/`club` → LM Studio,
+        `gm` → DeepSeek; ключ DeepSeek обязателен (`LLMNotConfiguredError`).
+- [x] **Конфигурация:** `vllm_base_url=http://127.0.0.1:8034/v1`,
+      `vllm_model=qwen/qwen3-4b-2507`, `vllm_api_key=lm-studio`,
+      `deepseek_base_url=https://api.deepseek.com`, `deepseek_model=deepseek-chat`,
+      `llm_max_tokens=512`, `llm_timeout_s=60`, ретраи.
+- [x] **Ошибки:** `LLMError`, `LLMNotConfiguredError`, `LLMTimeoutError`
+      (503/503/504).
+- [x] **Тесты:** `tests/unit/test_llm.py` (13, моки `MockTransport`),
+      `tests/integration/test_llm_live.py` (2, живые, со skip),
+      +4 теста policy на KI-020 и различие рекомендаций beginner/gm.
+      Интеграционный тест `/v1/analyze` проверяет `moves`/`motifs`/
+      `recommended_move` для всех 53 ходов.
+- [x] **Документация:** отчёты `reports/iteration-6/`, `CHANGELOG.md`,
+      `KNOWN_ISSUES.md` (KI-020 → Closed, +KI-021, KI-022), `README.md`,
+      `docs/README.md`, `PROMPT_CURRENT.md`, `.env.example`, `TODO.md`.
+
+### Выбор локальной модели (важно)
+
+`qwen3-8b` — thinking-модель: на этом хосте 120 токенов генерировались
+**41 с**, 300 токенов — **157 с**, а без `max_tokens` запрос не уложился в
+180 с (всё уходит в reasoning, `content` пустой). Модель
+`qwen/qwen3-4b-2507` (non-thinking) отвечает за **0.9–1.3 с** (тёплый старт)
+и возвращает нормальный текст. Поэтому локальный дефолт — `qwen/qwen3-4b-2507`;
+`qwen3-8b` остаётся вариантом «умнее, но медленнее» (KI-022 фиксирует
+холодный старт ~12 с).
+
+### Живой тест (фактические результаты)
+
+| Уровень | Провайдер | Модель | Токены (in/out) | Время | Ответ |
+| :--- | :--- | :--- | :--- | ---: | :--- |
+| `club` | LM Studio | `qwen/qwen3-4b-2507` | 21 / 14 | **1741 мс** | «Привет, шахматы! 😊♟️» |
+| `gm` | DeepSeek | `deepseek-chat` → `deepseek-flash` | 16 / 8 | **1605 мс** | «Привет, шахматы!» |
+
+Промпт: `Скажи 'Привет, шахматы!'`. Ключи в отчёт и логи не попадают.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Стоимость LLM (`cost_usd`) | Нет прайс-листа моделей в настройках | KI-021 |
+| Прогрев локальной модели при старте | Появится вместе с эндпоинтом комментария | KI-022 / T-016 |
+| Промпты 3 уровней и валидатор вариантов | Это T-014/T-015 (следующие задачи) | — |
+
+### Метрики
+
+- **Backend-тесты:** **130 passed, 1 xfailed** (11 файлов; +19 к итерации 5).
+  Полный прогон — 31.05 с (включая 2 живых LLM-запроса).
+- **ruff:** 0 ошибок. **mypy (strict):** 0 ошибок, **29** файлов.
+- **SLA `/v1/analyze`** не изменился: 53 полухода «клуб» ≈ 15 с при лимите
+  30 с (ответ стал больше: 53 × (мотивы + рекомендация)).
+- **KI:** 22 записи, 19 Open, 3 Closed (KI-014, KI-018, KI-020).
+- **Время итерации:** ≈ 0.3 ч.
+
+### Что дальше
+
+- **T-014. Системные промпты (3 уровня):** `app/prompts/{beginner,club,gm}.txt`
+  + сборка «пакета фактов» из анализа (мотивы, рекомендации, линии).
+- **T-015. Validator:** каждый вариант из LLM-ответа прогоняется через
+  Stockfish; нелегальные/ошибочные отбрасываются.

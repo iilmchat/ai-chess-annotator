@@ -40,13 +40,14 @@
 | [reports/iteration-3/](development/reports/iteration-3/) | Пошаговые отчёты итерации 3 — Engine Service (STEP-01…STEP-04) |
 | [reports/iteration-4/](development/reports/iteration-4/) | Пошаговые отчёты итерации 4 — API `/v1/analyze` и пул (STEP-01…STEP-04) |
 | [reports/iteration-5/](development/reports/iteration-5/) | Пошаговые отчёты итерации 5 — мотивы и Policy (STEP-01…STEP-04) |
+| [reports/iteration-6/](development/reports/iteration-6/) | Пошаговые отчёты итерации 6 — API и LLM-адаптер (STEP-01…STEP-04) |
 
 ### Состояние проекта
 
 | Документ | Что внутри |
 | :--- | :--- |
 | [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секция `[Unreleased]` |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-020 со статусами, severity и планом закрытия |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-022 со статусами, severity и планом закрытия |
 
 ### Тесты и данные
 
@@ -59,7 +60,9 @@
 | [../tests/unit/test_rate_limit.py](../tests/unit/test_rate_limit.py) | 7 тестов rate limiting: окно, 429, fail-open, разделение по IP (T-009) |
 | [../tests/unit/test_motifs.py](../tests/unit/test_motifs.py) | 13 тестов мотивов: проходные, слабые поля, линии, вилки/связки, мат (T-010) |
 | [../tests/unit/test_policy.py](../tests/unit/test_policy.py) | 15 тестов Policy: gm/club/beginner, ранний ферзь, зевки (T-011) |
-| [../tests/integration/test_api_analyze.py](../tests/integration/test_api_analyze.py) | 4 интеграционных теста /v1/analyze: SLA ≤ 30 с, БД, мотивы, multipv, ошибки (T-009/T-010) |
+| [../tests/integration/test_api_analyze.py](../tests/integration/test_api_analyze.py) | 4 интеграционных теста `/v1/analyze`: SLA ≤ 30 с, БД, мотивы, multipv, `moves`/`recommended_move` (T-009…T-012) |
+| [../tests/unit/test_llm.py](../tests/unit/test_llm.py) | 13 тестов LLM-адаптера на моках: маршрутизация, ретраи, таймаут, парсинг (T-013) |
+| [../tests/integration/test_llm_live.py](../tests/integration/test_llm_live.py) | 2 живых теста: LM Studio (club) и DeepSeek (gm); скипаются без провайдера (T-013) |
 | [../tests/fixtures/example.pgn](../tests/fixtures/example.pgn) | Партия Гукеш — Каймер (Прага 2024), `1.d4 Nf6 2.c4 e6 … 27.Bg6+ 1-0`, ECO `E21` |
 | [../tests/fixtures/test_game.pgn](../tests/fixtures/test_game.pgn) | Та же партия с `Test White` / `Test Black` и без `[ECO]` — проверка метаданных и fallback-а ECO |
 | [../tests/fixtures/README.md](../tests/fixtures/README.md) | Инварианты обеих фикстур (полуходы, результат, ECO, фазы) |

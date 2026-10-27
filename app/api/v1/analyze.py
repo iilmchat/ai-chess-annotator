@@ -16,6 +16,7 @@ from __future__ import annotations
 import time
 from typing import Annotated, Literal
 
+import chess
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,10 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Game, Move
 from app.db.models import Motif as MotifRow
 from app.db.session import get_session
-from app.engine.models import MoveAnalysis
+from app.engine.models import MoveAnalysis, MoveClassification
+from app.engine.policy import choose_recommended_move
 from app.engine.pool import EnginePool
 from app.errors import EngineError
 from app.ingestion import ParsedGame, parse_pgn
+from app.motifs.models import Motif
 
 router = APIRouter(tags=["analyze"])
 
@@ -65,6 +68,36 @@ class AnalyzeSummary(BaseModel):
     inaccuracies: int = 0
 
 
+class RecommendedMove(BaseModel):
+    """Рекомендация Policy Layer, адаптированная под уровень пользователя."""
+
+    san: str = Field(min_length=1, description="Ход в SAN")
+    uci: str = Field(min_length=4, description="Ход в UCI")
+    eval_cp: int | None = Field(
+        default=None, description="Оценка линии в сантипешках (None при мате)"
+    )
+    mate: int | None = Field(
+        default=None, description="Мат в N ходов, если линия матовая"
+    )
+
+
+class AnalyzedMove(BaseModel):
+    """Один полуход в ответе: оценка, класс, мотивы и рекомендация."""
+
+    ply: int = Field(ge=1)
+    san: str
+    uci: str
+    eval_cp: int | None = Field(
+        default=None, description="Оценка позиции после хода (с точки зрения белых)"
+    )
+    mate: int | None = Field(default=None, description="Мат в N ходов (за белых)")
+    best_move_san: str
+    delta_cp: int = Field(ge=0)
+    classification: MoveClassification
+    motifs: list[Motif] = Field(default_factory=list)
+    recommended_move: RecommendedMove | None = None
+
+
 class AnalyzeResponse(BaseModel):
     """Ответ `/v1/analyze`."""
 
@@ -74,6 +107,10 @@ class AnalyzeResponse(BaseModel):
     moves_analyzed: int = Field(ge=0)
     time_taken_ms: int = Field(ge=0)
     summary: AnalyzeSummary
+    moves: list[AnalyzedMove] = Field(
+        default_factory=list,
+        description="Разбор по ходам: оценки, мотивы, рекомендация Policy Layer",
+    )
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
@@ -109,6 +146,7 @@ async def analyze(
         moves_analyzed=len(analyses),
         time_taken_ms=elapsed_ms,
         summary=_summarize(analyses),
+        moves=_build_moves(parsed, analyses, payload.level),
     )
 
 
@@ -189,6 +227,60 @@ def _db_eval(analysis: MoveAnalysis) -> tuple[int | None, int | None]:
         return None, analysis.mate_after
     mover_sign = 1 if analysis.ply % 2 == 1 else -1
     return analysis.eval_after * mover_sign, None
+
+
+def _build_moves(
+    parsed: ParsedGame, analyses: list[MoveAnalysis], level: str
+) -> list[AnalyzedMove]:
+    """Собрать блок `moves` ответа: оценки, мотивы и рекомендации Policy.
+
+    Policy вызывается для позиции **до** хода (`fen_before`) и линий
+    `analysis.lines` — то есть отвечает на вопрос «что стоило сыграть этому
+    игроку под его уровень», а не «что лучше в получившейся позиции».
+    """
+    fens_before = [parsed.initial_fen, *[move.fen for move in parsed.moves[:-1]]]
+    result: list[AnalyzedMove] = []
+    for analysis, fen_before in zip(analyses, fens_before, strict=True):
+        eval_cp, eval_mate = _db_eval(analysis)
+        result.append(
+            AnalyzedMove(
+                ply=analysis.ply,
+                san=analysis.played_move_san,
+                uci=analysis.played_move_uci,
+                eval_cp=eval_cp,
+                mate=eval_mate,
+                best_move_san=analysis.best_move_san,
+                delta_cp=analysis.delta_cp,
+                classification=analysis.classification,
+                motifs=list(analysis.motifs),
+                recommended_move=_recommended(analysis, fen_before, level),
+            )
+        )
+    return result
+
+
+def _recommended(
+    analysis: MoveAnalysis, fen_before: str, level: str
+) -> RecommendedMove | None:
+    """Выбрать рекомендацию под уровень или вернуть ``None`` без линий."""
+    if not analysis.lines:
+        return None
+    line = choose_recommended_move(analysis.lines, level, fen=fen_before)
+    return RecommendedMove(
+        san=_uci_to_san(fen_before, line.move_uci),
+        uci=line.move_uci,
+        eval_cp=line.score_cp,
+        mate=line.mate,
+    )
+
+
+def _uci_to_san(fen: str, uci: str) -> str:
+    """UCI → SAN на позиции; при неожиданной ошибке отдаём UCI как есть."""
+    try:
+        board = chess.Board(fen)
+        return board.san(board.parse_uci(uci))
+    except ValueError:
+        return uci
 
 
 def _summarize(analyses: list[MoveAnalysis]) -> AnalyzeSummary:

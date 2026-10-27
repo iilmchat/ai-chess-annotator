@@ -97,9 +97,17 @@ def _choose_beginner(
     multipv: list[EngineLine] | tuple[EngineLine, ...], fen: str
 ) -> EngineLine:
     board = parse_fen(fen)
+    candidates = list(multipv)[:3]
+
+    # KI-020: мат в свою пользу разрешён всегда — даже если это жертва
+    # (ферзь выходит рано или фигура остаётся под боем). Мат сильнее любых
+    # принципов, и именно такие ходы новичку интереснее всего увидеть.
+    for line in candidates:
+        if line.mate is not None and line.mate > 0:
+            return line
 
     acceptable: list[tuple[EngineLine, chess.Move]] = []
-    for line in list(multipv)[:3]:
+    for line in candidates:
         try:
             move = board.parse_uci(line.move_uci)
         except ValueError:

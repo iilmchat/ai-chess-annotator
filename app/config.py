@@ -44,13 +44,31 @@ class Settings(BaseSettings):
     rate_limit_requests: int = 10
     rate_limit_window_s: int = 60
 
-    # LLM
-    llm_provider_local: str = "vllm"
-    vllm_base_url: str = "http://localhost:8001/v1"
-    vllm_model: str = "Qwen/Qwen3-8B"
+    # LLM (T-013): локально — LM Studio (OpenAI-совместимый API), облако — DeepSeek.
+    #: Историческое имя: локальный провайдер (compose/healthcheck).
+    llm_provider_local: str = "lmstudio"
+    #: Локальная модель (LM Studio). Имена vllm_* сохранены для совместимости.
+    vllm_base_url: str = "http://127.0.0.1:8034/v1"
+    #: Быстрая не-thinking модель: qwen3-8b «умнее», но генерирует reasoning
+    #: и на этом хосте отвечает в разы дольше (см. отчёт итерации 6).
+    vllm_model: str = "qwen/qwen3-4b-2507"
+    #: LM Studio не проверяет ключ, но OpenAI-совместимые клиенты требуют
+    #: непустой Authorization — отправляем заглушку.
+    vllm_api_key: str = "lm-studio"
+    #: Облачный провайдер для уровня «гроссмейстер».
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
     deepseek_api_key: str | None = None
+    #: Задел на альтернативные облака (сейчас не маршрутизируются).
+    openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
+    #: Таймауты и ретраи LLM-запросов.
+    #: Верхняя граница ответа: без неё LM Studio может генерировать «до конца».
+    llm_max_tokens: int = 512
+    llm_timeout_s: float = 60.0
+    llm_max_retries: int = 2
+    llm_retry_backoff_s: float = 0.5
 
     # Embeddings
     embedding_model: str = "bge-m3"

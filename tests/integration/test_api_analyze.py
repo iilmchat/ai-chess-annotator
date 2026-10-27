@@ -150,6 +150,20 @@ def test_analyze_example_pgn_meets_sla_and_persists(client: TestClient) -> None:
     assert body["time_taken_ms"] <= SLA_LIMIT_MS
     assert wall_ms <= SLA_LIMIT_MS, f"SLA нарушен: {wall_ms:.0f} мс"
 
+    # T-012: ответ содержит разбор по ходам, мотивы и рекомендацию Policy.
+    analyzed = body["moves"]
+    assert len(analyzed) == 53
+    assert analyzed[0]["ply"] == 1
+    assert analyzed[0]["san"] == "d4"
+    assert analyzed[0]["uci"] == "d2d4"
+    for item in analyzed:
+        assert item["classification"] in CLASSIFICATIONS
+        assert isinstance(item["motifs"], list)
+        recommended = item["recommended_move"]
+        assert recommended is not None, f"нет рекомендации на полуходе {item['ply']}"
+        assert recommended["san"]
+        assert recommended["uci"]
+
     game_id = int(body["analysis_id"])
     try:
         game, moves = asyncio.run(_read_game(game_id))

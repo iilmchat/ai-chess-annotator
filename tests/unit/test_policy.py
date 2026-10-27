@@ -149,6 +149,48 @@ def test_beginner_prefers_development_over_passive_pawn_move() -> None:
     assert chosen.move_uci == "g1f3"
 
 
+# --- KI-020: мат в свою пользу разрешён всегда ---------------------------
+
+
+def test_beginner_allows_early_queen_when_it_mates() -> None:
+    """KI-020: Qh5 — «ранний ферзь», но с матом в 2 хода он разрешён."""
+    lines = [_line(1, "d1h5", mate=2), _line(2, "f1c4", 25), _line(3, "g1f3", 20)]
+
+    chosen = choose_recommended_move(lines, "beginner", fen=AFTER_E4_E5)
+
+    assert chosen.move_uci == "d1h5"
+
+
+def test_beginner_allows_hanging_piece_when_it_mates() -> None:
+    """KI-020: Nxe5 «висит», но ведёт к мату — новичку показываем."""
+    lines = [_line(1, "f3e5", mate=1), _line(2, "f1c4", 20), _line(3, "b1c3", 15)]
+
+    chosen = choose_recommended_move(lines, "beginner", fen=AFTER_NF3_NC6)
+
+    assert chosen.move_uci == "f3e5"
+
+
+def test_beginner_does_not_bypass_filters_for_losing_mate() -> None:
+    """Отрицательный мат (получаем мы) — не повод обходить фильтры."""
+    lines = [_line(1, "d1h5", mate=-2), _line(2, "f1c4", 25), _line(3, "g1f3", 20)]
+
+    chosen = choose_recommended_move(lines, "beginner", fen=AFTER_E4_E5)
+
+    assert chosen.move_uci == "f1c4"
+
+
+def test_beginner_and_gm_disagree_on_premature_queen() -> None:
+    """DoD T-012: рекомендации новичку и гроссмейстеру различаются."""
+    lines = _queen_line()
+
+    gm_move = choose_recommended_move(lines, "gm", fen=AFTER_E4_E5)
+    beginner_move = choose_recommended_move(lines, "beginner", fen=AFTER_E4_E5)
+
+    assert gm_move.move_uci == "d1h5"
+    assert beginner_move.move_uci == "f1c4"
+    assert gm_move.move_uci != beginner_move.move_uci
+
+
 # --- ошибки ---------------------------------------------------------------
 
 
