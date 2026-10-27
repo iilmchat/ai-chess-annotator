@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-5_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-38_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-0_yet-orange.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -208,13 +208,14 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*` и `/runs/*` (SSE) на
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP, в разработке) |
-| Итерация | **1 — Bootstrap (T-001…T-006)** завершена |
-| Backend-тесты | **5 passed** (2 файла: `tests/test_health.py`, `tests/test_models.py`) |
+| Итерация | **2 — Ingestion (T-007)** завершена; итерация 1 (T-001…T-006) — закрыта |
+| Backend-тесты | **38 passed, 1 xfailed** (3 файла: `tests/test_health.py`, `tests/test_models.py`, `tests/unit/test_ingestion.py`; `xfailed` — маркер KI-012) |
 | Frontend-тесты | **0** (0 файлов) — CI использует `--passWithNoTests`, см. KI-008 |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **8** (`alembic` ревизия `b802598c3778`) |
+| Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
 | Ключевых моментов в анализе | определяется движком (delta ≥ 200 cp) |
-| KI-реестр | **9** записей (KI-001…KI-009, все Open) |
+| KI-реестр | **12** записей (KI-001…KI-012, все Open) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test |
 | Docker | multi-stage образ + `docker-compose.prod.yml`, публикация в GHCR |
 

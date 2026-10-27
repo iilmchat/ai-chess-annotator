@@ -104,3 +104,72 @@ KI-001, KI-002, KI-006; они не блокируют продукт)
   10 тестовых PGN (включая `tests/fixtures/example.pgn`).
 - Перед T-007: закрыть/подтвердить KI-006 (скрипт установки Stockfish)
   — понадобится в T-008, не в T-007.
+
+---
+
+## Итерация 2 — Ingestion (T-007)
+
+**Дата:** 2026-10-28
+**Статус:** ✅ завершена (с открытыми KI-010…KI-012, ни один не блокирует T-008)
+**Отчёты шагов:** `docs/development/reports/iteration-2/STEP-01…STEP-05`
+
+### Что сделано
+
+- [x] **T-007. Ingestion: PGN/FEN → нормализованная партия.**
+      Пакет `app/ingestion/`:
+      - `models.py` — `ParsedMove`, `GameMetadata`, `PhaseBreakdown`,
+        `PositionRepeat`, `ParsedGame` (frozen, `extra="forbid"`, ECO-паттерн
+        на уровне модели);
+      - `parser.py` — `parse_pgn`, `parse_fen`, `find_position_repeats`;
+        пороги фаз (`OPENING_MAX_PLY=30`, материал `< 2000 cp` или
+        `< 10` фигур), перевод ошибок `python-chess` в доменные;
+      - `eco.py` — нормализация заголовка `[ECO]` + курируемая таблица
+        префиксов (самое длинное совпадение);
+      - `__init__.py` — публичный контракт пакета.
+- [x] **`app/errors.py`** — `AppError` / `InvalidPgnError` /
+      `InvalidFenError` с `code` и `http_status` (задел под T-009).
+- [x] **Тесты:** `tests/unit/test_ingestion.py` — 33 теста, включая
+      10 входных PGN (2 фикстуры + 8 дебютов), FEN-инвариант для каждого
+      полухода, флаги взятия/шаха, разметку фаз, все ветки ошибок и
+      `xfail`-маркер KI-012.
+- [x] **Фикстура** `tests/fixtures/test_game.pgn` (Test White / Test Black,
+      без `[ECO]`) + обновлённый `tests/fixtures/README.md` с инвариантами.
+- [x] **Документация:** отчёты `reports/iteration-2/`, этот отчёт,
+      `docs/CHANGELOG.md`, `docs/KNOWN_ISSUES.md` (KI-010…KI-012),
+      `README.md`, `docs/README.md`, `docs/development/PROMPT_CURRENT.md`;
+      комментарий к `games.phase_breakdown` в `app/db/models.py` приведён
+      к фактическому формату.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Полная база ECO и транспозиции «относительно теории» | `python-chess` не поставляет ECO/opening book; нужен внешний источник (полиглот-книга) | KI-011 (T-017) |
+| Строгий контроль «PGN прочитан до конца» | `python-chess` молча обрывает разбор на неизвестном токене | KI-012 (T-017 или раньше) |
+| Перенос плоских тестов итерации 1 в `tests/unit|integration` | Не блокирует T-007, требует аккуратного разделения | KI-010 (T-008) |
+| API-эндпоинт и запись в БД | Это T-009 (требует T-008) | — |
+
+### Метрики
+
+- **Backend-тесты:** **38 passed, 1 xfailed** (3 файла; из них 33 —
+  ingestion). `xfailed` — осознанный маркер KI-012 (`strict=True`).
+- **Frontend-тесты:** 0 (без изменений, KI-008).
+- **ruff:** 0 ошибок. **mypy (strict):** 0 ошибок, **15** файлов
+  (было 10: +`errors.py` и 4 файла `app/ingestion/`).
+- **Покрытие ingestion:** 10 PGN-входов, все проигрываются без ошибок;
+  FEN после каждого из 53 полуходов тестовой партии сверен с независимым
+  `push_san`.
+- **Производительность:** разбор партии из 53 полуходов — единицы
+  миллисекунд (юнит-тесты целиком 1.2 с, включая импорт `python-chess`).
+- **CI:** конфигурация не менялась; в Actions не запускался (нет push).
+- **Время итерации:** ≈ 0.2 ч (01:46–01:55 MSK), 5 шагов.
+
+### Что дальше
+
+- **T-008. Engine Service:** `app/engine/` — async-обёртка над Stockfish
+  (UCI), MultiPV, глубина по уровню, классификация ходов
+  (blunder/mistake/inaccuracy/good/best/brilliant), бенчмарк ≤ 1 с/ход
+  для «клуба».
+- Перед T-008: понадобится KI-006 (путь к Stockfish) — на этой машине
+  бинарник уже стоит (`D:\Tools\stockfish\stockfish.exe`,
+  `STOCKFISH_PATH` в `.env`).

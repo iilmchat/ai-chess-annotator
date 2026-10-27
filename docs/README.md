@@ -36,20 +36,24 @@
 | [PROMPT_FOR_DSH.md](development/PROMPT_FOR_DSH.md) | Исходная версия инструкций (источник для `PROMPT_CURRENT.md`) |
 | [RELEASES.md](development/RELEASES.md) | Журнал итераций и шаблон отчёта |
 | [reports/iteration-1/](development/reports/iteration-1/) | Пошаговые отчёты итерации 1 (STEP-01…STEP-11) |
+| [reports/iteration-2/](development/reports/iteration-2/) | Пошаговые отчёты итерации 2 — Ingestion (STEP-01…STEP-05) |
 
 ### Состояние проекта
 
 | Документ | Что внутри |
 | :--- | :--- |
 | [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секция `[Unreleased]` |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-009 со статусами, severity и планом закрытия |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-012 со статусами, severity и планом закрытия |
 
 ### Тесты и данные
 
 | Артефакт | Что внутри |
 | :--- | :--- |
-| [../tests/](../tests/) | `test_health.py`, `test_models.py` (unit + интеграция со схемой БД) |
-| [../tests/fixtures/example.pgn](../tests/fixtures/example.pgn) | Партия Гукеш — Каймер (Прага 2024), `1.d4 Nf6 2.c4 e6 … 27.Bg6+ 1-0`; используется в T-007 |
+| [../tests/](../tests/) | `test_health.py`, `test_models.py` — healthcheck и схема БД (итерация 1) |
+| [../tests/unit/test_ingestion.py](../tests/unit/test_ingestion.py) | 33 теста ingestion: PGN/FEN, ECO, фазы, флаги хода, ошибки, повторы (T-007) |
+| [../tests/fixtures/example.pgn](../tests/fixtures/example.pgn) | Партия Гукеш — Каймер (Прага 2024), `1.d4 Nf6 2.c4 e6 … 27.Bg6+ 1-0`, ECO `E21` |
+| [../tests/fixtures/test_game.pgn](../tests/fixtures/test_game.pgn) | Та же партия с `Test White` / `Test Black` и без `[ECO]` — проверка метаданных и fallback-а ECO |
+| [../tests/fixtures/README.md](../tests/fixtures/README.md) | Инварианты обеих фикстур (полуходы, результат, ECO, фазы) |
 
 ---
 

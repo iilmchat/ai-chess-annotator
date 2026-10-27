@@ -1,6 +1,6 @@
 # PROMPT_CURRENT — актуальные системные инструкции
 
-> **Версия:** 1.0 · **Синхронизировано:** 2026-10-28 (итерация 1, T-006)
+> **Версия:** 1.1 · **Синхронизировано:** 2026-10-28 (итерация 2, T-007)
 > **Источник:** `docs/development/PROMPT_FOR_DSH.md` (копия 1:1, ниже — без
 > изменений) + метрики и правила текущей итерации.
 >
@@ -13,14 +13,14 @@
 
 | Показатель | Значение | Проверка |
 | :--- | :--- | :--- |
-| Итерация | 1 — Bootstrap (T-001…T-006) | `TODO.md` |
-| Backend-тесты | 5 passed (2 файла) | `pytest -q` |
+| Итерация | 2 — Ingestion (T-007) завершена; следующая — T-008 | `TODO.md` |
+| Backend-тесты | 38 passed + 1 xfailed (3 файла) | `pytest -q` |
 | Frontend-тесты | 0 (0 файлов, KI-008) | `pnpm --dir web test` |
 | `ruff check .` | 0 ошибок | CI job `backend` |
-| `mypy app` | 0 ошибок (strict) | CI job `backend` |
+| `mypy app` | 0 ошибок (strict), 15 файлов | CI job `backend` |
 | Миграции | 1 ревизия `b802598c3778`, 8 таблиц | `alembic current`, `alembic check` |
 | Healthcheck | `degraded` (db/redis/stockfish `ok`, llm `skipped`) | `GET /v1/health` |
-| Открытых KI | 9 (см. `docs/KNOWN_ISSUES.md`) | реестр |
+| Открытых KI | 12 (см. `docs/KNOWN_ISSUES.md`) | реестр |
 
 ---
 
@@ -93,7 +93,7 @@
 
 ---
 
-## 2. Дополнения к копии (итерация 1)
+## 2. Дополнения к копии (итерации 1–2)
 
 Актуальные уточнения, которых нет в `PROMPT_FOR_DSH.md`:
 
@@ -105,5 +105,11 @@
    команды проверки на этой машине.
 3. **`localhost` запрещён в конфигах** — только `127.0.0.1` (`RULES.md`
    §11.1).
-4. **Следующая итерация** — T-007 (Ingestion на `python-chess`), требует
-   T-004 (закрыт).
+4. **Ingestion готов (T-007)** — `app/ingestion/`: `parse_pgn`,
+   `parse_fen`, `find_position_repeats`; ECO = заголовок PGN + курируемая
+   таблица префиксов (полная база — KI-011); детект тихого обрыва PGN —
+   KI-012.
+5. **Следующая итерация** — T-008 (Engine Service на Stockfish), требует
+   T-002 и T-007 (оба закрыты). Бинарник Stockfish на этой машине —
+   `D:\Tools\stockfish\stockfish.exe` (`STOCKFISH_PATH` в `.env`,
+   KI-006).

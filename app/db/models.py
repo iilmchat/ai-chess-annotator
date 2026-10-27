@@ -111,7 +111,8 @@ class Game(Base):
     )
     pgn: Mapped[str] = mapped_column(Text, nullable=False)
     eco_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
-    # {"opening": [1, 20], "middlegame": [21, 58], "endgame": [59, 80]}
+    # Формат задаёт app.ingestion.models.PhaseBreakdown (T-007):
+    # {"opening_end_ply": 30, "endgame_start_ply": null}
     phase_breakdown: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
     )
