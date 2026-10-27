@@ -133,6 +133,7 @@ def parse_pgn(pgn_string: str) -> ParsedGame:
         raise InvalidPgnError(f"PGN содержит ошибки: {details}")
 
     board = game.board()
+    initial_fen = board.fen()
     moves: list[ParsedMove] = []
     endgame_start_ply: int | None = None
 
@@ -176,6 +177,7 @@ def parse_pgn(pgn_string: str) -> ParsedGame:
         moves=moves,
         eco_code=detect_eco(game.headers.get("ECO"), [move.san for move in moves]),
         phase_breakdown=phase,
+        initial_fen=initial_fen,
         final_fen=board.fen(),
     )
 

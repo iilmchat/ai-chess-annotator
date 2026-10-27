@@ -75,7 +75,7 @@
   27.Bg6+ 1-0`) разбираются корректно; unit-тесты на все ветки.
 - **Оценка:** 1.5
 
-### [ ] T-008. Engine Service: Stockfish-обёртка
+### [x] T-008. Engine Service: Stockfish-обёртка
 - **Зависит от:** T-002, T-007
 - **Что:** `app/engine/` — async-обёртка над Stockfish (через
   `stockfish` py или UCI-сокет), MultiPV, глубина по уровню, классификация

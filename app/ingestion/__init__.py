@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.ingestion.eco import detect_eco, lookup_eco, normalize_eco
 from app.ingestion.models import (
+    STARTING_FEN,
     GameMetadata,
     ParsedGame,
     ParsedMove,
@@ -17,6 +18,7 @@ from app.ingestion.models import (
 from app.ingestion.parser import find_position_repeats, parse_fen, parse_pgn
 
 __all__ = [
+    "STARTING_FEN",
     "GameMetadata",
     "ParsedGame",
     "ParsedMove",

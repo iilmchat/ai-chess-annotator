@@ -1,6 +1,6 @@
 # PROMPT_CURRENT — актуальные системные инструкции
 
-> **Версия:** 1.1 · **Синхронизировано:** 2026-10-28 (итерация 2, T-007)
+> **Версия:** 1.2 · **Синхронизировано:** 2026-10-28 (итерация 3, T-008)
 > **Источник:** `docs/development/PROMPT_FOR_DSH.md` (копия 1:1, ниже — без
 > изменений) + метрики и правила текущей итерации.
 >
@@ -13,14 +13,14 @@
 
 | Показатель | Значение | Проверка |
 | :--- | :--- | :--- |
-| Итерация | 2 — Ingestion (T-007) завершена; следующая — T-008 | `TODO.md` |
-| Backend-тесты | 38 passed + 1 xfailed (3 файла) | `pytest -q` |
+| Итерация | 3 — Engine Service (T-008) завершена; следующая — T-009 | `TODO.md` |
+| Backend-тесты | 65 passed + 1 xfailed (4 файла) | `pytest -q` |
 | Frontend-тесты | 0 (0 файлов, KI-008) | `pnpm --dir web test` |
 | `ruff check .` | 0 ошибок | CI job `backend` |
-| `mypy app` | 0 ошибок (strict), 15 файлов | CI job `backend` |
+| `mypy app` | 0 ошибок (strict), 18 файлов | CI job `backend` |
 | Миграции | 1 ревизия `b802598c3778`, 8 таблиц | `alembic current`, `alembic check` |
 | Healthcheck | `degraded` (db/redis/stockfish `ok`, llm `skipped`) | `GET /v1/health` |
-| Открытых KI | 12 (см. `docs/KNOWN_ISSUES.md`) | реестр |
+| Открытых KI | 14 (см. `docs/KNOWN_ISSUES.md`) | реестр |
 
 ---
 
@@ -93,7 +93,7 @@
 
 ---
 
-## 2. Дополнения к копии (итерации 1–2)
+## 2. Дополнения к копии (итерации 1–3)
 
 Актуальные уточнения, которых нет в `PROMPT_FOR_DSH.md`:
 
@@ -109,7 +109,12 @@
    `parse_fen`, `find_position_repeats`; ECO = заголовок PGN + курируемая
    таблица префиксов (полная база — KI-011); детект тихого обрыва PGN —
    KI-012.
-5. **Следующая итерация** — T-008 (Engine Service на Stockfish), требует
-   T-002 и T-007 (оба закрыты). Бинарник Stockfish на этой машине —
-   `D:\Tools\stockfish\stockfish.exe` (`STOCKFISH_PATH` в `.env`,
-   KI-006).
+5. **Engine готов (T-008)** — `app/engine/`: `EngineService.analyze`
+   (MultiPV 1/3/5, глубины 12/18/28, бюджеты 0.2/1/5 с),
+   `classify_move`, `analyze_game_moves`; собственный async UCI-клиент
+   (не библиотека `stockfish`). Бинарник на этой машине —
+   `D:\Tools\stockfish\stockfish.exe` (`STOCKFISH_PATH`, KI-006).
+   Ограничения: TCP-транспорт — KI-013; полная партия на «клубе» ≈ 41 с
+   против 30 с из SPEC §9 — KI-014 (решать в T-009).
+6. **Следующая итерация** — T-009 (`POST /v1/analyze`), требует T-007 и
+   T-008 (оба закрыты).

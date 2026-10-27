@@ -13,6 +13,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 __all__ = [
+    "STARTING_FEN",
     "GameMetadata",
     "ParsedGame",
     "ParsedMove",
@@ -22,6 +23,9 @@ __all__ = [
 
 #: Код ECO: буква A–E и две цифры (например, ``E21``, ``B90``).
 EcoCode = Annotated[str, StringConstraints(pattern=r"^[A-E]\d{2}$")]
+
+#: Начальная расстановка — позиция до первого хода обычной партии.
+STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 _FROZEN = ConfigDict(frozen=True, extra="forbid")
 
@@ -98,6 +102,11 @@ class ParsedGame(BaseModel):
     moves: list[ParsedMove]
     eco_code: EcoCode | None = None
     phase_breakdown: PhaseBreakdown
+    initial_fen: str = Field(
+        default=STARTING_FEN,
+        min_length=1,
+        description="FEN позиции до первого хода (для партий с FEN-стартом)",
+    )
     final_fen: str = Field(min_length=1)
 
     @property

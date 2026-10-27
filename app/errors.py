@@ -13,7 +13,15 @@
 
 from __future__ import annotations
 
-__all__ = ["AppError", "InvalidFenError", "InvalidPgnError"]
+__all__ = [
+    "AppError",
+    "EngineError",
+    "EngineNotFoundError",
+    "EngineTimeoutError",
+    "InvalidFenError",
+    "InvalidLevelError",
+    "InvalidPgnError",
+]
 
 
 class AppError(Exception):
@@ -39,3 +47,31 @@ class InvalidFenError(AppError):
 
     code = "invalid_fen"
     http_status = 400
+
+
+class InvalidLevelError(AppError):
+    """Уровень ассистента не из набора beginner / club / gm."""
+
+    code = "invalid_level"
+    http_status = 422
+
+
+class EngineError(AppError):
+    """Базовый класс ошибок движка (Stockfish недоступен или сломан)."""
+
+    code = "engine_error"
+    http_status = 503
+
+
+class EngineNotFoundError(EngineError):
+    """Бинарник Stockfish не найден по пути из настроек (см. KI-006)."""
+
+    code = "engine_not_found"
+    http_status = 503
+
+
+class EngineTimeoutError(EngineError):
+    """Движок не уложился в отведённое время и был перезапущен."""
+
+    code = "engine_timeout"
+    http_status = 504

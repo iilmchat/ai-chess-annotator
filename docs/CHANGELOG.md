@@ -8,32 +8,35 @@
 
 ### Added
 
+- **Engine Service (T-008):** пакет `app/engine/` — async-обёртка над
+  Stockfish: `EngineService.analyze()` (MultiPV, параметры по уровню из
+  SPEC §2.2), `classify_move()` (best/good/inaccuracy/mistake/blunder),
+  `analyze_game_moves()` (оценка «до/после» для каждого полухода,
+  `delta_cp`, SAN/UCI, мат как `±(10000 − 100·N)`); собственный
+  асинхронный UCI-клиент с таймаутами и перезапуском процесса.
+- **Ошибки движка:** `EngineError`, `EngineNotFoundError`,
+  `EngineTimeoutError`, `InvalidLevelError` в `app/errors.py`.
+- **`ParsedGame.initial_fen`:** стартовая позиция партии (для партий с
+  FEN-стартом); используется движком при анализе истории ходов.
+- **Тесты движка:** `tests/unit/test_engine.py` — 27 тестов, включая
+  интеграцию с реальным Stockfish (MultiPV, бенчмарк «клуба», первые
+  3 хода партии, легальность лучшего хода).
 - **Ingestion (T-007):** пакет `app/ingestion/` — `parse_pgn()` (PGN →
   `ParsedGame`), `parse_fen()` (валидация FEN), `find_position_repeats()`
   (повторы позиций); ECO-код из заголовка `[ECO]` с fallback на
   курируемую таблицу дебютных префиксов; разметка фаз
   (дебют ≤ 30 полуходов, эндшпиль по материалу `< 2000 cp` или `< 10`
   фигур).
-- **Доменные ошибки:** `app/errors.py` — `AppError`, `InvalidPgnError`,
+- **Доменные ошибки ingestion:** `AppError`, `InvalidPgnError`,
   `InvalidFenError` (`code`, `http_status` для будущего API-слоя).
-- **Модели результата:** `ParsedMove`, `GameMetadata`, `PhaseBreakdown`,
-  `PositionRepeat`, `ParsedGame` (Pydantic v2, `frozen`, `extra="forbid"`).
-- **Тесты:** `tests/unit/test_ingestion.py` — 33 теста (10 входных PGN,
-  FEN после каждого полухода, флаги взятия/шаха, фазы, ошибки, ECO,
-  повторы), `xfail`-маркер KI-012.
+- **Модели результата ingestion:** `ParsedMove`, `GameMetadata`,
+  `PhaseBreakdown`, `PositionRepeat`, `ParsedGame` (Pydantic v2, `frozen`,
+  `extra="forbid"`).
+- **Тесты ingestion:** `tests/unit/test_ingestion.py` — 33 теста
+  (10 входных PGN, FEN после каждого полухода, флаги взятия/шаха, фазы,
+  ошибки, ECO, повторы), `xfail`-маркер KI-012.
 - **Фикстура:** `tests/fixtures/test_game.pgn` (Test White / Test Black)
   и таблица инвариантов в `tests/fixtures/README.md`.
-- **Документация:** отчёты `docs/development/reports/iteration-2/`,
-  раздел «Итерация 2» в `RELEASES.md`, KI-010…KI-012 в
-  `KNOWN_ISSUES.md`.
-
-### Changed
-
-- `ruff`: `RUF001` добавлено в `ignore` вместе с `RUF002/RUF003` —
-  сообщения и докстринги проекта на русском.
-- Комментарий к `games.phase_breakdown` в `app/db/models.py` приведён к
-  фактическому формату `{"opening_end_ply": …, "endgame_start_ply": …}`.
-
 - **Bootstrap проекта (T-001…T-006):** FastAPI-скелет (`app/main.py`,
   `app/config.py`), healthcheck `/v1/health` с проверкой БД, Redis,
   Stockfish и LLM, Docker Compose (PostgreSQL 17 + pgvector, Redis,
@@ -46,19 +49,23 @@
   `retrieval_cache(fen_hash)`.
 - **Первая миграция** `b802598c3778_init_schema` (upgrade / downgrade /
   повторный upgrade проверены), `alembic check` без дрейфа.
-- **Тесты (T-004/T-005):** `tests/test_health.py`,
+- **Тесты схемы (T-004/T-005):** `tests/test_health.py`,
   `tests/test_models.py` — 5 тестов, включая интеграционный тест схемы
   (defaults, каскады).
 - **Документация:** `docs/development/RULES.md` (правила кода, тестов,
-  коммитов, безопасности, окружения), `docs/development/PROMPT_CURRENT.md`,
-  `docs/development/RELEASES.md`, `docs/CHANGELOG.md`,
-  `docs/KNOWN_ISSUES.md`, `docs/README.md` (навигация), отчёты по шагам
-  итерации в `docs/development/reports/iteration-1/`.
+  коммитов, безопасности, окружения), `PROMPT_CURRENT.md`,
+  `RELEASES.md`, `docs/CHANGELOG.md`, `docs/KNOWN_ISSUES.md`,
+  `docs/README.md` (навигация), пошаговые отчёты в
+  `docs/development/reports/`.
 - **CI:** шаги `alembic check` и roundtrip-миграции
   (`downgrade base` → `upgrade head`) — DoD T-004.
 
 ### Changed
 
+- `ruff`: `RUF001` добавлено в `ignore` вместе с `RUF002/RUF003` —
+  сообщения и докстринги проекта на русском.
+- Комментарий к `games.phase_breakdown` в `app/db/models.py` приведён к
+  фактическому формату `{"opening_end_ply": …, "endgame_start_ply": …}`.
 - `POSTGRES_HOST` / `REDIS_URL` по умолчанию — `127.0.0.1` вместо
   `localhost`: на Windows `localhost` резолвится в `::1`, а compose
   публикует порты только на IPv4-loopback (иначе healthcheck Redis
