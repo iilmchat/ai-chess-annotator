@@ -68,6 +68,16 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 1024
     #: Прогрев локальной модели при старте приложения (KI-022).
     llm_warmup_enabled: bool = True
+
+    # Commentary (T-016)
+    #: Сколько раз переспрашивать LLM, если валидатор нашёл нелегальные ходы.
+    commentary_max_retries: int = 2
+
+    # RAG (T-017)
+    #: Сколько похожих аннотированных партий подмешивать в пакет фактов.
+    rag_top_k: int = 3
+    #: Включать RAG-контекст для уровня gm.
+    rag_enabled: bool = True
     llm_timeout_s: float = 120.0
     llm_max_retries: int = 2
     llm_retry_backoff_s: float = 0.5

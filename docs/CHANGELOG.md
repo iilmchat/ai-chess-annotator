@@ -8,6 +8,14 @@
 
 ### Added
 
+- **Комментарий (T-016):** `POST /v1/commentary` — по `analysis_id` берёт
+  партию и анализ из БД, собирает пакет фактов, генерирует текст, проверяет
+  ходы валидатором (до 2 retry), сохраняет в `commentaries` с токенами и
+  `validated`; при нелегальных ходах после retry — `502 llm_invalid_output`.
+- **Сервис генерации:** `app/commentary/service.py` — восстановление
+  `MoveAnalysis` из `moves`/`motifs`/`multipv`, ретраи, стиль,
+  реконструкция UCI/SAN.
+- **Ошибки:** `NotFoundError` (404), `LLMValidationError` (502).
 - **Системные промпты (T-014):** `app/prompts/{beginner,club,gm}.txt` —
   строгие правила (только факты из пакета, SAN без Markdown, фиксированная
   длина), загрузчик `load_system_prompt(level)` с кешем.
@@ -159,6 +167,7 @@
 
 ### Fixed
 
+- Пул соединений asyncpg закрывается в lifespan (ngine.dispose()): без этого несколько TestClient в одном процессе переиспользовали соединения из закрытого event loop и получали 500.
 - Alembic-миграция доведена руками: `import pgvector`,
   `CREATE EXTENSION vector`, явные `create/drop` нативного enum `level`
   (иначе `downgrade base` + `upgrade` падали на существующем типе).

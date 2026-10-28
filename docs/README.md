@@ -42,6 +42,7 @@
 | [reports/iteration-5/](development/reports/iteration-5/) | Пошаговые отчёты итерации 5 — мотивы и Policy (STEP-01…STEP-04) |
 | [reports/iteration-6/](development/reports/iteration-6/) | Пошаговые отчёты итерации 6 — API и LLM-адаптер (STEP-01…STEP-04) |
 | [reports/iteration-7/](development/reports/iteration-7/) | Пошаговые отчёты итерации 7 — промпты и валидатор (STEP-01…STEP-04) |
+| [reports/iteration-8/](development/reports/iteration-8/) | Отчёты итерации 8 — комментарий (STEP-01…STEP-02) |
 
 ### Состояние проекта
 
@@ -68,6 +69,7 @@
 | [../tests/unit/test_validator.py](../tests/unit/test_validator.py) | 14 тестов валидатора: SAN-регэксп, легальность, альтернативы (T-015) |
 | [../tests/unit/test_warmup.py](../tests/unit/test_warmup.py) | 3 теста прогрева LLM при старте (KI-022) |
 | [../tests/integration/test_generation.py](../tests/integration/test_generation.py) | Живой E2E: пакет фактов → LM Studio → валидатор (T-014/T-015) |
+| [../tests/integration/test_api_commentary.py](../tests/integration/test_api_commentary.py) | 7 тестов `/v1/commentary`: реконструкция анализа, retry, 404/422, живой прогон (T-016) |
 | [../tests/fixtures/example.pgn](../tests/fixtures/example.pgn) | Партия Гукеш — Каймер (Прага 2024), `1.d4 Nf6 2.c4 e6 … 27.Bg6+ 1-0`, ECO `E21` |
 | [../tests/fixtures/test_game.pgn](../tests/fixtures/test_game.pgn) | Та же партия с `Test White` / `Test Black` и без `[ECO]` — проверка метаданных и fallback-а ECO |
 | [../tests/fixtures/README.md](../tests/fixtures/README.md) | Инварианты обеих фикстур (полуходы, результат, ECO, фазы) |

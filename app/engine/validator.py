@@ -104,7 +104,7 @@ def validate_moves(
 async def validate_llm_response(
     text: str,
     initial_fen: str,
-    engine_service: EngineService,
+    engine_service: EngineService | None = None,
     *,
     mainline_san: Sequence[str] | None = None,
 ) -> tuple[bool, list[str]]:
@@ -120,7 +120,7 @@ async def validate_llm_response(
     Returns:
         ``(все_легальны, список_нелегальных)``.
     """
-    del engine_service  # подпись из постановки; см. docstring модуля
+    # Подпись из постановки; зарезервирован под strict-проверку (T-016).
     return validate_moves(
         extract_moves_from_text(text), initial_fen, mainline_san=mainline_san
     )

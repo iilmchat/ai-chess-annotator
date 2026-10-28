@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-158_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-165_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-0_yet-orange.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -208,8 +208,8 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*` и `/runs/*` (SSE) на
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP, в разработке) |
-| Итерация | **7 — Промпты и валидатор (T-014, T-015)** завершена; итерации 1–6 закрыты |
-| Backend-тесты | **158 passed, 1 xfailed** (15 файлов; `xfailed` — маркер KI-012) |
+| Итерация | **8 — `POST /v1/commentary` (T-016)** завершена; итерации 1–7 закрыты |
+| Backend-тесты | **165 passed, 1 xfailed** (16 файлов; `xfailed` — маркер KI-012) |
 | Frontend-тесты | **0** (0 файлов) — CI использует `--passWithNoTests`, см. KI-008 |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **8** (`alembic` ревизия `b802598c3778`) |
@@ -218,6 +218,7 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*` и `/runs/*` (SSE) на
 | API | `POST /v1/analyze`: PGN + уровень → ходы с оценками, мотивами и `recommended_move`; сохранение в `games`/`moves`/`motifs`; SLA 53 полухода «клуб» ≈ 15 с (лимит 30 с); rate limit 10/мин |
 | LLM | `beginner`/`club` → LM Studio (`qwen/qwen3-4b-2507`, ≈1 c), `gm` → DeepSeek (`deepseek-chat`); таймауты, ретраи, учёт токенов, прогрев при старте |
 | Prompts/Validator | Промпты 3 уровней (SAN без Markdown); пакет фактов (до 10 моментов); валидатор легальности ходов из ответа LLM |
+| Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; при нелегальных ходах — 502, запись не создаётся |
 | Motifs | Проходные пешки, слабые поля, открытые линии/диагонали, безопасность короля, вилки/связки, мат — в таблице `motifs` (до 6 на позицию) |
 | Policy | `choose_recommended_move`: gm — топ-1, club — альтернатива при разнице < 20 cp, beginner — фильтр раннего ферзя и зевков |
 | Ключевых моментов в анализе | определяется движком (delta ≥ 200 cp) |

@@ -1,0 +1,105 @@
+"""`POST /v1/commentary` — сгенерированный и провалидированный комментарий (T-016).
+
+Принимает `analysis_id` (сохранённая партия), уровень и опциональный стиль.
+Восстанавливает анализ из БД, собирает пакет фактов, генерирует текст,
+проверяет ходы валидатором (при нарушениях — до двух retry) и сохраняет
+комментарий в `commentaries`.
+
+Если LLM так и не выдала ответ без нелегальных ходов — возвращается
+`502 llm_invalid_output`, и **ничего не сохраняется**: пользователь не
+должен увидеть выдуманные ходы.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.commentary import RagContextBuilder, generate_commentary
+from app.db.models import Commentary, Level
+from app.db.session import get_session
+
+router = APIRouter(tags=["commentary"])
+
+#: Уровни ассистента.
+LevelName = Literal["beginner", "club", "gm"]
+
+#: Ограничение на пользовательский «стиль» (защита промпта от полотна).
+MAX_STYLE_CHARS = 200
+
+
+class CommentaryRequest(BaseModel):
+    """Тело запроса `/v1/commentary`."""
+
+    analysis_id: int = Field(gt=0, description="ID партии из /v1/analyze")
+    level: LevelName = Field(default="club", description="beginner | club | gm")
+    style: str | None = Field(
+        default=None,
+        max_length=MAX_STYLE_CHARS,
+        description="Пожелание по стилю (например, «короче, для новичка»)",
+    )
+
+
+class CommentaryResponse(BaseModel):
+    """Ответ `/v1/commentary`."""
+
+    commentary_id: int
+    text: str
+    tokens_used: int = Field(ge=0)
+    validated: bool
+    model: str
+    attempts: int = Field(ge=1, description="Сколько раз обращались к LLM")
+
+
+@router.post("/commentary", response_model=CommentaryResponse)
+async def create_commentary(
+    payload: CommentaryRequest,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CommentaryResponse:
+    """Сгенерировать комментарий и сохранить его в БД.
+
+    Raises:
+        NotFoundError: партия не найдена или для неё нет анализа (→ 404).
+        LLMNotConfiguredError: для уровня gm не задан ключ (→ 503).
+        LLMTimeoutError: провайдер не ответил (→ 504).
+        LLMValidationError: нелегальные ходы даже после retry (→ 502).
+    """
+    rag_context = _rag_builder(request) if payload.level == "gm" else None
+    result = await generate_commentary(
+        session,
+        payload.analysis_id,
+        payload.level,
+        payload.style,
+        rag_context=rag_context,
+    )
+
+    row = Commentary(
+        game_id=payload.analysis_id,
+        level=Level(payload.level),
+        text=result.text,
+        model=result.usage.model,
+        tokens_in=result.usage.tokens_in,
+        tokens_out=result.usage.tokens_out,
+        validated=result.validated,
+    )
+    session.add(row)
+    await session.commit()
+
+    return CommentaryResponse(
+        commentary_id=row.id,
+        text=result.text,
+        tokens_used=result.usage.tokens_in + result.usage.tokens_out,
+        validated=result.validated,
+        model=result.usage.model,
+        attempts=result.attempts,
+    )
+
+
+def _rag_builder(request: Request) -> RagContextBuilder | None:
+    """RAG-контекст подключается в lifespan (T-017); без него — None."""
+    builder = getattr(request.app.state, "rag_context_builder", None)
+    return builder if callable(builder) else None

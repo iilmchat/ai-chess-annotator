@@ -24,6 +24,8 @@ __all__ = [
     "LLMError",
     "LLMNotConfiguredError",
     "LLMTimeoutError",
+    "LLMValidationError",
+    "NotFoundError",
 ]
 
 
@@ -99,3 +101,17 @@ class LLMTimeoutError(LLMError):
 
     code = "llm_timeout"
     http_status = 504
+
+
+class LLMValidationError(LLMError):
+    """Ответ LLM содержит нелегальные ходы даже после retry (T-016)."""
+
+    code = "llm_invalid_output"
+    http_status = 502
+
+
+class NotFoundError(AppError):
+    """Запрошенный ресурс (партия, комментарий) не найден."""
+
+    code = "not_found"
+    http_status = 404

@@ -554,3 +554,43 @@ KI-001, KI-002, KI-006; они не блокируют продукт)
 - **T-016. `POST /v1/commentary`:** собрать факт-пакет, сгенерировать текст,
   провалидировать, сохранить в `commentaries` (с токенами и `validated`),
   вернуть клиенту; учесть KI-023 (семантика) и KI-024 (стриминг/фон).
+
+---
+
+## Итерация 8 — `POST /v1/commentary` (T-016)
+
+**Дата:** 2026-10-28
+**Статус:** ✅ завершена (живой прогон: 29/29 ходов легальны, `attempts=1`)
+**Отчёты шагов:** `docs/development/reports/iteration-8/`
+
+### Что сделано
+
+- [x] **Сервис генерации** `app/commentary/service.py`: загрузка партии и
+      анализа из БД (`moves` + `motifs` + `multipv` → `MoveAnalysis`),
+      пакет фактов, LLM, валидатор с retry (до `commentary_max_retries`),
+      поддержка `style`.
+- [x] **`POST /v1/commentary`** (`app/api/v1/commentary.py`): запрос
+      `{analysis_id, level, style?}`, ответ
+      `{commentary_id, text, tokens_used, validated, model, attempts}`;
+      запись в `commentaries` (текст, модель, токены, `validated`).
+- [x] **Ошибки:** `NotFoundError` (404), `LLMValidationError` (502) —
+      нелегальные ходы не сохраняются и не отдаются пользователю.
+- [x] **Rate limiting** расширен на `POST /v1/commentary`.
+- [x] **Фикс:** `engine.dispose()` в lifespan — устранён `500 Event loop is
+      closed` при нескольких `TestClient` в одном процессе.
+- [x] **Тесты:** `tests/integration/test_api_commentary.py` — 7 (6 быстрых +
+      1 живой).
+
+### Метрики
+
+- **Backend-тесты:** **165 passed, 1 xfailed** (16 файлов; +7 к итерации 7).
+  Полный прогон — 159.62 с.
+- **Живой комментарий (club):** 52.4 с, 2733/570 токенов, `attempts=1`,
+  валидатор: **29 ходов, все легальны**; запись `commentary_id=21` в БД.
+- **ruff:** 0; **mypy (strict):** 0 ошибок, 36 файлов.
+- **Время итерации:** ≈ 0.4 ч.
+
+### Что дальше
+
+- **T-017. RAG:** `POST /v1/ingest` (multipart PGN), эмбеддинги,
+  `find_similar_positions`, RAG-контекст для `gm` в `/v1/commentary`.
