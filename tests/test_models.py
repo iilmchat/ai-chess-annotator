@@ -39,6 +39,7 @@ SPEC_TABLES = {
     "commentaries",
     "edits",
     "games",
+    "llm_evaluations",
     "motifs",
     "moves",
     "prompts",
@@ -69,6 +70,14 @@ def test_moves_index_and_embedding_dimension() -> None:
 def test_level_enum_values() -> None:
     assert [level.value for level in Level] == ["beginner", "club", "gm"]
     assert Level("gm") is Level.gm
+
+
+def test_llm_evaluations_table_has_scores() -> None:
+    evaluations = Base.metadata.tables["llm_evaluations"]
+    assert evaluations.c.model.nullable is False
+    assert evaluations.c.accuracy_score.nullable is False
+    assert evaluations.c.usefulness_score.nullable is False
+    assert evaluations.c.style_score.nullable is False
 
 
 def test_semantic_cache_table_has_vector_and_key() -> None:

@@ -42,7 +42,14 @@ from app.audit import (
     verify_audit_chain,
 )
 from app.config import Settings
-from app.db.models import AnnotatedGame, AuditLog, Commentary, Edit, Prompt
+from app.db.models import (
+    AnnotatedGame,
+    AuditLog,
+    Commentary,
+    Edit,
+    LlmEvaluation,
+    Prompt,
+)
 from app.db.session import SessionLocal
 from app.prompts import reset_prompt_cache
 from app.prompts.pubsub import publish_prompt_update
@@ -53,6 +60,7 @@ __all__ = [
     "AdminPathNormalizer",
     "AuditLogAdmin",
     "AuditVerifyView",
+    "LlmEvaluationAdmin",
     "PromptAdmin",
     "create_admin",
 ]
@@ -369,6 +377,30 @@ class PromptAdmin(ModelView):
         )
 
 
+class LlmEvaluationAdmin(_ReadOnlyModelView):
+    """Таблица LLM-as-judge: модель, уровень, три шкалы (T-039)."""
+
+    fields = (  # type: ignore[assignment]
+        "id",
+        "model",
+        "level",
+        "accuracy_score",
+        "usefulness_score",
+        "style_score",
+        "created_at",
+    )
+    searchable_fields = ("model",)
+    sortable_fields = (
+        "id",
+        "created_at",
+        "level",
+        "model",
+        "accuracy_score",
+        "usefulness_score",
+        "style_score",
+    )
+
+
 class AuditLogAdmin(_ReadOnlyModelView):
     """Read-only журнал аудита (T-035)."""
 
@@ -444,5 +476,8 @@ def create_admin(settings: Settings) -> Admin:
     admin.add_view(EditAdmin(Edit, icon="fa fa-pen"))
     admin.add_view(PromptAdmin(Prompt, icon="fa fa-file-text"))
     admin.add_view(AuditLogAdmin(AuditLog, icon="fa fa-clipboard-list"))
+    admin.add_view(
+        LlmEvaluationAdmin(LlmEvaluation, icon="fa fa-chart-line")
+    )
     admin.add_view(AuditVerifyView())
     return admin

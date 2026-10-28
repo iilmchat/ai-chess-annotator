@@ -50,6 +50,7 @@ __all__ = [
     "Edit",
     "Game",
     "Level",
+    "LlmEvaluation",
     "Motif",
     "Move",
     "Prompt",
@@ -304,6 +305,33 @@ class Prompt(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class LlmEvaluation(Base):
+    """Результат LLM-as-judge для админ-дашборда (T-039, итерация 22)."""
+
+    __tablename__ = "llm_evaluations"
+    __table_args__ = (
+        Index(
+            "ix_llm_evaluations_level_created",
+            "level",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = _pk()
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    level: Mapped[Level] = mapped_column(level_enum, nullable=False)
+    accuracy_score: Mapped[Decimal] = mapped_column(
+        Numeric(4, 2), nullable=False
+    )
+    usefulness_score: Mapped[Decimal] = mapped_column(
+        Numeric(4, 2), nullable=False
+    )
+    style_score: Mapped[Decimal] = mapped_column(
+        Numeric(4, 2), nullable=False
+    )
+    created_at: Mapped[datetime] = _created_at()
 
 
 class SemanticCache(Base):

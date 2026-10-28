@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 from sqlalchemy.pool import NullPool  # noqa: E402
 
 from app.config import Settings, get_settings  # noqa: E402
-from app.db.models import AnnotatedGame  # noqa: E402
+from app.db.models import AnnotatedGame, Level, LlmEvaluation  # noqa: E402
 from app.llm import get_llm_client  # noqa: E402
 from app.main import create_app  # noqa: E402
 
@@ -519,6 +519,36 @@ def _dump_json(rows: list[CommentaryRow], path: Path) -> None:
     )
 
 
+async def _save_evaluations(
+    rows: list[CommentaryRow], settings: Settings
+) -> int:
+    """Сохранить оценки в `llm_evaluations` (T-039)."""
+    engine = create_async_engine(
+        settings.database_url, poolclass=NullPool
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    saved = 0
+    try:
+        async with factory() as session:
+            for row in rows:
+                if not row.scores:
+                    continue
+                session.add(
+                    LlmEvaluation(
+                        model=row.model or "unknown",
+                        level=Level(row.level),
+                        accuracy_score=row.scores["factual_accuracy"],
+                        usefulness_score=row.scores["usefulness"],
+                        style_score=row.scores["style"],
+                    )
+                )
+                saved += 1
+            await session.commit()
+    finally:
+        await engine.dispose()
+    return saved
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     if not 1 <= args.games <= 20:
@@ -543,6 +573,15 @@ def main(argv: list[str] | None = None) -> int:
     rows = _judge_cli(games, levels, settings, args.timeout_s)
     overall = _averages(rows)
     average = sum(overall.values()) / len(overall) if overall else 0.0
+
+    try:
+        saved = asyncio.run(_save_evaluations(rows, settings))
+        print(f"Сохранено в llm_evaluations: {saved}")
+    except Exception as exc:
+        print(
+            f"Не удалось сохранить llm_evaluations: {exc}",
+            file=sys.stderr,
+        )
 
     report = _report(rows, games, levels, args.timeout_s)
     args.output.parent.mkdir(parents=True, exist_ok=True)

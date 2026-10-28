@@ -88,6 +88,7 @@ def test_admin_registered_views(client: TestClient) -> None:
         "/admin/annotated-game/list",
         "/admin/commentary/list",
         "/admin/edit/list",
+        "/admin/llm-evaluation/list",
     ):
         response = client.get(path, headers=AUTH)
         assert response.status_code == 200, path
