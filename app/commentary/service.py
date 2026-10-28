@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.db.models import Game, Move
+from app.db.models import Commentary, Edit, Game, Move
 from app.db.models import Motif as MotifRow
 from app.engine.models import (
     EngineLine,
@@ -36,8 +36,10 @@ from app.motifs.models import Motif
 from app.prompts import load_system_prompt
 
 __all__ = [
+    "EditedCommentary",
     "GeneratedCommentary",
     "RagContextBuilder",
+    "edit_commentary",
     "generate_commentary",
     "load_analyses",
     "load_game",
@@ -58,6 +60,54 @@ class GeneratedCommentary:
     usage: LLMUsage
     validated: bool
     attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class EditedCommentary:
+    """Результат ручной правки: обновлённый комментарий и id записи в `edits`."""
+
+    commentary: Commentary
+    edit_id: int
+
+
+async def edit_commentary(
+    session: AsyncSession,
+    commentary_id: int,
+    new_text: str,
+    *,
+    editor_id: int | None = None,
+) -> EditedCommentary:
+    """Обновить текст комментария и сохранить правку в датасет `edits`.
+
+    Оригинальный текст берётся из `commentaries.text` **до** изменения;
+    потомки (`edits`) видят пару «было → стало» и не зависят от текущего
+    состояния комментария. `human_edited` выставляется в `True`.
+
+    Args:
+        session: сессия БД.
+        commentary_id: `commentaries.id`.
+        new_text: новый текст (уже провалидирован API-слоем).
+        editor_id: пользователь-редактор; пока аутентификации нет — ``None``.
+
+    Raises:
+        NotFoundError: комментарий не найден (→ 404).
+    """
+    row = await session.get(Commentary, commentary_id)
+    if row is None:
+        raise NotFoundError(f"Комментарий {commentary_id} не найден")
+
+    original_text = row.text
+    row.text = new_text
+    row.human_edited = True
+    edit = Edit(
+        commentary_id=row.id,
+        original_text=original_text,
+        edited_text=new_text,
+        editor_id=editor_id,
+    )
+    session.add(edit)
+    await session.flush()
+    return EditedCommentary(commentary=row, edit_id=edit.id)
 
 
 async def load_game(session: AsyncSession, game_id: int) -> Game:

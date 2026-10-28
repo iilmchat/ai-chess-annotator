@@ -12,13 +12,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Path, Request
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.commentary import RagContextBuilder, generate_commentary
+from app.commentary import RagContextBuilder, edit_commentary, generate_commentary
 from app.db.models import Commentary, Level
 from app.db.session import get_session
 
@@ -29,6 +30,9 @@ LevelName = Literal["beginner", "club", "gm"]
 
 #: Ограничение на пользовательский «стиль» (защита промпта от полотна).
 MAX_STYLE_CHARS = 200
+
+#: Ограничение на длину ручной правки комментария.
+MAX_COMMENTARY_CHARS = 20_000
 
 
 class CommentaryRequest(BaseModel):
@@ -52,6 +56,38 @@ class CommentaryResponse(BaseModel):
     validated: bool
     model: str
     attempts: int = Field(ge=1, description="Сколько раз обращались к LLM")
+
+
+class CommentaryPatchRequest(BaseModel):
+    """Тело `PATCH /v1/commentaries/{id}`."""
+
+    text: str = Field(
+        min_length=1,
+        max_length=MAX_COMMENTARY_CHARS,
+        description="Новый текст комментария",
+    )
+
+    @field_validator("text")
+    @classmethod
+    def _reject_blank(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("text не может состоять из пробелов")
+        return text
+
+
+class CommentaryPatchResponse(BaseModel):
+    """Обновлённый комментарий + ссылка на запись в датасете правок."""
+
+    commentary_id: int
+    game_id: int
+    level: LevelName
+    text: str
+    human_edited: bool
+    validated: bool
+    model: str
+    edit_id: int = Field(description="id записи в таблице edits")
+    created_at: datetime
 
 
 @router.post("/commentary", response_model=CommentaryResponse)
@@ -96,6 +132,42 @@ async def create_commentary(
         validated=result.validated,
         model=result.usage.model,
         attempts=result.attempts,
+    )
+
+
+@router.patch(
+    "/commentaries/{commentary_id}",
+    response_model=CommentaryPatchResponse,
+)
+async def patch_commentary(
+    commentary_id: Annotated[
+        int, Path(gt=0, description="ID комментария из /v1/commentary")
+    ],
+    payload: CommentaryPatchRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CommentaryPatchResponse:
+    """Отредактировать комментарий человеком (T-021b).
+
+    Обновляет `commentaries.text`, выставляет `human_edited = true` и
+    сохраняет пару «оригинал → правка» в `edits` — датасет для будущего
+    дообучения LLM (T-104).
+
+    Raises:
+        NotFoundError: комментарий не найден (→ 404).
+    """
+    result = await edit_commentary(session, commentary_id, payload.text)
+    await session.commit()
+    row = result.commentary
+    return CommentaryPatchResponse(
+        commentary_id=row.id,
+        game_id=row.game_id,
+        level=row.level.value,
+        text=row.text,
+        human_edited=row.human_edited,
+        validated=row.validated,
+        model=row.model,
+        edit_id=result.edit_id,
+        created_at=row.created_at,
     )
 
 

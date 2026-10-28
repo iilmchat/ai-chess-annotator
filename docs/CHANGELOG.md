@@ -8,6 +8,20 @@
 
 ### Added
 
+- **`PATCH /v1/commentaries/{id}` (T-021b):** ручная правка текста
+  комментария — `commentaries.text` обновляется, `human_edited = true`,
+  пара «оригинал → правка» пишется в `edits` (датасет для T-104);
+  ответ содержит `edit_id`; 404 на неизвестный id, 422 на пустой текст.
+- **`POST /v1/chat` (T-022):** диалог по `analysis_id` — метаданные,
+  ключевые ходы, мотивы и оценки из БД → LLM по уровню → валидатор SAN с
+  retry → `{"reply", "tokens_used"}`; rate limiting, 404/422/502/503/504.
+- **`scripts/ingest_pgn.py`:** CLI для загрузки PGN в `annotated_games`
+  (`--file`, `--limit`, `--source`), UTF-8/cp1251, общий с
+  `POST /v1/ingest` пайплайн; `ingest_pgn_text(..., limit=...)`.
+- **Тесты:** `tests/integration/test_api_commentaries_patch.py` (4),
+  `tests/integration/test_api_chat.py` (9, включая живой диалог с LM Studio).
+- **RAG-коллекция (итерация 12):** в `annotated_games` загружено 102
+  партии из `data/` (`my-collection`: 10 + 42 + 50).
 - **RAG (T-017):** `app/rag/` — хеш-эмбеддер (1024, по FEN), ingest
   аннотированных партий (`parse_pgn_games`, `ingest_pgn_text`), поиск
   похожих позиций (`find_similar_positions`, косинус через pgvector),
@@ -175,6 +189,10 @@
 
 ### Fixed
 
+- **KI-029:** `password authentication failed for user "chess"` — старый том
+  PostgreSQL сохранял прежний пароль. Полный сброс `docker compose down -v`
+  + `up -d postgres redis` + `alembic upgrade head`; после этого ingest
+  загрузил 102 партии без ошибок авторизации.
 - Валидатор учитывает позиции PV-линий (xtra_fens): цитаты вариантов из пакета фактов больше не считаются нелегальными ходами; /v1/commentary передаёт их автоматически.
 - Температура LLM вынесена в настройку llm_temperature (в тестовой генерации — 0.0).
 - Пул соединений asyncpg закрывается в lifespan (ngine.dispose()): без этого несколько TestClient в одном процессе переиспользовали соединения из закрытого event loop и получали 500.

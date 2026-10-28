@@ -44,13 +44,14 @@
 | [reports/iteration-7/](development/reports/iteration-7/) | Пошаговые отчёты итерации 7 — промпты и валидатор (STEP-01…STEP-04) |
 | [reports/iteration-8/](development/reports/iteration-8/) | Отчёты итерации 8 — комментарий (STEP-01…STEP-02) |
 | [reports/iteration-9/](development/reports/iteration-9/) | Отчёты итерации 9 — RAG (STEP-01…STEP-02) |
+| [reports/iteration-12/](development/reports/iteration-12/) | Отчёты итерации 12 — сброс БД, ingest, PATCH и чат (STEP-01…STEP-04) |
 
 ### Состояние проекта
 
 | Документ | Что внутри |
 | :--- | :--- |
 | [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секция `[Unreleased]` |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-026 со статусами, severity и планом закрытия |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-029 со статусами, severity и планом закрытия |
 
 ### Тесты и данные
 

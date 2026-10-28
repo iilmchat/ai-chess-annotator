@@ -73,13 +73,22 @@ async def ingest_pgn_text(
     *,
     source: str = "upload",
     embedder: Embedder | None = None,
+    limit: int | None = None,
 ) -> list[int]:
     """Загрузить все партии из PGN в `annotated_games`.
+
+    Args:
+        limit: сколько первых партий загрузить (``None`` — все). Нужен
+            CLI-скрипту для выборочного ingest-а больших файлов.
 
     Returns:
         Список `id` созданных записей (в порядке партий).
     """
+    if limit is not None and limit < 1:
+        raise ValueError("limit должен быть ≥ 1")
     games = parse_pgn_games(pgn_text)
+    if limit is not None:
+        games = games[:limit]
     if not games:
         return []
 
