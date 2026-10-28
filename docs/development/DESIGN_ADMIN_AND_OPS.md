@@ -1,9 +1,10 @@
 # DESIGN_ADMIN_AND_OPS — Production Hardening & Admin Panel
 
 > **Версия:** 1.0 · **Дата:** 2026-10-28 · **Статус:** частично реализовано
-> (итерации 16–19: `/admin`, OTel-спаны LLM, `prompts` + `PromptAdmin`,
+> (итерации 16–22: `/admin`, OTel-спаны LLM, `prompts` + `PromptAdmin`,
 > Redis-бюджеты/`cost_usd`, guardrails, append-only `audit_logs` +
-> проверка целостности, `semantic_cache`; остальное — T-029b…T-035b)
+> проверка целостности, `semantic_cache`, read-only `llm_evaluations`;
+> остальное — T-029b…T-035b)
 > **Задачи:** T-028…T-035 · **Источник истины:** [SPEC.md](SPEC.md) §10
 > **Связанные документы:** [TODO.md](../../TODO.md) (Фаза 7),
 > [KNOWN_ISSUES.md](../KNOWN_ISSUES.md), [RULES.md](RULES.md)
@@ -896,6 +897,13 @@ Postgres (проверка `expires_at` и `validated` перед выдачей
 - Chat-кэш выключен по умолчанию; включение — только per-user.
 
 ---
+
+### 8.6. LLM Evaluations (T-039)
+
+`LlmEvaluationAdmin` — read-only таблица `llm_evaluations`: модель,
+уровень, три шкалы (`accuracy_score`, `usefulness_score`, `style_score`),
+дата. `scripts/evaluate_llm.py` после judge-прогона пишет строки в БД
+best-effort, не ломая MD/JSON-отчёт.
 
 ## 9. Prompt Injection Guardrails
 

@@ -1140,3 +1140,46 @@ T-028-полный (JWT/роли), T-029b (registry/TTL).
 
 T-032b (hot-слой/метрики), T-034 (admin export), T-033b (guardrails),
 T-035b (аудит/SIEM).
+
+---
+
+## Итерации 20–23 — Frontend UX, LLM Evals, CI (T-036…T-040)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ T-036…T-040 в объёме ночной смены
+**Полный отчёт (7 разделов):**
+`docs/development/reports/v0.1.0/ITERATION-20-23.md`
+
+### Что сделано
+
+- **T-036/T-037:** `GET /v1/games` (20 последних), `GET
+  /v1/users/me/usage`, `/history`, `/analysis/:id`, usage-badge
+  `Free: 12k/50k` + модалка Pro, SPA-fallback.
+- **T-037:** история чата в Zustand/sessionStorage, `history` в
+  `/v1/chat` и `/v1/chat/stream`, повторный guardrail user-реплик.
+- **T-038:** mobile 1280/820/640/480, shimmer-skeleton, Error Boundary.
+- **T-039:** `llm_evaluations` + read-only admin view + запись из
+  `evaluate_llm.py`.
+- **T-040:** pip/pnpm cache, `workflow_dispatch`, полный CI-набор.
+
+### Метрики
+
+- Backend-тесты: **286 passed, 1 xfailed** (193.14 с).
+- Frontend: **20 passed**, `typecheck`, `build` — зелёные.
+- `ruff` — 0; `mypy app` — 0; `alembic check` — без дрейфа;
+  head `b6c7d8e9f0a1`.
+- Docker: образ собирается.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Auth/скоуп истории | Нет JWT/аккаунтов; KI-035 | T-028 |
+| Графики LLM-evals | Таблица достаточна для MVP | T-039b |
+| E2E браузерных сценариев | Нет Playwright в окружении | T-036b |
+| Реальный прогон GitHub Actions | Нет push/CI-раннера локально | T-040 |
+
+### Что дальше
+
+T-028 (auth/скоуп), T-039b (графики/фильтры evals), T-036b (E2E),
+T-032b (cache hot-layer).

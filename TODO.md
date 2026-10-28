@@ -544,6 +544,51 @@
 
 ---
 
+## Фаза 8. Frontend UX, LLM Evals и CI (итерации 20–23)
+
+### [x] T-036. История партий и маршруты (итерация 20)
+- **Что:** `GET /v1/games` (последние 20), `GET /v1/users/me/usage`,
+  страницы `/history` и `/analysis/:id`, SPA-fallback в production.
+- **Статус:** `/v1/games` парсит PGN (white/black/event) и отдаёт
+  `level`; `SPAStaticFiles` отдаёт `index.html` для клиентских route;
+  тесты `test_api_games.py`, `test_spa.py`.
+
+### [x] T-037. Лимиты и история чата (итерация 20)
+- **Что:** бейдж `Free: used/limit`, красный при превышении + модалка
+  Pro; `UsageBadge` опрашивает `/v1/users/me/usage`; чат в Zustand с
+  `sessionStorage`, история уходит в `/v1/chat` и `/v1/chat/stream`;
+  backend повторно проверяет user-реплики guardrails.
+- **Статус:** tier/usage берутся из того же IP+`PRO_IPS`, что и
+  `TokenBudgetMiddleware`; история ограничена 20 репликами.
+
+### [x] T-038. Mobile, skeleton, error boundary (итерация 21)
+- **Что:** адаптивность до 480 px, skeleton-лоадеры анализа/истории,
+  `ErrorBoundary` с кнопкой reload, `AnalysisWorkspace` без дублирования
+  разметки.
+- **Статус:** CSS media 1280/820/640/480; `Skeleton` с `role=status`;
+  fallback для ошибок рендера.
+
+### [x] T-039. LLM Evaluations в админке (итерация 22)
+- **Что:** `llm_evaluations` (model, level, accuracy/usefulness/style),
+  read-only view в `starlette-admin`, `evaluate_llm.py` пишет оценки в БД.
+- **Статус:** миграция `b6c7d8e9f0a1`; `LlmEvaluationAdmin`; сохранение
+  best-effort, отчёт MD/JSON остаётся.
+
+### [x] T-040. CI caching (итерация 23)
+- **Что:** pip-кэш, pnpm store cache, `workflow_dispatch`, полный набор
+  `ruff`/`mypy`/`alembic`/`pytest`/`typecheck`/`build`/`test`.
+- **Статус:** workflow обновлён; GitHub Actions не запускался локально.
+
+### [ ] T-036b. E2E браузерных сценариев
+- **Что:** Playwright: загрузка PGN → анализ → комментарий; `/history` →
+  `/analysis/:id`; mobile viewport; usage-badge.
+- **DoD:** 5 сценариев в CI; скриншоты/видео при падении.
+
+### [ ] T-039b. LLM evals: графики и фильтры
+- **Что:** фильтры по модели/уровню/дате, средние по шкалам, график
+  динамики в админке; экспорт CSV.
+- **DoD:** dashboard с 3 графиками; фильтры сохраняются в query.
+
 ## Backlog (после MVP)
 
 - **T-101.** Leela Chess Zero как второй движок для гроссмейстерского

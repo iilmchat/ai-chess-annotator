@@ -40,6 +40,7 @@
 | `app/security/` | prompt-injection guardrails: нормализация, эвристики, `422 prompt_injection` |
 | `app/audit.py` | append-only аудит, hash-chain, advisory-lock, верификация |
 | `app/cache/` | semantic cache: exact FEN-ключ, vector-поиск, TTL |
+| `app/web.py` | SPA static + fallback на `index.html` для `/history`, `/analysis/:id` |
 | `app/commentary/` | сборка анализа из БД, генерация, retry, кэш, правка |
 | `app/chat/` | вопрос → контекст → LLM → валидатор → ответ |
 | `app/rag/` | ingest аннотированных партий, эмбеддинги, retrieval, контекст |
@@ -127,13 +128,20 @@ PATCH /v1/commentaries/{id}
 
 ## 6. Frontend
 
-- React 19 + TypeScript + Vite; `react-chessboard` 5.12.1 для доски,
-  `chess.js` (`history({verbose:true})`) для FEN из PGN, `react-i18next`
-  (RU/EN), Zustand-стор с persist в `sessionStorage`.
-- Одна страница: PGN, уровень, доска, список ходов, комментарий, чат.
+- React 19 + TypeScript + Vite + React Router; `react-chessboard`
+  5.12.1 для доски, `chess.js` (`history({verbose:true})`) для FEN из
+  PGN, `react-i18next` (RU/EN), Zustand с persist в `sessionStorage`.
+- Маршруты: `/` (PGN + анализ), `/history` (последние 20),
+  `/analysis/:id` (загрузка сохранённого анализа). `AnalysisWorkspace`
+  общий для главной и карточки.
+- История чата — `chatStore` (Zustand, `sessionStorage`), уходит в
+  `/v1/chat` и `/v1/chat/stream` как `history`; usage-badge опрашивает
+  `/v1/users/me/usage`.
 - API-клиент — `web/src/api.ts`; SSE читается через `ReadableStream`,
   текст печатается постепенно.
-- Production: `pnpm build` → `web/dist` → `StaticFiles("/")` в FastAPI.
+- Production: `pnpm build` → `web/dist` → `SPAStaticFiles("/")` в FastAPI
+  (index.html для `/history` и `/analysis/:id`).
+- UX: skeleton-лоадеры, Error Boundary, mobile 1280/820/640/480.
 - Тесты — Vitest: FEN/chess.js, SSE-парсер, форматирование (20 тестов).
 
 ## 7. Развёртывание

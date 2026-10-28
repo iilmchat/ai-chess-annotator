@@ -8,6 +8,18 @@
 
 ### Added
 
+- **История партий и лимиты (T-036/T-037, итерация 20):**
+  `GET /v1/games`, `GET /v1/users/me/usage`, страницы `/history` и
+  `/analysis/:id`, usage-badge с модалкой Pro, SPA-fallback.
+- **История чата (T-037):** Zustand + `sessionStorage`, передача
+  `history` в `/v1/chat` и `/v1/chat/stream`; user-реплики повторно
+  проверяются guardrails.
+- **Mobile, skeleton, Error Boundary (T-038, итерация 21):** адаптивность
+  до 480 px, shimmer-лоадеры, fallback с кнопкой reload.
+- **LLM Evaluations (T-039, итерация 22):** `llm_evaluations`, read-only
+  view в админке, запись из `evaluate_llm.py`.
+- **CI caching (T-040, итерация 23):** pip-кэш, pnpm store cache,
+  `workflow_dispatch`, полный прогон.
 - **Semantic Cache (T-032, итерация 19):** `semantic_cache` (vector
   768, HNSW), exact `fen_hash+level+prompt_hash` и semantic
   cosine < 0.05; `/v1/commentary`, `/chat` и SSE отдают кэш; TTL 30

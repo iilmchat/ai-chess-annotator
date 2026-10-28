@@ -196,7 +196,20 @@ audit_logs(id, timestamp, actor, action, target_id,
 -- Semantic cache (T-032, итерация 19): exact + vector поиск
 semantic_cache(id, fen_hash, fen_embedding vector(768), level,
                prompt_hash, response_text TEXT, created_at)
+
+-- LLM-as-judge (T-039, итерация 22)
+llm_evaluations(id, model, level, accuracy_score, usefulness_score,
+                style_score, created_at)
 ```
+
+### 2.3. История и лимиты
+
+- `GET /v1/games?limit=20` — последние партии: `id`, `white`, `black`,
+  `event`, `level`, `created_at`.
+- `GET /v1/users/me/usage` — `tier`, `used_tokens`, `limit_tokens`,
+  `remaining_tokens`, `reset_at`, `enabled`; субъект — IP + `PRO_IPS`.
+- `POST /v1/chat` и `/v1/chat/stream` принимают `history` (до 20 реплик
+  `user`/`assistant`); user-реплики повторно проверяются guardrails.
 
 **Индексы:** `moves(game_id, ply)`,
 `annotated_games USING ivfflat (embedding vector_cosine_ops)`,
