@@ -310,8 +310,22 @@ edits(id, commentary_id, original_text, edited_text, editor_id, created_at)
 - **Масштабирование**: горизонтальное, stateless API, движки в пуле.
 - **Отказоустойчивость**: fallback локальная LLM → облачная; кэш
   retrieval.
-- **Наблюдаемость**: трейсинг каждого запроса (OTel), логи движка и
-  LLM-вызовов.
+- **Admin Control Plane**: защищённая панель `/admin` (`starlette-admin`)
+  с ролями `user` / `admin` / `auditor`; управление `annotated_games` и
+  `commentaries`, версионирование промптов, выгрузка `edits`, аудит.
+  Админ-операции недоступны через публичный API без роли.
+- **Observability (LLMOps)**: сквозной `trace_id` (W3C Trace Context) от
+  HTTP-запроса до вызова LLM, валидатора и RAG; OTel-спаны с экспортом
+  OTLP; durable-запись `llm_calls` (`model`, `tokens_in/out`,
+  `cost_usd`, `latency_ms`, `cache_hit`, `status`); дашборды p50/p95,
+  error rate и стоимости; PII в трейсы не попадает.
+- **FinOps**: контроль стоимости и токенов на пользователя/IP/глобально
+  (день/месяц), бюджеты в `system_settings`, ответ `429` при исчерпании,
+  учёт `cost_usd` по прайсу модели, алерты 80/100% бюджета и отчёт
+  «стоимость на комментарий/уровень».
+
+Детали схемы, админки, трейсинга и guardrails —
+[DESIGN_ADMIN_AND_OPS.md](DESIGN_ADMIN_AND_OPS.md).
 
 ---
 

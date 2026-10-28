@@ -24,8 +24,9 @@
 | Документ | Что внутри |
 | :--- | :--- |
 | [SPEC.md](development/SPEC.md) | **Источник истины:** цель, 7 модулей, три уровня, схема БД, API, промпты, стек, roadmap, критерии приёмки, non-functional |
+| [DESIGN_ADMIN_AND_OPS.md](development/DESIGN_ADMIN_AND_OPS.md) | Production hardening: админ-панель, prompt registry, OTel-трейсинг, FinOps, semantic cache, guardrails, audit (T-028…T-035) |
 | [GETTING_STARTED.md](development/GETTING_STARTED.md) | Разворачивание за ~20 минут: Docker, venv, миграции, uvicorn, фронтенд, troubleshooting |
-| [../TODO.md](../TODO.md) | Последовательность задач T-001…T-027 с зависимостями, DoD и оценками |
+| [../TODO.md](../TODO.md) | Последовательность задач T-001…T-035 с зависимостями, DoD и оценками |
 
 ### Правила и процесс
 

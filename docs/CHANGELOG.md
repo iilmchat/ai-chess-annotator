@@ -8,6 +8,13 @@
 
 ### Added
 
+- **Production hardening plan (T-028…T-035, документация):** в `TODO.md`
+  добавлена Фаза 7 — admin control plane, prompt management, LLMOps,
+  FinOps, semantic cache, prompt-injection guardrails, dataset export и
+  security audit; расширен Backlog (T-111…T-119). Создан
+  `docs/development/DESIGN_ADMIN_AND_OPS.md` (схема БД, админка,
+  трейсинг, безопасность), `SPEC.md` §10 дополнен Admin Control Plane /
+  Observability / FinOps. Код и миграции не менялись.
 - **`PATCH /v1/commentaries/{id}` (T-021b):** ручная правка текста
   комментария — `commentaries.text` обновляется, `human_edited = true`,
   пара «оригинал → правка» пишется в `edits` (датасет для T-104);

@@ -282,6 +282,130 @@
 
 ---
 
+## Фаза 7. Production Hardening & Admin Panel (4–5 недель)
+
+Цель фазы — превратить MVP в управляемый production-сервис: защищённая
+админ-панель, версионируемые промпты, сквозная наблюдаемость LLM,
+контроль стоимости, кэширование и защита от prompt injection. Порядок
+задач — сверху вниз: T-028 задаёт control plane, остальные на него
+опираются.
+
+### [ ] T-028. Admin Control Plane
+- **Зависит от:** T-004, T-025, T-027
+- **Что:** смонтировать `starlette-admin` на `/admin` (AsyncEngine из
+  `app.db.session`), добавить роль `admin` в `users` (enum `user/admin/
+  auditor`, `password_hash`, миграция), аутентификацию админки через
+  `AuthProvider` (серверная сессия: cookie + `sid` в Redis), views для
+  `annotated_games` (RAG) и `commentaries` (просмотр, фильтры, мягкое
+  удаление, восстановление), read-only views для `games`/`edits`. Все
+  мутации — через сервисный слой, чтобы их видел аудит (T-035).
+- **DoD:** `/admin` недоступен без аутентификации; `user` получает 403,
+  `admin` видит и редактирует RAG/комментарии; мягкое удаление RAG-партии
+  исключает её из retrieval; интеграционные тесты входа/ролей/CRUD;
+  миграция `users.role`/`password_hash` с backfill `user`.
+- **Оценка:** 3
+
+### [ ] T-029. Prompt Management
+- **Зависит от:** T-014, T-028
+- **Что:** вынести `app/prompts/{beginner,club,gm}.txt` в таблицу
+  `prompts` с версиями и одной активной версией на `slug`; API
+  `GET/PUT /v1/admin/prompts`, `POST /v1/admin/prompts/{slug}/rollback`;
+  страница Prompt Editor в админке (редактор, diff, история, активация);
+  горячая инвалидация кеша `load_system_prompt`; предпросмотр на тестовой
+  партии. Few-shot-примеры — отдельными слагами/версиями; секреты — только
+  ENV/Vault, не в `prompts`.
+- **DoD:** правка активного промпта в админке меняет текст следующего
+  LLM-вызова без рестарта; старые версии неизменяемы; rollback возвращает
+  предыдущую; тесты версионирования и кеша; каждое изменение — в
+  `audit_logs`.
+- **Оценка:** 3
+
+### [ ] T-030. LLMOps Observability
+- **Зависит от:** T-013, T-025, T-028
+- **Что:** сквозной `trace_id` (W3C Trace Context) от HTTP-запроса до
+  вызова LLM и валидатора; OTel-спаны `http.request`, `llm.complete`,
+  `validator`, `rag.retrieve`; экспорт OTLP в коллектор (Jaeger/Tempo),
+  опционально Langfuse; durable-таблица `llm_calls` (`trace_id`, `model`,
+  `tokens_in/out`, `cost_usd`, `latency_ms`, `cache_hit`, `status`);
+  дашборды p50/p95 latency, error rate, tokens/cost по уровням и моделям.
+- **DoD:** 100% вызовов LLM имеют `trace_id` и запись в `llm_calls`;
+  трейс виден в OTel-бэкенде; дашборд p95 и стоимости; sampling
+  настраивается; тесты propagation и записи usage; PII в спаны не
+  попадает.
+- **Оценка:** 4
+
+### [ ] T-031. FinOps & Token Rate Limiting
+- **Зависит от:** T-009, T-013, T-030
+- **Что:** бюджеты не только по числу запросов, но и по токенам/стоимости
+  на пользователя, IP и глобально (день/месяц); Redis-счётчики с
+  атомарным `INCRBY`/Lua, durable-агрегаты `usage_daily`; настройки
+  лимитов в `system_settings` и админке; ответ `429` с
+  `X-Token-Budget-*`/`Retry-After`, различие «бюджет исчерпан» и
+  «rate limit»; алерты при 80/100% бюджета.
+- **DoD:** тесты: запрос сверх бюджета отклоняется, счётчики не
+  превышают лимит при гонке, сброс периода корректен; стоимость считается
+  по прайсу модели; админ может менять лимит; дашборд расходов.
+- **Оценка:** 3
+
+### [ ] T-032. Semantic Cache
+- **Зависит от:** T-009, T-016, T-017, T-022
+- **Что:** кэш ответов LLM и результатов движка по нормализованному FEN:
+  точный ключ `(fen_hash, level, prompt_slug+version, model)` +
+  семантический поиск по эмбеддингу позиции в `semantic_cache`
+  (pgvector); Redis как hot-слой, Postgres — durable; TTL и
+  инвалидация при смене активного промпта/модели; метрики hit/miss и
+  сэкономленных токенов; флаг `cache=off` для отладки.
+- **DoD:** повторный идентичный запрос отдаётся из кэша без вызова LLM;
+  семантически близкая позиция (cosine distance ≤ порога) переиспользует
+  ответ только при совпадении уровня; нет утечки между уровнями; тесты
+  hit/miss/инвалидации; hit rate виден в метриках.
+- **Оценка:** 4
+
+### [ ] T-033. Prompt Injection Guardrails
+- **Зависит от:** T-022, T-030
+- **Что:** защита `/v1/chat` (и полей `style`/`message`): лимиты длины и
+  кодировки, нормализация Unicode, явные разделители
+  `<user_question>…</user_question>`, инструкция иерархии в системном
+  промпте, эвристики (override-фразы, «ignore previous», утечка
+  системного промпта), опциональный классификатор на локальной LLM,
+  выходной фильтр; `injection_events` без хранения сырого текста;
+  метрики block/flag; конфиг в `system_settings`.
+- **DoD:** корпус ≥20 атакующих промптов: detection ≥95%, false positive
+  ≤5% на легальных вопросах; блокировка возвращает 422 с кодом
+  `prompt_injection`; системный промпт не утекает; события пишутся в
+  аудит/метрики; тесты на корпусе.
+- **Оценка:** 3
+
+### [ ] T-034. Dataset Export
+- **Зависит от:** T-021b, T-028
+- **Что:** страница Export в админке и `GET
+  /v1/admin/exports/edits.jsonl` (streaming): фильтры по дате, уровню,
+  модели, `human_edited`; схема JSONL (`id`, `commentary_id`,
+  `editor_id`, `original_text`, `edited_text`, `level`, `model`,
+  `created_at`, `schema_version`); опциональное вырезание PII; checksum,
+  размер, `audit_logs`; лимит строк и фоновая задача для больших
+  выгрузок.
+- **DoD:** выгрузка 10k записей стримится без роста памяти; каждая строка
+  валидна по JSON-схеме; доступ только `admin`/`auditor`; факт выгрузки
+  в аудите; интеграционный тест.
+- **Оценка:** 2
+
+### [ ] T-035. Security Audit
+- **Зависит от:** T-028
+- **Что:** append-only `audit_logs`: actor (id/hash, без FK), IP,
+  user-agent, action, entity, before/after JSONB, `trace_id`,
+  `request_id`; hash-chain (`prev_hash`/`self_hash`) и триггеры,
+  запрещающие `UPDATE`/`DELETE`; аудит входа/выхода, CRUD RAG, правок
+  промптов, бюджетов, экспорта и правок комментариев; ретенция и экспорт
+  в SIEM; страница Audit Log с фильтрами.
+- **DoD:** ни одна админ-мутация не проходит без записи; `UPDATE/DELETE`
+  по `audit_logs` отклоняются БД; целостность hash-chain проверяется
+  CLI/тестом; запись содержит актора, IP, действие и diff; страница
+  Audit Log доступна роли `auditor`.
+- **Оценка:** 3
+
+---
+
 ## Backlog (после MVP)
 
 - **T-101.** Leela Chess Zero как второй движок для гроссмейстерского
@@ -295,6 +419,22 @@
 - **T-108.** Кэш retrieval по `fen_hash` (уже в схеме — включить).
 - **T-109.** OpenTelemetry-дашборды в Grafana.
 - **T-110.** Pen-test и security review.
+- **T-111.** Multi-tenant организации и RBAC (роли `owner/admin/editor/
+  viewer`, изоляция данных по `org_id`).
+- **T-112.** A/B-эксперименты версий промптов с автоматической оценкой
+  LLM-as-judge и выбором победителя.
+- **T-113.** Алерты аномалий стоимости (Grafana/Alertmanager): всплеск
+  токенов, дорогая модель, рост error rate.
+- **T-114.** PII-редакция в трейсах, аудите и экспортах (email, IP,
+  имена) с настраиваемыми правилами.
+- **T-115.** Backup/DR: PITR для Postgres, версии промптов, RAG-датасет
+  и audit-log в object storage; регулярные restore-учения.
+- **T-116.** Kubernetes/Helm-манифесты с HPA для API и пула движков.
+- **T-117.** Canary/blue-green деплой и автоматический rollback по
+  метрикам error rate/latency.
+- **T-118.** SSO/SAML для админки (OIDC-провайдер, SCIM-провижининг).
+- **T-119.** Юридическое хранение и legal hold для audit/edits
+  (retention-политики по регионам).
 
 ---
 
