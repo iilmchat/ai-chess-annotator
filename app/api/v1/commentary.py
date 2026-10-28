@@ -18,8 +18,10 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from app.commentary import RagContextBuilder, edit_commentary, generate_commentary
+from app.commentary.streaming import stream_commentary
 from app.db.models import Commentary, Level
 from app.db.session import get_session
 
@@ -132,6 +134,26 @@ async def create_commentary(
         validated=result.validated,
         model=result.usage.model,
         attempts=result.attempts,
+    )
+
+
+@router.post("/commentary/stream")
+async def create_commentary_stream(
+    payload: CommentaryRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> EventSourceResponse:
+    """Стримить комментарий через SSE (T-032).
+
+    События: `meta` → `delta`* → `done` | `error`. Валидатор проверяет
+    итоговый текст; при нелегальных ходах запись не создаётся.
+    """
+    return EventSourceResponse(
+        stream_commentary(
+            session,
+            payload.analysis_id,
+            payload.level,
+            payload.style,
+        )
     )
 
 

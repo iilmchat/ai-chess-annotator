@@ -4,6 +4,32 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
 версионирование — [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [Unreleased]
+
+### Added
+
+- **Синхронизация UI (итерация 15):** `react-chessboard` 5.12.1
+  (`<Chessboard options={{position}} />`), `chess.js`
+  `history({verbose:true})` для FEN из PGN, `react-i18next` (RU/EN),
+  Zustand-стор `analysisStore.ts` с persist в `sessionStorage`.
+- **SSE-стриминг (T-032):** `OpenAICompatibleClient.stream_generate`,
+  `POST /v1/commentary/stream` и `POST /v1/chat/stream`
+  (`sse-starlette`), события `meta`/`delta`/`done`/`error`, финальная
+  SAN-валидация; фронтенд читает `ReadableStream` и печатает текст
+  постепенно.
+- **RAG 768:** `LMStudioEmbedder` (`/v1/embeddings`,
+  `text-embedding-nomic-embed-text-v1.5`, L2), миграция `vector(768)`,
+  `scripts/reembed_annotated.py`; hash-эмбеддер — fallback тестов.
+- **`GET /v1/games/{id}`:** сохранённый анализ (`moves`,
+  `analysis_level`, `commentaries`) без повторного Stockfish.
+- **`X-Admin-Token`:** constant-time защита `POST /v1/ingest`
+  (`ADMIN_API_KEY`).
+
+### Changed
+
+- `games` получила `analysis_level` и `analysis_time_ms`; `AnalyzeResponse`
+  отдаёт `analysis_level`.
+
 ## [0.1.0] — 2026-10-28
 
 ### Added

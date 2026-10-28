@@ -16,6 +16,7 @@ T-016/KI-021.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
 
@@ -103,6 +104,19 @@ class BaseLLMClient(ABC):
         """Отправить промпт и вернуть только текст ответа."""
         result = await self.complete(prompt, system_prompt)
         return result.text
+
+    async def stream_generate(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> AsyncIterator[str]:
+        """Отдавать текст ответа чанками (SSE).
+
+        Базовая реализация не умеет стримить и отдаёт весь ответ одним
+        чанком — этого достаточно для фейков в тестах. Реальные клиенты
+        переопределяют метод.
+        """
+        result = await self.complete(prompt, system_prompt)
+        if result.text:
+            yield result.text
 
     async def aclose(self) -> None:
         """Освободить ресурсы (по умолчанию нечего освобождать)."""

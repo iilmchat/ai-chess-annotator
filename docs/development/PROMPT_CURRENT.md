@@ -1,6 +1,6 @@
 # PROMPT_CURRENT — актуальные системные инструкции
 
-> **Версия:** 1.9 · **Синхронизировано:** 2026-10-28 (итерация 14, MVP v0.1.0)
+> **Версия:** 2.0 · **Синхронизировано:** 2026-10-28 (итерация 15, SSE + sync)
 > **Источник:** `docs/development/PROMPT_FOR_DSH.md` (копия 1:1, ниже — без
 > изменений) + метрики и правила текущей итерации.
 >
@@ -13,14 +13,14 @@
 
 | Показатель | Значение | Проверка |
 | :--- | :--- | :--- |
-| Итерация | 14 — MVP v0.1.0: LLM-eval, Docker production, финальная документация | `TODO.md` |
-| Backend-тесты | 195 passed + 1 xfailed (21 файл) | `pytest -q` |
-| Frontend-тесты | 14 passed (2 файла, Vitest) | `pnpm --dir web test` |
+| Итерация | 15 — синхронизация UI (react-chessboard/chess.js/i18n/Zustand) + SSE |
+| Backend-тесты | 205 passed + 1 xfailed (23 файла) | `pytest -q` |
+| Frontend-тесты | 20 passed (4 файла, Vitest) | `pnpm --dir web test` |
 | `ruff check .` | 0 ошибок | CI job `backend` |
-| `mypy app` | 0 ошибок (strict), 44 файла | CI job `backend` |
-| Миграции | 1 ревизия `b802598c3778`, 8 таблиц | `alembic current`, `alembic check` |
+| `mypy app` | 0 ошибок (strict), 49 файлов | CI job `backend` |
+| Миграции | 3 ревизии, head `d2e3f4a5b6c7`, 8 таблиц | `alembic current`, `alembic check` |
 | Healthcheck | `ok` (db/redis/stockfish/llm `ok`) | `GET /v1/health` |
-| Открытых KI | 23 открыто, 7 закрыто (KI-008, KI-009, KI-014, KI-018, KI-020, KI-022, KI-029) — см. `docs/KNOWN_ISSUES.md` | реестр |
+| Открытых KI | 18 открыто, 12 закрыто (KI-008, KI-009, KI-014, KI-018, KI-020, KI-022, KI-024…KI-029) — см. `docs/KNOWN_ISSUES.md` | реестр |
 
 ---
 
@@ -150,15 +150,19 @@
 13. **Комментарий готов (T-016)** — `POST /v1/commentary`: `analysis_id` →
     партия и анализ из БД → пакет фактов → LLM → валидатор (до 2 retry) →
     запись в `commentaries`. Нелегальные ходы → 502, запись не создаётся.
-14. **RAG готов (T-017)** — `POST /v1/ingest` (multipart PGN, до 5 МБ),
-    хеш-эмбеддинги 1024 (заглушка, KI-025), `find_similar_positions` по FEN,
-    RAG-контекст для `gm` в `/v1/commentary`.
+14. **RAG готов (T-017/T-031)** — `POST /v1/ingest` (multipart PGN, до 5 МБ,
+    `X-Admin-Token`), `LMStudioEmbedder` 768 (L2), `find_similar_positions`
+    по FEN, RAG-контекст для `gm` в `/v1/commentary`.
 15. **MVP v0.1.0 (T-019…T-026)** — SPA (React 19 + Vite): PGN → доска →
     комментарий → правка → чат; `web/dist` раздаётся FastAPI; multi-stage
     Docker + `docker-compose.prod.yml` (loopback-порты БД/Redis);
     LLM-as-judge (5 партий × club/gm) и `LLM_EVAL.md`; USER_GUIDE,
     ASSISTANT_LEVELS, ARCHITECTURE, MANUAL_TESTING_GUIDE.
-16. **Следующая итерация** — Фаза 7 (T-028…T-035: админка, prompt registry,
+16. **Итерация 15** — `react-chessboard` 5.12.1, `chess.js`
+    `history({verbose:true})`, `react-i18next` RU/EN, Zustand+sessionStorage;
+    SSE `/v1/commentary/stream` и `/v1/chat/stream`; `GET /v1/games/{id}`;
+    KI-024…KI-028 закрыты.
+17. **Следующая итерация** — Фаза 7 (T-028…T-035: админка, prompt registry,
     OTel, FinOps, semantic cache, guardrails, audit). До публичного деплоя
     закрыть KI-026 (`/v1/ingest` без auth), KI-028 (нет SSE) и KI-030
     (качество LLM-комментариев).

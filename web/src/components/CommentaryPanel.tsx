@@ -1,11 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
-import {
-  ApiError,
-  generateCommentary,
-  updateCommentary,
-} from "../api";
-import { formatTokens, levelLabel } from "../lib/format";
+import { ApiError, streamCommentary, updateCommentary } from "../api";
+import { useTypewriter } from "../hooks/useTypewriter";
 import type { CommentaryResponse, Level } from "../types";
 
 interface CommentaryPanelProps {
@@ -14,38 +11,73 @@ interface CommentaryPanelProps {
 }
 
 export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
+  const { t } = useTranslation();
   const [commentary, setCommentary] = useState<CommentaryResponse | null>(null);
+  const [streamText, setStreamText] = useState("");
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedEdit, setSavedEdit] = useState<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const typed = useTypewriter(streamText);
 
   useEffect(() => {
     setCommentary(null);
+    setStreamText("");
     setDraft("");
     setEditing(false);
     setError(null);
     setSavedEdit(null);
+    abortRef.current?.abort();
+    abortRef.current = null;
   }, [analysisId, level]);
 
   async function handleGenerate() {
     if (!analysisId) {
       return;
     }
+    const controller = new AbortController();
+    abortRef.current = controller;
     setBusy(true);
     setError(null);
+    setCommentary(null);
+    setStreamText("");
+    setDraft("");
+    setEditing(false);
     setSavedEdit(null);
+    let full = "";
     try {
-      const result = await generateCommentary(analysisId, level);
-      setCommentary(result);
-      setDraft(result.text);
-      setEditing(false);
+      const done = await streamCommentary(analysisId, level, {
+        signal: controller.signal,
+        onDelta: (text) => {
+          full += text;
+          setStreamText(full);
+        },
+      });
+      setCommentary({
+        commentary_id: done.commentary_id ?? 0,
+        text: full,
+        tokens_used: done.tokens_used,
+        validated: done.validated,
+        model: done.model ?? "",
+        attempts: 1,
+      });
+      setDraft(full);
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (cause instanceof DOMException && cause.name === "AbortError") {
+        setError(t("commentary.stopped"));
+      } else {
+        setError(errorMessage(cause, t("common.unknown")));
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
   }
 
   async function handleSave() {
@@ -61,44 +93,63 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
       setEditing(false);
       setSavedEdit(result.edit_id);
     } catch (cause) {
-      setError(errorMessage(cause));
+      setError(errorMessage(cause, t("common.unknown")));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <section className="panel" aria-label="Комментарий">
+    <section className="panel" aria-label={t("commentary.title")}>
       <div className="panel__header">
         <div>
-          <h2>Комментарий</h2>
-          <span className="muted">Уровень: {levelLabel(level)}</span>
+          <h2>{t("commentary.title")}</h2>
+          <span className="muted">
+            {t("commentary.level", { level: t(`level.${level}`) })}
+          </span>
         </div>
-        <button
-          type="button"
-          className="button button--primary"
-          onClick={handleGenerate}
-          disabled={!analysisId || busy}
-          aria-busy={busy}
-        >
-          {busy ? "Генерирую…" : commentary ? "Сгенерировать заново" : "Сгенерировать"}
-        </button>
+        <div className="actions actions--inline">
+          {busy ? (
+            <button type="button" className="button" onClick={handleStop}>
+              {t("commentary.stop")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={handleGenerate}
+              disabled={!analysisId || busy}
+              aria-busy={busy}
+            >
+              {commentary ? t("commentary.regenerate") : t("commentary.generate")}
+            </button>
+          )}
+        </div>
       </div>
 
-      {!analysisId ? (
-        <p className="empty">Сначала разберите партию — комментарий строится по её анализу.</p>
-      ) : null}
-
+      {!analysisId ? <p className="empty">{t("commentary.needAnalysis")}</p> : null}
       {error ? <p className="error">{error}</p> : null}
 
-      {commentary ? (
+      {busy ? (
+        <>
+          <div className="commentary-text">
+            {typed || t("commentary.generating")}
+            <span className="caret" />
+          </div>
+        </>
+      ) : commentary ? (
         <>
           <div className="meta-row">
             <span>{commentary.model}</span>
-            <span>{formatTokens(commentary.tokens_used)}</span>
-            <span>{commentary.validated ? "валидирован" : "без валидации"}</span>
-            <span>попыток: {commentary.attempts}</span>
-            {savedEdit ? <span className="ok">edit #{savedEdit}</span> : null}
+            <span>{t("common.tokens", { count: commentary.tokens_used })}</span>
+            <span>
+              {commentary.validated
+                ? t("commentary.validated")
+                : t("commentary.notValidated")}
+            </span>
+            {savedEdit ? (
+              <span className="ok">{t("commentary.savedEdit", { id: savedEdit })}</span>
+            ) : null}
           </div>
 
           {editing ? (
@@ -108,7 +159,7 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
                 value={draft}
                 maxLength={20000}
                 onChange={(event) => setDraft(event.target.value)}
-                aria-label="Текст комментария"
+                aria-label={t("commentary.editorLabel")}
               />
               <div className="actions">
                 <button
@@ -117,7 +168,7 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
                   onClick={handleSave}
                   disabled={busy || !draft.trim()}
                 >
-                  Сохранить правку
+                  {t("commentary.save")}
                 </button>
                 <button
                   type="button"
@@ -128,7 +179,7 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
                   }}
                   disabled={busy}
                 >
-                  Отмена
+                  {t("commentary.cancel")}
                 </button>
               </div>
             </>
@@ -144,25 +195,22 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
                     setEditing(true);
                   }}
                 >
-                  Редактировать
+                  {t("commentary.edit")}
                 </button>
               </div>
             </>
           )}
         </>
       ) : analysisId ? (
-        <p className="empty">
-          Нажмите «Сгенерировать» — комментарий появится здесь через несколько
-          секунд (локальная модель может думать до минуты).
-        </p>
+        <p className="empty">{t("commentary.empty")}</p>
       ) : null}
     </section>
   );
 }
 
-function errorMessage(cause: unknown): string {
+function errorMessage(cause: unknown, fallback: string): string {
   if (cause instanceof ApiError) {
     return cause.code ? `${cause.message} (${cause.code})` : cause.message;
   }
-  return cause instanceof Error ? cause.message : "Неизвестная ошибка";
+  return cause instanceof Error ? cause.message : fallback;
 }

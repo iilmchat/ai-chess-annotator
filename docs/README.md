@@ -56,6 +56,7 @@
 | [reports/iteration-9/](development/reports/iteration-9/) | Отчёты итерации 9 — RAG (STEP-01…STEP-02) |
 | [reports/iteration-12/](development/reports/iteration-12/) | Отчёты итерации 12 — сброс БД, ingest, PATCH и чат (STEP-01…STEP-04) |
 | [reports/iteration-14/](development/reports/iteration-14/) | Отчёты итерации 14 — LLM-eval, Docker production, документация MVP |
+| [reports/iteration-15/](development/reports/iteration-15/) | Отчёт итерации 15 — синхронизация UI и SSE |
 | [reports/LLM_EVAL.md](development/reports/LLM_EVAL.md) | LLM-as-judge: средние оценки по трём шкалам (T-023) |
 
 ### Состояние проекта
@@ -89,6 +90,9 @@
 | [../tests/integration/test_api_commentaries_patch.py](../tests/integration/test_api_commentaries_patch.py) | 4 теста PATCH: правка, повторная правка, `edits`, 404/422 (T-021b) |
 | [../tests/integration/test_api_chat.py](../tests/integration/test_api_chat.py) | 9 тестов чата: контекст, имена, retry, 404/422/502, живой прогон (T-022) |
 | [../tests/integration/test_web_static.py](../tests/integration/test_web_static.py) | SPA из `web/dist` раздаётся FastAPI и не перехватывает `/v1` (T-025) |
+| [../tests/integration/test_api_games.py](../tests/integration/test_api_games.py) | `GET /v1/games/{id}`: сохранённый анализ, `analysis_level`, `commentaries`, 404 (T-031) |
+| [../tests/integration/test_streaming.py](../tests/integration/test_streaming.py) | SSE комментария/чата: delta→done, нелегальный ход→error, запись в БД (T-032) |
+| [../web/src/](../web/src/) | Frontend: `board.test.ts`/`pgn.test.ts` (FEN/chess.js), `api.test.ts` (SSE-парсер), `format.test.ts` — 20 тестов (Vitest) |
 | [../tests/fixtures/example.pgn](../tests/fixtures/example.pgn) | Партия Гукеш — Каймер (Прага 2024), `1.d4 Nf6 2.c4 e6 … 27.Bg6+ 1-0`, ECO `E21` |
 | [../tests/fixtures/test_game.pgn](../tests/fixtures/test_game.pgn) | Та же партия с `Test White` / `Test Black` и без `[ECO]` — проверка метаданных и fallback-а ECO |
 | [../tests/fixtures/README.md](../tests/fixtures/README.md) | Инварианты обеих фикстур (полуходы, результат, ECO, фазы) |

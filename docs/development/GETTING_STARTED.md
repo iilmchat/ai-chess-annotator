@@ -419,6 +419,7 @@ cp .env.example .env
 - `JWT_SECRET` — `openssl rand -hex 32`.
 - `POSTGRES_PASSWORD` — сильный пароль.
 - `DEEPSEEK_API_KEY` — если нужен уровень `gm`.
+- `ADMIN_API_KEY` — токен для `POST /v1/ingest` (`X-Admin-Token`).
 - `PROD_CORS_ORIGINS` — ваш домен (например, `https://chess.example.com`).
 
 `APP_ENV=prod`, адреса `postgres`/`redis` и путь к Stockfish выставляются

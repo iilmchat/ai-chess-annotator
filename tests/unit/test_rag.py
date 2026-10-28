@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import math
 
+import httpx
 import pytest
 
-from app.rag.embedder import DIMENSION, HashEmbedder, position_document
+from app.errors import LLMError
+from app.rag.embedder import (
+    DIMENSION,
+    HashEmbedder,
+    LMStudioEmbedder,
+    position_document,
+)
 
 START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 OTHER = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
@@ -15,7 +22,7 @@ OTHER = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 async def test_embedding_dimension_and_norm() -> None:
     vector = await HashEmbedder().embed(position_document(START))
 
-    assert len(vector) == DIMENSION == 1024
+    assert len(vector) == DIMENSION == 768
     norm = math.sqrt(sum(value * value for value in vector))
     assert norm == pytest.approx(1.0, abs=1e-9)
 
@@ -56,3 +63,43 @@ def test_position_document_contains_fen_twice() -> None:
 def test_embedder_validates_dimension() -> None:
     with pytest.raises(ValueError):
         HashEmbedder(dimension=0)
+
+
+async def test_lmstudio_embedder_normalizes_response() -> None:
+    raw = [3.0, 4.0, *([0.0] * (DIMENSION - 2))]
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"embedding": raw}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        embedder = LMStudioEmbedder(
+            base_url="http://127.0.0.1:8034/v1",
+            model="text-embedding-nomic-embed-text-v1.5",
+            api_key="lm-studio",
+            dimension=DIMENSION,
+            client=client,
+        )
+        vector = await embedder.embed("fen test")
+
+    assert len(vector) == DIMENSION
+    assert vector[0] == pytest.approx(0.6)
+    assert vector[1] == pytest.approx(0.8)
+    assert requests[0].url.path.endswith("/v1/embeddings")
+    assert requests[0].headers["authorization"] == "Bearer lm-studio"
+    assert requests[0].content.decode().find("nomic") >= 0
+
+
+async def test_lmstudio_embedder_rejects_wrong_dimension() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"embedding": [1.0, 2.0]}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        embedder = LMStudioEmbedder(
+            base_url="http://127.0.0.1:8034/v1",
+            model="nomic",
+            client=client,
+        )
+        with pytest.raises(LLMError, match="768"):
+            await embedder.embed("fen test")

@@ -9,7 +9,7 @@
 * временные метки — ``TIMESTAMPTZ`` со ``server_default=now()``;
 * перечисления — нативные PostgreSQL-типы (``level``);
 * гибкие структуры (разбивка по фазам, MultiPV, retrieval top-k) — ``JSONB``;
-* эмбеддинги — ``pgvector.sqlalchemy.Vector(1024)`` + ivfflat-индекс.
+* эмбеддинги — ``pgvector.sqlalchemy.Vector(768)`` + ivfflat-индекс.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ __all__ = [
     "level_enum",
 ]
 
-EMBEDDING_DIM = 1024
+EMBEDDING_DIM = 768
 
 
 class Level(enum.StrEnum):
@@ -111,6 +111,12 @@ class Game(Base):
     )
     pgn: Mapped[str] = mapped_column(Text, nullable=False)
     eco_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    # Уровень, под который выполнялся анализ (T-031: GET /v1/games/{id}).
+    analysis_level: Mapped[Level] = mapped_column(
+        level_enum, nullable=False, server_default=sql_text("'club'")
+    )
+    # Время анализа в мс (для повторной выдачи без пересчёта).
+    analysis_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Формат задаёт app.ingestion.models.PhaseBreakdown (T-007):
     # {"opening_end_ply": 30, "endgame_start_ply": null}
     phase_breakdown: Mapped[dict[str, Any] | None] = mapped_column(

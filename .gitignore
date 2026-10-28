@@ -17,6 +17,7 @@ web/.vite/
 web/tsconfig.tsbuildinfo
 *.tsbuildinfo
 pnpm-lock.yaml.bak
+.tmp/
 
 # Env
 .env

@@ -14,8 +14,10 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from app.chat import answer_question
+from app.chat.streaming import stream_chat
 from app.db.session import get_session
 
 router = APIRouter(tags=["chat"])
@@ -52,6 +54,26 @@ class ChatResponse(BaseModel):
 
     reply: str
     tokens_used: int = Field(ge=0)
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    payload: ChatRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> EventSourceResponse:
+    """Стримить ответ чата через SSE (T-032).
+
+    События: `meta` → `delta`* → `done` | `error`. Итоговый текст
+    проверяется SAN-валидатором.
+    """
+    return EventSourceResponse(
+        stream_chat(
+            session,
+            payload.analysis_id,
+            payload.level,
+            payload.message,
+        )
+    )
 
 
 @router.post("/chat", response_model=ChatResponse)

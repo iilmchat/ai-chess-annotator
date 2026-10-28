@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     rate_limit_requests: int = 10
     rate_limit_window_s: int = 60
 
+    # Admin API (T-031): защита /v1/ingest общим токеном до появления JWT.
+    admin_api_key: str | None = None
+
     # LLM (T-013): локально — LM Studio (OpenAI-совместимый API), облако — DeepSeek.
     #: Историческое имя: локальный провайдер (compose/healthcheck).
     llm_provider_local: str = "lmstudio"
@@ -89,8 +92,10 @@ class Settings(BaseSettings):
     llm_retry_backoff_s: float = 0.5
 
     # Embeddings
-    embedding_model: str = "bge-m3"
-    embedding_dim: int = 1024
+    #: `lmstudio` — реальные эмбеддинги 768; `hash` — тесты/CI.
+    embedding_provider: str = "lmstudio"
+    embedding_model: str = "text-embedding-nomic-embed-text-v1.5"
+    embedding_dim: int = 768
 
     # Observability
     otel_enabled: bool = False

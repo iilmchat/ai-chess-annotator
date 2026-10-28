@@ -40,6 +40,15 @@ curl -s -X POST http://127.0.0.1:8010/v1/analyze \
 Ожидание: `analysis_id` — число строкой, `moves_analyzed=53`,
 `initial_fen` начинается с `rnbqkbnr`.
 
+Сохранённый анализ:
+
+```bash
+curl -s http://127.0.0.1:8010/v1/games/<analysis_id> | jq \
+  '{analysis_level, moves_analyzed, commentaries: (.commentaries|length)}'
+```
+
+Ожидание: `analysis_level=club`, 53 хода, список комментариев (может быть пуст).
+
 ## 3. Доска и ходы
 
 1. Кликнуть по первому ходу — подсветка, карточка хода.
@@ -55,6 +64,18 @@ curl -s -X POST http://127.0.0.1:8010/v1/analyze \
    (валидатор).
 4. Повторить для `gm` (DeepSeek), если задан ключ.
 
+SSE:
+
+```bash
+curl -N -X POST http://127.0.0.1:8010/v1/commentary/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"analysis_id":25,"level":"club"}'
+```
+
+Ожидание: `event: meta`, затем несколько `event: delta`, последний —
+`event: done` (или `event: error` при нелегальных ходах). В UI текст
+появляется постепенно; кнопка «Остановить» прерывает поток.
+
 ## 5. Правка и `edits`
 
 1. **«Редактировать»** → изменить текст → **«Сохранить правку»**.
@@ -62,9 +83,9 @@ curl -s -X POST http://127.0.0.1:8010/v1/analyze \
 3. Проверить в БД:
 
 ```bash
-psql "$DATABASE_URL" -c \
+docker compose exec postgres psql -U chess -d chessannotator -c \
   "select id, human_edited, left(text,60) from commentaries order by id desc limit 1;"
-psql "$DATABASE_URL" -c \
+docker compose exec postgres psql -U chess -d chessannotator -c \
   "select id, commentary_id, length(original_text), length(edited_text) from edits order by id desc limit 1;"
 ```
 
@@ -74,6 +95,15 @@ psql "$DATABASE_URL" -c \
 2. Вопрос **«Почему ход 12.Bb3 был ошибкой?»** → ссылка на оценку/лучший ход.
 3. Проверить, что все SAN-ходы в ответе легальны (валидатор).
 4. Отправить вопрос до анализа — поле/кнопка недоступны.
+5. SSE-вариант:
+
+```bash
+curl -N -X POST http://127.0.0.1:8010/v1/chat/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"analysis_id":25,"level":"club","message":"Кто играл белыми?"}'
+```
+
+Ожидание: `meta` → `delta`* → `done`; при нелегальном ходе — `error`.
 
 ## 7. Production Docker
 
@@ -100,7 +130,9 @@ curl -s http://127.0.0.1:8011/ | head -n 5
 | 11 запросов `/v1/analyze` за минуту | 429 + `Retry-After` |
 | Нет LM Studio, уровень `club` | 503 `llm_error` |
 | Нет `DEEPSEEK_API_KEY`, уровень `gm` | 503 `llm_not_configured` |
-| Модель выдумала ход | retry, затем 502 `llm_invalid_output` |
+| Модель выдумала ход | SSE `event: error` / 502 `llm_invalid_output` |
+| `POST /v1/ingest` без `X-Admin-Token` | 401 |
+| `POST /v1/ingest` с неверным токеном | 401 |
 
 ## 9. Критерии приёмки MVP
 
@@ -108,8 +140,10 @@ curl -s http://127.0.0.1:8011/ | head -n 5
 - [ ] `/v1/analyze` на 53 полуходах ≤ 30 с.
 - [ ] Доска, ходы, оценки и мотивы отображаются.
 - [ ] Комментарий генерируется и валидирован.
+- [ ] SSE-комментарий и чат печатаются постепенно, `done` приходит.
 - [ ] PATCH сохраняет правку и создаёт `edits`.
 - [ ] Чат отвечает по фактам и не пропускает нелегальные ходы.
+- [ ] `GET /v1/games/{id}` отдаёт `analysis_level` и `commentaries`.
 - [ ] Production-образ собирается, SPA открывается, порты данных loopback.
 - [ ] `ruff`, `mypy`, `pytest`, `pnpm typecheck`, `pnpm test`,
       `pnpm build` — зелёные.

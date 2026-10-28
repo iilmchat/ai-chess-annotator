@@ -7,6 +7,10 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    // Windows + antivirus иногда блокирует временный файл esbuild-transpile;
+    // для современных браузеров downlevel не нужен.
+    build: { target: "esnext", minify: "terser" },
+    esbuild: { target: "esnext" },
     server: {
       port: 5173,
       proxy: {

@@ -39,7 +39,7 @@
 | `app/commentary/` | сборка анализа из БД, генерация, retry, правка |
 | `app/chat/` | вопрос → контекст → LLM → валидатор → ответ |
 | `app/rag/` | ingest аннотированных партий, эмбеддинги, retrieval, контекст |
-| `app/api/v1/` | `analyze`, `commentary`, `chat`, `ingest`, `health` |
+| `app/api/v1/` | `analyze`, `games`, `commentary`, `chat`, `ingest`, `health` |
 | `app/db/` | SQLAlchemy-модели, сессии, Alembic-миграции |
 
 ## 3. Потоки
@@ -93,11 +93,14 @@ PATCH /v1/commentaries/{id}
 
 | Метод | Путь | Назначение |
 | :--- | :--- | :--- |
-| POST | `/v1/analyze` | PGN + level → анализ, `analysis_id` |
+| POST | `/v1/analyze` | PGN + level → анализ, `analysis_id`, `analysis_level` |
+| GET | `/v1/games/{id}` | сохранённый анализ + `commentaries` без Stockfish |
 | POST | `/v1/commentary` | `analysis_id` + level → комментарий |
+| POST | `/v1/commentary/stream` | SSE: `meta`/`delta`/`done`/`error` |
 | PATCH | `/v1/commentaries/{id}` | ручная правка + `edits` |
 | POST | `/v1/chat` | вопрос по `analysis_id` |
-| POST | `/v1/ingest` | PGN → `annotated_games` (админ, без auth) |
+| POST | `/v1/chat/stream` | SSE-ответ чата |
+| POST | `/v1/ingest` | PGN → `annotated_games` (`X-Admin-Token`) |
 | GET | `/v1/health` | БД/Redis/Stockfish/LLM |
 | GET | `/docs` | OpenAPI |
 
@@ -108,23 +111,26 @@ PATCH /v1/commentaries/{id}
 8 таблиц: `users`, `games`, `moves`, `motifs`, `annotated_games`,
 `retrieval_cache`, `commentaries`, `edits`. Основное:
 
-- `games` — PGN, ECO, фазы;
 - `moves` — SAN/FEN/eval/best/delta/class/multipv;
 - `motifs` — тип, описание, важность, FK на ход;
-- `annotated_games` — RAG: PGN, метаданные, аннотация, `vector(1024)`;
+- `games` — PGN, ECO, фазы, `analysis_level`, `analysis_time_ms`;
+- `annotated_games` — RAG: PGN, метаданные, аннотация, `vector(768)`
+  (LM Studio nomic-embed);
 - `commentaries` — текст, модель, токены, `validated`, `human_edited`;
 - `edits` — пары «оригинал → правка» (датасет).
 
-Миграция — `b802598c3778`; `alembic check` без дрейфа.
+Миграция — `d2e3f4a5b6c7`; `alembic check` без дрейфа.
 
 ## 6. Frontend
 
-- React 19 + TypeScript + Vite, без UI-библиотек.
+- React 19 + TypeScript + Vite; `react-chessboard` 5.12.1 для доски,
+  `chess.js` (`history({verbose:true})`) для FEN из PGN, `react-i18next`
+  (RU/EN), Zustand-стор с persist в `sessionStorage`.
 - Одна страница: PGN, уровень, доска, список ходов, комментарий, чат.
-- Доска строится из FEN на клиенте (свой парсер, без chess.js).
-- API-клиент — `web/src/api.ts`; в dev Vite проксирует `/v1`.
+- API-клиент — `web/src/api.ts`; SSE читается через `ReadableStream`,
+  текст печатается постепенно.
 - Production: `pnpm build` → `web/dist` → `StaticFiles("/")` в FastAPI.
-- Тесты — Vitest для чистых функций (FEN, форматирование): 14 тестов.
+- Тесты — Vitest: FEN/chess.js, SSE-парсер, форматирование (20 тестов).
 
 ## 7. Развёртывание
 
@@ -138,12 +144,12 @@ PATCH /v1/commentaries/{id}
 
 ## 8. Безопасность и ограничения MVP
 
-- JWT/ролей нет (KI-026): `/v1/ingest` и `/v1/admin` (будущее) требуют
-  внешней защиты.
+- JWT/ролей нет: `/v1/ingest` защищён общим `X-Admin-Token`
+  (constant-time), полноценный RBAC — T-028.
 - Rate limit 10/мин на IP, fail-open при недоступном Redis (KI-015).
 - Валидатор проверяет легальность SAN, не семантику (KI-023).
-- RAG-эмбеддинги — хеш-заглушка (KI-025).
-- Чат синхронный, без SSE (KI-028).
+- RAG-эмбеддинги — LM Studio 768 (L2); hash — fallback тестов.
+- SSE-стриминг реализован; история чата между запросами не сохраняется.
 - Слепой тест уровней (T-024) не проводился.
 
 ## 9. Что дальше

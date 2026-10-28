@@ -21,7 +21,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -119,6 +121,62 @@ class OpenAICompatibleClient(BaseLLMClient):
         )
         return result
 
+    async def stream_generate(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> AsyncIterator[str]:
+        """Стримить ответ через `stream=true` (SSE OpenAI-формата).
+
+        Отдаёт только текстовые дельты. Токены в stream-ответе могут
+        отсутствовать; вызывающая сторона оценивает их эвристикой.
+        """
+        payload = self._build_payload(prompt, system_prompt, stream=True)
+        started = time.perf_counter()
+        chars = 0
+        try:
+            client = self._http_client()
+            async with client.stream(
+                "POST", self.endpoint, json=payload, headers=self._headers()
+            ) as response:
+                if response.status_code != httpx.codes.OK:
+                    body = (await response.aread()).decode(
+                        "utf-8", errors="replace"
+                    )
+                    raise LLMError(
+                        f"{self.provider}: HTTP {response.status_code}: "
+                        f"{body[:300]}"
+                    )
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk["choices"][0].get("delta") or {}
+                        content = delta.get("content")
+                    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                        continue
+                    if isinstance(content, str) and content:
+                        chars += len(content)
+                        yield content
+        except httpx.TimeoutException as exc:
+            raise LLMTimeoutError(
+                f"{self.provider}: таймаут стрима {self.timeout_s:.0f} с"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise LLMError(
+                f"{self.provider}: сеть недоступна: {exc}"
+            ) from exc
+        finally:
+            logger.info(
+                "llm_stream_completed",
+                provider=self.provider,
+                model=self.model,
+                chars=chars,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+            )
+
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:
             await self._client.aclose()
@@ -128,7 +186,11 @@ class OpenAICompatibleClient(BaseLLMClient):
     # --- внутреннее -------------------------------------------------------
 
     def _build_payload(
-        self, prompt: str, system_prompt: str | None
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        *,
+        stream: bool = False,
     ) -> dict[str, Any]:
         messages: list[dict[str, str]] = []
         if system_prompt:
@@ -141,6 +203,8 @@ class OpenAICompatibleClient(BaseLLMClient):
         }
         if self._max_tokens is not None:
             payload["max_tokens"] = self._max_tokens
+        if stream:
+            payload["stream"] = True
         return payload
 
     def _headers(self) -> dict[str, str]:

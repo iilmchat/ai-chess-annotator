@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Game, Move
+from app.db.models import Game, Level, Move
 from app.db.models import Motif as MotifRow
 from app.db.session import get_session
 from app.engine.models import MoveAnalysis, MoveClassification
@@ -106,6 +106,7 @@ class AnalyzeResponse(BaseModel):
     status: Literal["completed"] = "completed"
     meta: AnalyzeMeta
     initial_fen: str = Field(description="Стартовая позиция партии (FEN)")
+    analysis_level: LevelName = Field(description="Уровень, под который считался анализ")
     moves_analyzed: int = Field(ge=0)
     time_taken_ms: int = Field(ge=0)
     summary: AnalyzeSummary
@@ -134,9 +135,16 @@ async def analyze(
     analyses = await pool.analyze_game_moves(
         parsed.moves, payload.level, initial_fen=parsed.initial_fen
     )
-    analysis_id = await _persist(session, payload.pgn, parsed, analyses)
-
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+    analysis_id = await _persist(
+        session,
+        payload.pgn,
+        parsed,
+        analyses,
+        level=payload.level,
+        elapsed_ms=elapsed_ms,
+    )
+
     return AnalyzeResponse(
         analysis_id=str(analysis_id),
         status="completed",
@@ -146,6 +154,7 @@ async def analyze(
             eco=parsed.eco_code,
         ),
         initial_fen=parsed.initial_fen,
+        analysis_level=payload.level,
         moves_analyzed=len(analyses),
         time_taken_ms=elapsed_ms,
         summary=_summarize(analyses),
@@ -166,6 +175,9 @@ async def _persist(
     pgn: str,
     parsed: ParsedGame,
     analyses: list[MoveAnalysis],
+    *,
+    level: str,
+    elapsed_ms: int,
 ) -> int:
     """Сохранить партию и оценки ходов одной транзакцией.
 
@@ -175,6 +187,8 @@ async def _persist(
     game = Game(
         pgn=pgn,
         eco_code=parsed.eco_code,
+        analysis_level=Level(level),
+        analysis_time_ms=elapsed_ms,
         phase_breakdown=parsed.phase_breakdown.model_dump(),
     )
     session.add(game)

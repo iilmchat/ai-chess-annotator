@@ -894,3 +894,74 @@ POST /v1/chat    -> 200 (948 токенов)
 3. **T-027:** тег `v0.1.0`, GHCR, релиз-ноты после registry-доступа.
 4. **Phase 7:** admin control plane, prompt registry, OTel, FinOps,
    semantic cache, guardrails, audit.
+
+---
+
+## Итерация 15 — Синхронизация UI и SSE-стриминг
+
+**Дата:** 2026-10-28
+**Статус:** ✅ завершена; KI-024…KI-028 закрыты
+**Отчёт шага:** `docs/development/reports/iteration-15/STEP-01_SYNC_SSE.md`
+
+### Что сделано
+
+- [x] **Синхронизация Итераций 10–12:** `react-chessboard` 5.12.1
+      (`options={{position}}`), `chess.js` `history({verbose:true})` для
+      FEN из PGN, `react-i18next` RU/EN, Zustand `analysisStore.ts` с
+      persist в `sessionStorage`.
+- [x] **X-Admin-Token:** `POST /v1/ingest` защищён `verify_admin_key`
+      (constant-time compare с `ADMIN_API_KEY`), 401/503.
+- [x] **RAG 768:** `LMStudioEmbedder` (`/v1/embeddings`,
+      `text-embedding-nomic-embed-text-v1.5`, L2), миграция
+      `d2e3f4a5b6c7`, 102 партии переиндексированы; hash — fallback
+      тестов.
+- [x] **`GET /v1/games/{id}`:** сохранённый анализ + `analysis_level` +
+      `commentaries`; `games.analysis_level`/`analysis_time_ms`.
+- [x] **SSE:** `stream_generate` в OpenAI-клиенте,
+      `POST /v1/commentary/stream` и `/v1/chat/stream` (sse-starlette),
+      события `meta`/`delta`/`done`/`error`, финальный SAN-валидатор;
+      фронтенд читает `ReadableStream` и печатает постепенно.
+- [x] **Тесты:** +1 games, +3 streaming, +3 SSE-parser, +2 LMStudio
+      embedder, +1 admin auth.
+
+### Проверки
+
+| Проверка | Команда | Результат |
+| :--- | :--- | :--- |
+| Backend | `pytest -q` | **205 passed, 1 xfailed** (196.60 с) |
+| Frontend | `pnpm --dir web test` | **20 passed** (4 файла) |
+| Types | `pnpm --dir web typecheck` | exit 0 |
+| Build | `pnpm --dir web build` | JS 406.59 kB / CSS 8.76 kB |
+| Lint | `ruff check .` | 0 |
+| Mypy | `mypy app` | 0, 49 файлов |
+| Migrations | `alembic check` | без дрейфа, `d2e3f4a5b6c7` |
+| Embeddings | `vector_dims` / NULL | 768 / 0 |
+| Live stream | LM Studio | чанки `Готов`/`о` за 1.05 с |
+| Live chat SSE | `/v1/chat/stream`, `analysis_id=25` | 200, 16.7 с, 23 delta, `done`, 961 токен |
+| Prod image | `docker build` | 513 MB, app `healthy`; миграции `c1f2→d2e3` |
+| Prod SPA/GET/SSE | `127.0.0.1:8011` | `/` 200, `/v1/games/1` 200, `/v1/chat/stream` 200 (520 токенов) |
+| SSE | `test_streaming.py` | 3 passed |
+
+### Закрытые KI
+
+| KI | Как закрыт |
+| :--- | :--- |
+| KI-024 | SSE-стриминг: текст виден сразу; скорость модели не изменилась |
+| KI-025 | `LMStudioEmbedder` 768 + миграция + re-embed 102 |
+| KI-026 | `X-Admin-Token`, constant-time compare |
+| KI-027 | UI/бэкенд-фичи восстановлены |
+| KI-028 | `/v1/chat/stream` + typewriter-клиент |
+
+KI-030 (качество LLM 5.19/10) остаётся открытым и не блокирует итерацию.
+
+### Ограничения
+
+- История чата между запросами не сохраняется.
+- Playwright/скриншот-тест не внедрён; T-020 остаётся `[~]`.
+- Токены в SSE — оценка `chars/4`, не биллинг.
+- Production-образ пересобран (513 MB); миграции `c1f2→d2e3` применены,
+  `/v1/health` = `ok`.
+
+### Что дальше
+
+Phase 7 / T-028 (Admin Control Plane).

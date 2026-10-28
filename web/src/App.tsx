@@ -1,60 +1,74 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { analyzeGame, ApiError } from "./api";
 import { Board } from "./components/Board";
 import { ChatPanel } from "./components/ChatPanel";
 import { CommentaryPanel } from "./components/CommentaryPanel";
 import { MoveList } from "./components/MoveList";
-import {
-  classificationLabel,
-  formatEval,
-  levelLabel,
-  movePrefix,
-  START_FEN,
-} from "./lib/format";
-import type { AnalyzeResponse, Level } from "./types";
-
-const DEFAULT_PGN = `[Event "Demo"]
-[Site "ChessAnnotator"]
-[Date "2026.10.28"]
-[White "Svidler"]
-[Black "Shirov"]
-[Result "1-0"]
-
-1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5
-7. Bb3 d6 8. c3 O-O 9. h3 Nb8 10. d4 Nbd7 1-0`;
+import { formatEval, movePrefix, START_FEN } from "./lib/format";
+import { DEMO_PGN, positionsFromPgn } from "./lib/pgn";
+import { useAnalysisStore } from "./stores/analysisStore";
+import type { Level } from "./types";
 
 export default function App() {
-  const [pgn, setPgn] = useState(DEFAULT_PGN);
-  const [level, setLevel] = useState<Level>("club");
-  const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
-  const [selectedPly, setSelectedPly] = useState(0);
+  const { t, i18n } = useTranslation();
+  const {
+    pgn,
+    level,
+    analysis,
+    positions,
+    initialFen,
+    selectedPly,
+    setPgn,
+    setLevel,
+    setAnalysis,
+    setSelectedPly,
+    reset,
+  } = useAnalysisStore();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const selectedPosition = useMemo(
+    () => positions.find((item) => item.ply === selectedPly) ?? null,
+    [positions, selectedPly],
+  );
   const selectedMove = useMemo(
     () => analysis?.moves.find((move) => move.ply === selectedPly) ?? null,
     [analysis, selectedPly],
   );
-
-  const fen = selectedMove?.fen ?? analysis?.initial_fen ?? START_FEN;
+  const fen =
+    selectedPosition?.fen ??
+    (initialFen || analysis?.initial_fen || START_FEN);
 
   async function handleAnalyze() {
     if (!pgn.trim()) {
-      setError("Вставьте PGN партии.");
+      setError(t("errors.emptyPgn"));
+      return;
+    }
+    let parsed;
+    try {
+      parsed = positionsFromPgn(pgn);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("common.unknown"));
       return;
     }
     setBusy(true);
     setError(null);
     try {
       const result = await analyzeGame(pgn, level);
-      setAnalysis(result);
-      setSelectedPly(result.moves.length);
+      setAnalysis(result, parsed.positions, parsed.initialFen);
     } catch (cause) {
-      setAnalysis(null);
-      setError(errorMessage(cause));
+      setError(errorMessage(cause, t("common.unknown")));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function changeLanguage(language: string) {
+    void i18n.changeLanguage(language);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("chess.lang", language);
     }
   }
 
@@ -62,13 +76,26 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div>
-          <h1>ChessAnnotator</h1>
-          <p className="topbar__subtitle">
-            Комментарий к партии в стиле гроссмейстера — для новичка, клуба и
-            гроссмейстера.
-          </p>
+          <h1>{t("app.title")}</h1>
+          <p className="topbar__subtitle">{t("app.subtitle")}</p>
         </div>
-        <span className="badge">MVP v0.1.0</span>
+        <div className="topbar__right">
+          <span className="badge">{t("app.badge")}</span>
+          <div className="lang-switch" role="group" aria-label="Language">
+            {(["ru", "en"] as const).map((language) => (
+              <button
+                key={language}
+                type="button"
+                className={`lang-switch__button ${
+                  i18n.language === language ? "lang-switch__button--active" : ""
+                }`}
+                onClick={() => changeLanguage(language)}
+              >
+                {language.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
       </header>
 
       {error ? (
@@ -81,25 +108,26 @@ export default function App() {
         <aside className="column column--left">
           <section className="panel">
             <div className="panel__header">
-              <h2>Партия</h2>
-              <span className="muted">PGN или FEN-старт</span>
+              <h2>{t("pgn.title")}</h2>
+              <span className="muted">{t("pgn.hint")}</span>
             </div>
             <textarea
               className="pgn-input"
               value={pgn}
               onChange={(event) => setPgn(event.target.value)}
               spellCheck={false}
-              aria-label="PGN партии"
+              placeholder={t("pgn.placeholder")}
+              aria-label={t("pgn.placeholder")}
             />
             <label className="field">
-              <span>Уровень объяснения</span>
+              <span>{t("pgn.level")}</span>
               <select
                 value={level}
                 onChange={(event) => setLevel(event.target.value as Level)}
               >
-                <option value="beginner">Новичок</option>
-                <option value="club">Клубный игрок</option>
-                <option value="gm">Гроссмейстер</option>
+                <option value="beginner">{t("level.beginner")}</option>
+                <option value="club">{t("level.club")}</option>
+                <option value="gm">{t("level.gm")}</option>
               </select>
             </label>
             <div className="actions">
@@ -110,54 +138,53 @@ export default function App() {
                 disabled={busy}
                 aria-busy={busy}
               >
-                {busy ? "Анализирую… до 30 с" : "Разобрать партию"}
+                {busy ? t("pgn.analyzing") : t("pgn.analyze")}
               </button>
               <button
                 type="button"
                 className="button"
                 onClick={() => {
-                  setPgn(DEFAULT_PGN);
-                  setAnalysis(null);
-                  setSelectedPly(0);
-                  setError(null);
+                  reset();
+                  setPgn(DEMO_PGN);
                 }}
                 disabled={busy}
               >
-                Пример
+                {t("pgn.example")}
               </button>
             </div>
-            <p className="hint">
-              Анализ выполняет Stockfish: оценки, лучшие ходы, мотивы и
-              рекомендация под выбранный уровень.
-            </p>
+            <p className="hint">{t("pgn.help")}</p>
           </section>
 
           {analysis ? (
             <section className="panel summary">
               <div className="panel__header">
-                <h2>Сводка</h2>
+                <h2>{t("summary.title")}</h2>
                 <span className="muted">
-                  {(analysis.time_taken_ms / 1000).toFixed(1)} с
+                  {t("common.seconds", {
+                    value: (analysis.time_taken_ms / 1000).toFixed(1),
+                  })}
                 </span>
               </div>
               <p className="summary__players">
-                {analysis.meta.white ?? "Белые"} — {analysis.meta.black ?? "Чёрные"}
+                {analysis.meta.white ?? "—"} — {analysis.meta.black ?? "—"}
                 {analysis.meta.eco ? ` · ${analysis.meta.eco}` : ""}
               </p>
               <div className="summary__pills">
                 <span className="pill pill--blunder">
-                  Зевков: {analysis.summary.blunders}
+                  {t("summary.blunders", { count: analysis.summary.blunders })}
                 </span>
                 <span className="pill pill--mistake">
-                  Ошибок: {analysis.summary.mistakes}
+                  {t("summary.mistakes", { count: analysis.summary.mistakes })}
                 </span>
                 <span className="pill pill--inaccuracy">
-                  Неточностей: {analysis.summary.inaccuracies}
+                  {t("summary.inaccuracies", {
+                    count: analysis.summary.inaccuracies,
+                  })}
                 </span>
               </div>
               <p className="muted">
-                Уровень анализа: {levelLabel(level)} · {analysis.moves_analyzed}{" "}
-                полуходов
+                {t("summary.level", { level: t(`level.${level}`) })} ·{" "}
+                {t("summary.moves", { count: analysis.moves_analyzed })}
               </p>
             </section>
           ) : null}
@@ -173,7 +200,7 @@ export default function App() {
 
         <section className="column column--center">
           <div className="board-wrap">
-            <Board fen={fen} lastMove={selectedMove?.uci ?? null} />
+            <Board fen={fen} lastMove={selectedPosition?.uci ?? null} />
           </div>
 
           {selectedMove ? (
@@ -183,7 +210,9 @@ export default function App() {
                   <span className="muted">{movePrefix(selectedMove.ply)}</span>{" "}
                   <strong>{selectedMove.san}</strong>{" "}
                   <span className={`tag tag--${selectedMove.classification}`}>
-                    {classificationLabel(selectedMove.classification)}
+                    {t(`class.${selectedMove.classification}`, {
+                      defaultValue: selectedMove.classification,
+                    })}
                   </span>
                 </div>
                 <span className="eval-big">
@@ -191,11 +220,16 @@ export default function App() {
                 </span>
               </div>
               <div className="move-detail__facts">
-                <span>Лучший ход: {selectedMove.best_move_san}</span>
-                <span>Потеря: {selectedMove.delta_cp} cp</span>
+                <span>
+                  {t("board.best")}: {selectedMove.best_move_san}
+                </span>
+                <span>
+                  {t("board.loss")}: {t("board.cp", { value: selectedMove.delta_cp })}
+                </span>
                 {selectedMove.recommended_move ? (
                   <span>
-                    Рекомендация: {selectedMove.recommended_move.san} (
+                    {t("board.recommendation")}:{" "}
+                    {selectedMove.recommended_move.san} (
                     {formatEval(
                       selectedMove.recommended_move.eval_cp,
                       selectedMove.recommended_move.mate,
@@ -213,16 +247,13 @@ export default function App() {
                   ))}
                 </ul>
               ) : (
-                <p className="muted">Мотивов на этом ходе не найдено.</p>
+                <p className="muted">{t("board.noMotifs")}</p>
               )}
             </section>
           ) : (
             <section className="panel move-detail">
-              <h2>Начальная позиция</h2>
-              <p className="muted">
-                Выберите ход в списке, чтобы увидеть оценку, лучший ход и
-                мотивы.
-              </p>
+              <h2>{t("board.startTitle")}</h2>
+              <p className="muted">{t("board.startHint")}</p>
             </section>
           )}
         </section>
@@ -237,18 +268,16 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <span>ChessAnnotator · MVP v0.1.0</span>
-        <span>
-          Все варианты из ответа LLM проверяются Stockfish перед показом.
-        </span>
+        <span>{t("app.footer")}</span>
+        <span>{t("app.footerNote")}</span>
       </footer>
     </div>
   );
 }
 
-function errorMessage(cause: unknown): string {
+function errorMessage(cause: unknown, fallback: string): string {
   if (cause instanceof ApiError) {
     return cause.code ? `${cause.message} (${cause.code})` : cause.message;
   }
-  return cause instanceof Error ? cause.message : "Неизвестная ошибка";
+  return cause instanceof Error ? cause.message : fallback;
 }

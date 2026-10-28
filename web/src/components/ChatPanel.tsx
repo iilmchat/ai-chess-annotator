@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
-import { ApiError, askChat } from "../api";
-import { formatTokens, levelLabel } from "../lib/format";
+import { ApiError, streamChat } from "../api";
+import { useTypewriter } from "../hooks/useTypewriter";
 import type { Level } from "../types";
 
 interface ChatMessage {
@@ -15,63 +16,89 @@ interface ChatPanelProps {
   level: Level;
 }
 
-const SUGGESTIONS = [
-  "Кто играл белыми и чёрными?",
-  "Какой ход был главной ошибкой?",
-  "Что было лучше в ключевой момент?",
-];
-
 export function ChatPanel({ analysisId, level }: ChatPanelProps) {
+  const { t } = useTranslation();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState("");
+  const [streamText, setStreamText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const typed = useTypewriter(streamText);
+  const suggestions = [
+    t("chat.suggestions.players"),
+    t("chat.suggestions.mistake"),
+    t("chat.suggestions.better"),
+  ];
 
   useEffect(() => {
     setMessages([]);
     setQuestion("");
+    setStreamText("");
     setError(null);
+    abortRef.current?.abort();
+    abortRef.current = null;
   }, [analysisId, level]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [messages, busy]);
+  }, [messages, streamText, busy]);
 
   async function ask(text: string) {
     const trimmed = text.trim();
     if (!analysisId || !trimmed || busy) {
       return;
     }
+    const controller = new AbortController();
+    abortRef.current = controller;
     setMessages((current) => [...current, { role: "user", text: trimmed }]);
     setQuestion("");
+    setStreamText("");
     setBusy(true);
     setError(null);
+    let full = "";
     try {
-      const result = await askChat(analysisId, level, trimmed);
+      const done = await streamChat(analysisId, level, trimmed, {
+        signal: controller.signal,
+        onDelta: (chunk) => {
+          full += chunk;
+          setStreamText(full);
+        },
+      });
       setMessages((current) => [
         ...current,
-        { role: "assistant", text: result.reply, tokens: result.tokens_used },
+        { role: "assistant", text: full, tokens: done.tokens_used },
       ]);
+      setStreamText("");
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (cause instanceof DOMException && cause.name === "AbortError") {
+        setError(t("chat.stopped"));
+      } else {
+        setError(errorMessage(cause, t("common.unknown")));
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
   }
 
+  function stop() {
+    abortRef.current?.abort();
+  }
+
   return (
-    <section className="panel" aria-label="Чат по партии">
+    <section className="panel" aria-label={t("chat.title")}>
       <div className="panel__header">
         <div>
-          <h2>Чат по партии</h2>
-          <span className="muted">Уровень: {levelLabel(level)}</span>
+          <h2>{t("chat.title")}</h2>
+          <span className="muted">
+            {t("chat.level", { level: t(`level.${level}`) })}
+          </span>
         </div>
       </div>
 
-      {!analysisId ? (
-        <p className="empty">Сначала разберите партию — чат отвечает по её анализу.</p>
-      ) : null}
+      {!analysisId ? <p className="empty">{t("chat.needAnalysis")}</p> : null}
 
       <div className="chat" aria-live="polite">
         {messages.map((message, index) => (
@@ -81,19 +108,28 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
           >
             <p>{message.text}</p>
             {message.tokens ? (
-              <span className="chat__meta">{formatTokens(message.tokens)}</span>
+              <span className="chat__meta">
+                {t("common.tokens", { count: message.tokens })}
+              </span>
             ) : null}
           </div>
         ))}
-        {busy ? <div className="chat__message chat__message--assistant">Думаю…</div> : null}
+        {busy ? (
+          <div className="chat__message chat__message--assistant">
+            <p>
+              {typed || t("chat.thinking")}
+              <span className="caret" />
+            </p>
+          </div>
+        ) : null}
         <div ref={endRef} />
       </div>
 
       {error ? <p className="error">{error}</p> : null}
 
-      {analysisId && messages.length === 0 ? (
+      {analysisId && messages.length === 0 && !busy ? (
         <div className="suggestions">
-          {SUGGESTIONS.map((suggestion) => (
+          {suggestions.map((suggestion) => (
             <button
               key={suggestion}
               type="button"
@@ -117,26 +153,34 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
         <input
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
-          placeholder={analysisId ? "Спросите про ход или план…" : "Сначала анализ"}
+          placeholder={
+            analysisId ? t("chat.placeholder") : t("chat.disabledPlaceholder")
+          }
           maxLength={2000}
           disabled={!analysisId || busy}
-          aria-label="Вопрос по партии"
+          aria-label={t("chat.questionLabel")}
         />
-        <button
-          type="submit"
-          className="button button--primary"
-          disabled={!analysisId || busy || !question.trim()}
-        >
-          Спросить
-        </button>
+        {busy ? (
+          <button type="button" className="button" onClick={stop}>
+            {t("chat.stop")}
+          </button>
+        ) : (
+          <button
+            type="submit"
+            className="button button--primary"
+            disabled={!analysisId || !question.trim()}
+          >
+            {t("chat.ask")}
+          </button>
+        )}
       </form>
     </section>
   );
 }
 
-function errorMessage(cause: unknown): string {
+function errorMessage(cause: unknown, fallback: string): string {
   if (cause instanceof ApiError) {
     return cause.code ? `${cause.message} (${cause.code})` : cause.message;
   }
-  return cause instanceof Error ? cause.message : "Неизвестная ошибка";
+  return cause instanceof Error ? cause.message : fallback;
 }

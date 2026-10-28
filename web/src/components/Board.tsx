@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { Chessboard } from "react-chessboard";
 
-import { parseFen, uciSquares } from "../lib/board";
+import { uciSquares } from "../lib/board";
 
 interface BoardProps {
   fen: string;
@@ -8,54 +8,35 @@ interface BoardProps {
 }
 
 export function Board({ fen, lastMove }: BoardProps) {
-  const highlighted = lastMove ? uciSquares(lastMove) : null;
-  const board = useMemo(() => {
-    try {
-      return { rows: parseFen(fen), error: null };
-    } catch (error) {
-      return {
-        rows: [],
-        error: error instanceof Error ? error.message : "Некорректный FEN",
-      };
-    }
-  }, [fen]);
-
-  if (board.error) {
-    return <div className="board-error">Не удалось показать доску: {board.error}</div>;
-  }
+  const move = lastMove ? uciSquares(lastMove) : null;
+  const squareStyles = move
+    ? {
+        [move.from]: { boxShadow: "inset 0 0 0 4px rgba(250, 204, 21, 0.85)" },
+        [move.to]: { boxShadow: "inset 0 0 0 4px rgba(250, 204, 21, 0.85)" },
+      }
+    : undefined;
 
   return (
-    <div className="board" role="grid" aria-label="Шахматная доска">
-      {board.rows.flat().map((cell) => {
-        const isFrom = highlighted?.from === cell.square;
-        const isTo = highlighted?.to === cell.square;
-        return (
-          <div
-            key={cell.square}
-            role="gridcell"
-            aria-label={cell.piece ? `${cell.square}: ${cell.piece}` : cell.square}
-            className={[
-              "board__square",
-              cell.light ? "board__square--light" : "board__square--dark",
-              isFrom || isTo ? "board__square--last" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-          >
-            {cell.piece ? (
-              <span
-                className={`board__piece ${
-                  "♟♞♝♜♛♚".includes(cell.piece)
-                    ? "board__piece--black"
-                    : "board__piece--white"
-                }`}
-              >
-                {cell.piece}
-              </span>
-            ) : null}
-          </div>
-        );
-      })}
+    <div className="board-shell">
+      <Chessboard
+        options={{
+          position: fen,
+          boardOrientation: "white",
+          allowDragging: false,
+          showNotation: true,
+          animationDurationInMs: 160,
+          squareStyles,
+          boardStyle: {
+            width: "100%",
+            maxWidth: "620px",
+            borderRadius: "16px",
+            overflow: "hidden",
+            boxShadow: "0 24px 70px rgba(0, 0, 0, 0.4)",
+          },
+          darkSquareStyle: { backgroundColor: "#7c5b3a" },
+          lightSquareStyle: { backgroundColor: "#e8d8b8" },
+        }}
+      />
     </div>
   );
 }

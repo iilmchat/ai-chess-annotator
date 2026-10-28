@@ -336,6 +336,63 @@ button:disabled {
   justify-content: center;
 }
 
+.board-shell {
+  width: 100%;
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+.board-shell > div {
+  width: 100% !important;
+}
+
+.topbar__right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lang-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.lang-switch__button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lang-switch__button--active {
+  background: rgba(56, 189, 248, 0.16);
+  color: #bae6fd;
+}
+
+.actions--inline {
+  margin-top: 0;
+}
+
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 3px;
+  vertical-align: -2px;
+  background: var(--accent);
+  animation: blink 0.9s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
 .board {
   display: grid;
   grid-template-columns: repeat(8, 1fr);

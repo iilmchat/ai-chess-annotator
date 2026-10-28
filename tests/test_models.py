@@ -57,7 +57,7 @@ def test_moves_index_and_embedding_dimension() -> None:
     assert "ix_moves_game_id_ply" in indexes
 
     embedding = Base.metadata.tables["annotated_games"].c.embedding
-    assert getattr(embedding.type, "dim", None) == EMBEDDING_DIM == 1024
+    assert getattr(embedding.type, "dim", None) == EMBEDDING_DIM == 768
 
     level_column = Base.metadata.tables["users"].c.level
     assert level_column.nullable is False

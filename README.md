@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-195_passed-brightgreen.svg)](docs/development/RELEASES.md)
-[![Frontend tests](https://img.shields.io/badge/frontend_tests-14_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-205_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Frontend tests](https://img.shields.io/badge/frontend_tests-20_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
 > **Ассистент-комментатор шахматных партий.** Загрузите PGN — получите
@@ -108,14 +108,14 @@ ChessAnnotator — веб-приложение с API, которое прини
 | Слой | Технологии |
 |---|---|
 | **Backend** | Python 3.12, FastAPI, `python-chess`, собственный async UCI-клиент Stockfish, Pydantic, structlog |
-| **Frontend** | React 19, Vite 6, TypeScript, чистый CSS (без UI-библиотек) |
+| **Frontend** | React 19, Vite 6, TypeScript, `react-chessboard` 5.12.1, `chess.js`, `react-i18next` (RU/EN), Zustand |
 | **Данные** | PostgreSQL 17 + **pgvector**, SQLAlchemy 2 + Alembic |
 | **Очереди** | `arq` (задел), Redis 7 |
 | **Движки** | Stockfish 17 (LC0 — Backlog T-101) |
 | **AI / LLM** | Локально: LM Studio + Qwen3-4B. Облако: DeepSeek |
-| **RAG** | `pgvector`, хеш-эмбеддинги 1024 (bge-m3 — KI-025) |
+| **RAG** | `pgvector`, LM Studio `text-embedding-nomic-embed-text-v1.5` (768, L2); hash — fallback тестов |
 | **Хранилище** | локальная ФС (S3 — Backlog) |
-| **Инфраструктура** | Docker Compose, OpenTelemetry-зависимости (трейсинг — Phase 7), без SSE в v0.1.0 |
+| **Инфраструктура** | Docker Compose, OpenTelemetry-зависимости (трейсинг — Phase 7), SSE-стриминг |
 | **Качество** | pytest, Vitest 2, `ruff`, `mypy` |
 
 ---
@@ -206,24 +206,25 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP; качество LLM ниже 7/10 — KI-030) |
-| Итерация | **14 — LLM-eval, Docker production, документация MVP**; итерации 1–13 закрыты |
-| Backend-тесты | **195 passed, 1 xfailed** (21 файл; `xfailed` — маркер KI-012) |
-| Frontend-тесты | **14 passed** (2 файла, Vitest) |
+| Итерация | **15 — синхронизация UI + SSE**; итерации 1–14 закрыты |
+| Backend-тесты | **205 passed, 1 xfailed** (23 файла; `xfailed` — маркер KI-012) |
+| Frontend-тесты | **20 passed** (4 файла: chess.js FEN, react-chessboard-обвязка, SSE-парсер, форматирование; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
-| Таблиц в БД | **8** (`alembic` ревизия `b802598c3778`) |
+| Таблиц в БД | **8** (3 ревизии, head `d2e3f4a5b6c7`; `annotated_games.embedding vector(768)`) |
 | Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
 | Engine | Stockfish 17 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; пул из 4 процессов |
-| API | `POST /v1/analyze` (PGN + уровень → ходы с оценками, мотивами, `fen`, `recommended_move`), `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, `POST /v1/chat`; SLA 53 полухода «клуб» ≈ 15 с; rate limit 10/мин |
+| API | `POST /v1/analyze`, `GET /v1/games/{id}`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, `POST /v1/chat`, SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest |
 | LLM | `beginner`/`club` → LM Studio (`qwen/qwen3-4b-2507`), `gm` → DeepSeek (`deepseek-chat`); таймауты, ретраи, токены, прогрев; локальный комментарий 15–120 с |
 | Prompts/Validator | Промпты 3 уровней (SAN без Markdown); пакет фактов (до 10 моментов); валидатор легальности SAN с retry |
 | Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `PATCH` пишет правку в `edits` |
 | Chat | `POST /v1/chat`: вопрос → контекст анализа → LLM → валидатор → `{reply, tokens_used}` |
-| Frontend | React 19 + Vite: PGN, доска из FEN, ходы/оценки/мотивы, комментарий с редактором, чат; статика из `web/dist` |
-| RAG | `POST /v1/ingest` (PGN, до 5 МБ) → `annotated_games` (эмбеддинг 1024); `find_similar_positions` по FEN; контекст для `gm` |
+| Frontend | React 19 + Vite: `react-chessboard` 5.12.1, FEN из PGN через `chess.js`, RU/EN, Zustand + sessionStorage; комментарий/чат стримятся и печатаются постепенно |
+| RAG | `POST /v1/ingest` (PGN, до 5 МБ, `X-Admin-Token`) → `annotated_games` (LM Studio 768); `find_similar_positions` по FEN; контекст для `gm` |
 | Motifs | Проходные пешки, слабые поля, открытые линии/диагонали, безопасность короля, вилки/связки, мат — в таблице `motifs` (до 6 на позицию) |
 | Policy | `choose_recommended_move`: gm — топ-1, club — альтернатива при разнице < 20 cp, beginner — фильтр раннего ферзя и зевков |
 | LLM-eval | 5 партий × club/gm, 3 шкалы; **5.19/10** (9 из 10), отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md); ниже 7/10 — KI-030 |
-| KI-реестр | **30** записей: 23 Open, 7 Closed (KI-008, KI-009, KI-014, KI-018, KI-020, KI-022, KI-029) |
+| Streaming | SSE `/v1/commentary/stream` и `/v1/chat/stream`: `meta`/`delta`/`done`/`error`, финальная SAN-валидация; UI печатает постепенно |
+| KI-реестр | **30** записей: 18 Open, 12 Closed (KI-008, KI-009, KI-014, KI-018, KI-020, KI-022, KI-024…KI-029) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, docker build |
 | Docker | multi-stage образ (Node → Python + SPA), `docker-compose.prod.yml`, loopback-порты БД/Redis; публикация в GHCR — T-027 |
 

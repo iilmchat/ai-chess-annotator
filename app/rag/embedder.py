@@ -1,19 +1,9 @@
-"""Эмбеддинги для RAG (T-017).
+"""Эмбеддинги для RAG: LM Studio (768) и детерминированный fallback.
 
-Пока используется **детерминированная заглушка** `HashEmbedder` (bag-of-words
-hashing, 1024 измерения): она не требует torch/sentence-transformers и даёт
-стабильные векторы для тестов и для поиска по точной/почти точной позиции.
-
-Почему не `bge-m3` и не LM Studio:
-
-* `bge-m3` тянет `sentence-transformers` + torch (гигабайты зависимостей);
-* единственная embedding-модель в LM Studio — `text-embedding-nomic-embed-text-v1.5`
-  с размерностью 768, а колонка `annotated_games.embedding` — `vector(1024)`
-  из SPEC §4 (менять схему ради заглушки не хочется).
-
-Поэтому хеш-эмбеддер по **FEN позиции** (именно её ищет retrieval), а текст
-аннотации хранится отдельно в `annotation_text`. Замена на реальные
-эмбеддинги — KI-025.
+Production использует OpenAI-совместимый endpoint LM Studio
+`POST /v1/embeddings` с моделью `text-embedding-nomic-embed-text-v1.5`
+(768 измерений, L2-нормализация). `HashEmbedder` оставлен как
+детерминированный fallback для тестов/CI и аварийного режима.
 """
 
 from __future__ import annotations
@@ -21,18 +11,27 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from typing import Protocol
+from typing import Any, Protocol
+
+import httpx
+import structlog
+
+from app.config import Settings, get_settings
+from app.errors import LLMError
 
 __all__ = [
     "DIMENSION",
     "Embedder",
     "HashEmbedder",
+    "LMStudioEmbedder",
     "get_embedder",
     "position_document",
 ]
 
-#: Размерность совпадает с `annotated_games.embedding` (SPEC §4).
-DIMENSION = 1024
+logger = structlog.get_logger(__name__)
+
+#: Размерность совпадает с `annotated_games.embedding` (после миграции на 768).
+DIMENSION = 768
 
 _TOKEN_RE = re.compile(r"[0-9a-zа-яё+#=]+")
 
@@ -49,12 +48,7 @@ class Embedder(Protocol):
 
 
 class HashEmbedder:
-    """Детерминированный хеш-эмбеддер (заглушка до реальной модели).
-
-    Каждый токен отображается в измерение по blake2b-хешу со знаком; вектор
-    нормализуется. Одинаковый FEN → одинаковый вектор; близкие позиции
-    делят токены (фигуры/поля) и потому ближе по косинусу.
-    """
+    """Детерминированный хеш-эмбеддер (fallback для тестов/CI)."""
 
     def __init__(self, dimension: int = DIMENSION) -> None:
         if dimension < 1:
@@ -72,10 +66,89 @@ class HashEmbedder:
             index = int.from_bytes(digest[:4], "big") % self._dimension
             sign = 1.0 if digest[4] & 1 else -1.0
             vector[index] += sign
-        norm = math.sqrt(sum(value * value for value in vector))
-        if norm == 0.0:
-            return vector
-        return [value / norm for value in vector]
+        return _normalize(vector)
+
+
+class LMStudioEmbedder:
+    """Эмбеддер через OpenAI-совместимый `/embeddings` LM Studio."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str | None = None,
+        dimension: int = DIMENSION,
+        timeout_s: float = 60.0,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        if not base_url:
+            raise ValueError("base_url не может быть пустым")
+        if not model:
+            raise ValueError("model не может быть пустым")
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._api_key = api_key
+        self._dimension = dimension
+        self._timeout_s = timeout_s
+        self._client = client
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    @property
+    def endpoint(self) -> str:
+        return f"{self._base_url}/embeddings"
+
+    async def embed(self, text: str) -> list[float]:
+        payload: dict[str, Any] = {"model": self._model, "input": text}
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        try:
+            if self._client is not None:
+                response = await self._client.post(
+                    self.endpoint, json=payload, headers=headers
+                )
+            else:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(self._timeout_s)
+                ) as client:
+                    response = await client.post(
+                        self.endpoint, json=payload, headers=headers
+                    )
+        except httpx.HTTPError as exc:
+            raise LLMError(f"lmstudio embeddings: сеть недоступна: {exc}") from exc
+
+        if response.status_code != httpx.codes.OK:
+            raise LLMError(
+                f"lmstudio embeddings: HTTP {response.status_code}: "
+                f"{response.text[:300]}"
+            )
+        try:
+            data = response.json()
+            raw = data["data"][0]["embedding"]
+            vector = [float(value) for value in raw]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise LLMError(
+                "lmstudio embeddings: неожиданный ответ "
+                f"{response.text[:300]}"
+            ) from exc
+        if len(vector) != self._dimension:
+            raise LLMError(
+                f"lmstudio embeddings: ожидалось {self._dimension} измерений, "
+                f"получено {len(vector)}"
+            )
+        return _normalize(vector)
+
+
+def _normalize(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0.0:
+        return vector
+    return [value / norm for value in vector]
 
 
 def position_document(fen: str) -> str:
@@ -83,9 +156,20 @@ def position_document(fen: str) -> str:
     return f"fen {fen}\n{fen}"
 
 
-_EMBEDDER: Embedder = HashEmbedder()
-
-
-def get_embedder() -> Embedder:
-    """Текущий эмбеддер (точка расширения для bge-m3)."""
-    return _EMBEDDER
+def get_embedder(settings: Settings | None = None) -> Embedder:
+    """Выбрать эмбеддер: `lmstudio` (prod) или `hash` (тесты/CI)."""
+    cfg = settings or get_settings()
+    provider = cfg.embedding_provider.strip().lower()
+    if provider == "hash":
+        return HashEmbedder(cfg.embedding_dim)
+    if provider == "lmstudio":
+        return LMStudioEmbedder(
+            base_url=cfg.vllm_base_url,
+            model=cfg.embedding_model,
+            api_key=cfg.vllm_api_key,
+            dimension=cfg.embedding_dim,
+            timeout_s=cfg.llm_timeout_s,
+        )
+    raise ValueError(
+        f"Неизвестный EMBEDDING_PROVIDER={provider!r}; ожидается lmstudio или hash"
+    )

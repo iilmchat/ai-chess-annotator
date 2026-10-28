@@ -99,8 +99,8 @@
   - Открытые аннотированные партии (Lichess Studies, открытые книги).
   - Своя растущая база через модуль 7.
 - **Хранилище**: PostgreSQL + `pgvector`. Эмбеддинги позиций — через
-  `chess2vec` или собственный энкодер (или текстовые эмбеддинги аннотаций
-  через `text-embedding-3-large` / локальный `bge-m3`).
+  LM Studio `text-embedding-nomic-embed-text-v1.5` (768, L2); задел на
+  `bge-m3` / `text-embedding-3-large`.
 - **Retrieval**: top-k похожих позиций + их аннотации → передаются в LLM
   как «контекст гроссмейстера».
 
@@ -172,7 +172,7 @@ motifs(id, move_id, type, description, importance SMALLINT)
 
 -- Аннотированные партии (для RAG)
 annotated_games(id, source, pgn, white, black, event, year,
-                annotation_text TEXT, embedding vector(1024))
+                annotation_text TEXT, embedding vector(768))
 
 -- Retrieval-кеш
 retrieval_cache(id, fen_hash, top_k_ids INT[], created_at)
@@ -262,7 +262,7 @@ edits(id, commentary_id, original_text, edited_text, editor_id, created_at)
 | **Backend** | Python 3.12 + FastAPI, `python-chess`, `stockfish` (py), `asyncio` |
 | **Движки** | Stockfish 17+, Leela Chess Zero (по уровню) |
 | **LLM** | Локально: vLLM + Qwen3 / Llama-3.1. Облако: DeepSeek-V3.2 / GPT-5 / Claude Sonnet |
-| **RAG** | PostgreSQL + `pgvector`, `bge-m3` / `text-embedding-3-large` |
+| **RAG** | PostgreSQL + `pgvector`, LM Studio `nomic-embed` 768 (bge-m3 — задел) |
 | **Кэш/очереди** | Redis + Celery (или `arq`) |
 | **Frontend** | React / Next.js + SSE для стриминга |
 | **Инфра** | Docker Compose (dev), Kubernetes (prod), GitHub Actions CI/CD |

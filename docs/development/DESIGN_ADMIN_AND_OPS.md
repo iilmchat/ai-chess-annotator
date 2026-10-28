@@ -93,11 +93,10 @@
 
 Ограничения, которые нужно учесть:
 
-- **KI-025:** эмбеддинги — хеш-заглушка; семантический кэш сначала
-  работает в exact-режиме, семантика включается после реального
-  эмбеддера.
-- **KI-028:** чат синхронный, без SSE; guardrails не должны добавлять
-  заметную задержку.
+- **KI-025 (закрыт):** реальный `LMStudioEmbedder` 768 уже подключён;
+  semantic cache может использовать nomic-embed.
+- **KI-028 (закрыт):** чат и комментарий стримятся через SSE; guardrails
+  не должны добавлять заметную задержку.
 - **KI-023:** валидатор проверяет легальность, не семантику; кэш обязан
   хранить только ответы, прошедшие валидатор, но не «исправлять» смысл.
 
@@ -378,7 +377,7 @@ CREATE TABLE semantic_cache (
     prompt_slug     VARCHAR(64),
     prompt_version  INTEGER,
     model           VARCHAR(128),
-    embedding       VECTOR(1024),
+    embedding       VECTOR(768),
     response        JSONB NOT NULL,
     tokens_saved    INTEGER NOT NULL DEFAULT 0,
     cost_saved_usd  NUMERIC(12,6) NOT NULL DEFAULT 0,
@@ -398,7 +397,7 @@ CREATE INDEX ix_semantic_cache_embedding
 - `response` для engine — сериализованный `MoveAnalysis`; для LLM —
   `{text, validated, model}`.
 - Векторный индекс — HNSW (лучше recall/латентность на малых объёмах, чем
-  ivfflat); включается после реального эмбеддера (KI-025).
+  ivfflat); эмбеддинги 768 от LM Studio уже доступны.
 - Чистка — job раз в час: `DELETE ... WHERE expires_at < now()`.
 - Истёкшая запись не должна блокировать новую с тем же `request_hash`:
   вставка идёт через `INSERT ... ON CONFLICT (request_hash) DO UPDATE`
@@ -850,9 +849,9 @@ Content-Type: application/json
 ### 8.2. Два режима
 
 1. **Exact (v1, доступен сейчас).** `request_hash` — sha256 от
-   канонического ключа. Работает с текущим `HashEmbedder` (KI-025) и уже
+   канонического ключа. Работает с текущим 768-мерным эмбеддером и уже
    даёт выигрыш на повторных запросах.
-2. **Semantic (v2, после KI-025).** Для engine: эмбеддинг
+2. **Semantic (v2).** Для engine: эмбеддинг
    нормализованного FEN (без полей счётчиков), поиск по HNSW с
    `cosine_distance <= 0.03`; для LLM — эмбеддинг пакета фактов +
    уровня. Порог настраивается, по умолчанию консервативный: лучше
@@ -1100,8 +1099,7 @@ PR + миграция + тесты; выкатка на dev → staging → prod
    требований заказчика.
 3. **Langfuse:** self-hosted или только OTel + Grafana? Langfuse даёт
    prompt/response-аналитику, но хранит чувствительные тексты.
-4. **Семантика кэша:** какой эмбеддер и порог? Зависит от KI-025
-   (bge-m3 1024 vs nomic 768).
+4. **Семантика кэша:** какой порог cosine для nomic-embed 768?
 5. **Прайс-лист:** ручной `system_settings` или внешний биллинг-API?
 6. **Multi-tenant:** нужна ли изоляция по организациям уже в T-028 или
    это T-111?
@@ -1115,8 +1113,7 @@ PR + миграция + тесты; выкатка на dev → staging → prod
 - [SPEC.md](SPEC.md) — архитектура и §10 Non-functional.
 - [TODO.md](../../TODO.md) — Фаза 7 (T-028…T-035).
 - [RULES.md](RULES.md) — процесс, тесты, безопасность.
-- [KNOWN_ISSUES.md](../KNOWN_ISSUES.md) — KI-021, KI-023, KI-025,
-  KI-026, KI-028.
+- [KNOWN_ISSUES.md](../KNOWN_ISSUES.md) — KI-021, KI-023, KI-030.
 - [starlette-admin: SQLAlchemy integration](https://jowilf.github.io/starlette-admin/integrations/sqlalchemy/)
   — `AsyncEngine`/`async_sessionmaker`, `ModelView`.
 - [starlette-admin: Authentication](https://jowilf.github.io/starlette-admin/user-guide/auth/)

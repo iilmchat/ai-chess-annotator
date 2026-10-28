@@ -63,6 +63,50 @@ def _settings(**overrides: Any) -> Settings:
     return Settings(**base)
 
 
+async def test_stream_generate_parses_sse_deltas() -> None:
+    requests: list[httpx.Request] = []
+    body = (
+        'data: {"choices":[{"delta":{"content":"Привет"}}]}\n\n'
+        'data: {"choices":[{"delta":{"content":", шахматы!"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            content=body.encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    llm = OpenAICompatibleClient(
+        base_url="http://127.0.0.1:8034/v1",
+        model="qwen3-8b",
+        api_key="lm-studio",
+        client=_mock_client(handler),
+        max_tokens=32,
+    )
+    chunks = [chunk async for chunk in llm.stream_generate("prompt")]
+
+    assert chunks == ["Привет", ", шахматы!"]
+    payload = json.loads(requests[0].content)
+    assert payload["stream"] is True
+    assert payload["model"] == "qwen3-8b"
+
+
+async def test_stream_generate_http_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="bad model")
+
+    llm = OpenAICompatibleClient(
+        base_url="http://127.0.0.1:8034/v1",
+        model="qwen3-8b",
+        client=_mock_client(handler),
+    )
+    with pytest.raises(LLMError, match="HTTP 400"):
+        _ = [chunk async for chunk in llm.stream_generate("prompt")]
+
+
 # --- клиент ---------------------------------------------------------------
 
 

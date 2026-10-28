@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api.ratelimit import RateLimitMiddleware, RedisRateLimiter
-from app.api.v1 import analyze, chat, commentary, health, ingest
+from app.api.v1 import analyze, chat, commentary, games, health, ingest
 from app.config import Settings, get_settings
 from app.db.session import engine as db_engine
 from app.engine.pool import EnginePool
@@ -98,7 +98,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         protected=[
             ("POST", f"{cfg.api_prefix}/analyze"),
             ("POST", f"{cfg.api_prefix}/commentary"),
+            ("POST", f"{cfg.api_prefix}/commentary/stream"),
             ("POST", f"{cfg.api_prefix}/chat"),
+            ("POST", f"{cfg.api_prefix}/chat/stream"),
             ("POST", f"{cfg.api_prefix}/ingest"),
         ],
     )
@@ -114,6 +116,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router, prefix=cfg.api_prefix)
     app.include_router(analyze.router, prefix=cfg.api_prefix)
+    app.include_router(games.router, prefix=cfg.api_prefix)
     app.include_router(commentary.router, prefix=cfg.api_prefix)
     app.include_router(chat.router, prefix=cfg.api_prefix)
     app.include_router(ingest.router, prefix=cfg.api_prefix)

@@ -146,12 +146,17 @@ async def test_find_similar_positions_validates_fen(session: AsyncSession) -> No
 # --- HTTP /v1/ingest ------------------------------------------------------
 
 
+def _admin_headers() -> dict[str, str]:
+    return {"X-Admin-Token": get_settings().admin_api_key or ""}
+
+
 def test_ingest_endpoint_loads_games_and_retrieval_finds_them() -> None:
     with _client() as client:
         response = client.post(
             "/v1/ingest",
             files={"file": ("games.pgn", TWO_GAMES_PGN.encode("utf-8"), "text/plain")},
             data={"source": "api-test"},
+            headers=_admin_headers(),
         )
 
         assert response.status_code == 200, response.text
@@ -175,11 +180,29 @@ def test_ingest_endpoint_loads_games_and_retrieval_finds_them() -> None:
 def test_ingest_rejects_empty_file() -> None:
     with _client() as client:
         response = client.post(
-            "/v1/ingest", files={"file": ("empty.pgn", b"", "text/plain")}
+            "/v1/ingest",
+            files={"file": ("empty.pgn", b"", "text/plain")},
+            headers=_admin_headers(),
         )
 
     assert response.status_code == 400
     assert response.json()["code"] == "invalid_pgn"
+
+
+def test_ingest_requires_admin_token() -> None:
+    with _client() as client:
+        response = client.post(
+            "/v1/ingest",
+            files={"file": ("games.pgn", TWO_GAMES_PGN.encode("utf-8"), "text/plain")},
+        )
+        bad = client.post(
+            "/v1/ingest",
+            files={"file": ("games.pgn", TWO_GAMES_PGN.encode("utf-8"), "text/plain")},
+            headers={"X-Admin-Token": "wrong"},
+        )
+
+    assert response.status_code == 401
+    assert bad.status_code == 401
 
 
 # --- RAG-контекст для комментария ----------------------------------------
