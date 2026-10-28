@@ -41,13 +41,14 @@
 | [reports/iteration-4/](development/reports/iteration-4/) | Пошаговые отчёты итерации 4 — API `/v1/analyze` и пул (STEP-01…STEP-04) |
 | [reports/iteration-5/](development/reports/iteration-5/) | Пошаговые отчёты итерации 5 — мотивы и Policy (STEP-01…STEP-04) |
 | [reports/iteration-6/](development/reports/iteration-6/) | Пошаговые отчёты итерации 6 — API и LLM-адаптер (STEP-01…STEP-04) |
+| [reports/iteration-7/](development/reports/iteration-7/) | Пошаговые отчёты итерации 7 — промпты и валидатор (STEP-01…STEP-04) |
 
 ### Состояние проекта
 
 | Документ | Что внутри |
 | :--- | :--- |
 | [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секция `[Unreleased]` |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-022 со статусами, severity и планом закрытия |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-024 со статусами, severity и планом закрытия |
 
 ### Тесты и данные
 
@@ -63,6 +64,10 @@
 | [../tests/integration/test_api_analyze.py](../tests/integration/test_api_analyze.py) | 4 интеграционных теста `/v1/analyze`: SLA ≤ 30 с, БД, мотивы, multipv, `moves`/`recommended_move` (T-009…T-012) |
 | [../tests/unit/test_llm.py](../tests/unit/test_llm.py) | 13 тестов LLM-адаптера на моках: маршрутизация, ретраи, таймаут, парсинг (T-013) |
 | [../tests/integration/test_llm_live.py](../tests/integration/test_llm_live.py) | 2 живых теста: LM Studio (club) и DeepSeek (gm); скипаются без провайдера (T-013) |
+| [../tests/unit/test_prompts.py](../tests/unit/test_prompts.py) | 11 тестов промптов и пакета фактов (T-014) |
+| [../tests/unit/test_validator.py](../tests/unit/test_validator.py) | 14 тестов валидатора: SAN-регэксп, легальность, альтернативы (T-015) |
+| [../tests/unit/test_warmup.py](../tests/unit/test_warmup.py) | 3 теста прогрева LLM при старте (KI-022) |
+| [../tests/integration/test_generation.py](../tests/integration/test_generation.py) | Живой E2E: пакет фактов → LM Studio → валидатор (T-014/T-015) |
 | [../tests/fixtures/example.pgn](../tests/fixtures/example.pgn) | Партия Гукеш — Каймер (Прага 2024), `1.d4 Nf6 2.c4 e6 … 27.Bg6+ 1-0`, ECO `E21` |
 | [../tests/fixtures/test_game.pgn](../tests/fixtures/test_game.pgn) | Та же партия с `Test White` / `Test Black` и без `[ECO]` — проверка метаданных и fallback-а ECO |
 | [../tests/fixtures/README.md](../tests/fixtures/README.md) | Инварианты обеих фикстур (полуходы, результат, ECO, фазы) |

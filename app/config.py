@@ -65,8 +65,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     #: Таймауты и ретраи LLM-запросов.
     #: Верхняя граница ответа: без неё LM Studio может генерировать «до конца».
-    llm_max_tokens: int = 512
-    llm_timeout_s: float = 60.0
+    llm_max_tokens: int = 1024
+    #: Прогрев локальной модели при старте приложения (KI-022).
+    llm_warmup_enabled: bool = True
+    llm_timeout_s: float = 120.0
     llm_max_retries: int = 2
     llm_retry_backoff_s: float = 0.5
 

@@ -8,7 +8,23 @@
 
 ### Added
 
-- **`/v1/analyze`: разбор по ходам (T-012).** В ответ добавлен `moves`:
+- **Системные промпты (T-014):** `app/prompts/{beginner,club,gm}.txt` —
+  строгие правила (только факты из пакета, SAN без Markdown, фиксированная
+  длина), загрузчик `load_system_prompt(level)` с кешем.
+- **Пакет фактов:** `build_fact_package(game, analyses, level)` —
+  метаданные, ходы партии, до 10 ключевых моментов с оценкой, классом,
+  лучшим ходом, рекомендацией Policy, PV в SAN и мотивами.
+- **Прогрев локальной LLM (KI-022 закрыт):** фоновая задача в lifespan
+  отправляет короткий запрос в LM Studio при старте; ошибки не ломают
+  старт, задача отменяется при остановке.
+- **Валидатор ответов LLM (T-015):** `app/engine/validator.py` —
+  `extract_moves_from_text` (SAN-регэксп), `validate_moves` (проигрывание
+  на доске + проверка альтернатив по позициям партии),
+  `validate_llm_response`.
+- **Тесты:** `tests/unit/test_prompts.py` (11),
+  `tests/unit/test_validator.py` (14), `tests/unit/test_warmup.py` (3),
+  живой E2E `tests/integration/test_generation.py` (1).
+- **``/v1/analyze``: разбор по ходам (T-012).** В ответ добавлен `moves`:
   `ply`, `san`, `uci`, `eval_cp`, `mate`, `best_move_san`, `delta_cp`,
   `classification`, `motifs` и `recommended_move` (san/uci/eval_cp/mate) —
   рекомендация Policy Layer под запрошенный уровень.

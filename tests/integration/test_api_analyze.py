@@ -80,7 +80,9 @@ pytestmark = [
 @pytest.fixture(scope="module")
 def client() -> Iterator[TestClient]:
     # Высокий лимит: тесты делают несколько запросов подряд.
-    settings = get_settings().model_copy(update={"rate_limit_requests": 1000})
+    settings = get_settings().model_copy(
+        update={"rate_limit_requests": 1000, "llm_warmup_enabled": False}
+    )
     app = create_app(settings)
     with TestClient(app) as test_client:
         yield test_client

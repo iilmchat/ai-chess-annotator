@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import redis.asyncio as aioredis
 import structlog
@@ -22,6 +23,7 @@ from app.api.v1 import analyze, health
 from app.config import Settings, get_settings
 from app.engine.pool import EnginePool
 from app.errors import AppError, EngineError
+from app.llm.warmup import warmup_local_llm
 
 logger = structlog.get_logger(__name__)
 
@@ -46,15 +48,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if cfg.rate_limit_enabled
             else None
         )
+        # KI-022: грузим локальную модель в фоне, чтобы первый реальный
+        # запрос не ждал ~12 с. Отсутствие LM Studio не ломает старт.
+        warmup_task: asyncio.Task[bool] | None = None
+        if cfg.llm_warmup_enabled:
+            warmup_task = asyncio.create_task(
+                warmup_local_llm(cfg), name="llm-warmup"
+            )
+            app.state.llm_warmup = warmup_task
         logger.info(
             "app_started",
             env=cfg.app_env,
             engine_pool_size=cfg.engine_pool_size,
             rate_limit=cfg.rate_limit_enabled,
+            llm_warmup=cfg.llm_warmup_enabled,
         )
         try:
             yield
         finally:
+            if warmup_task is not None and not warmup_task.done():
+                warmup_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await warmup_task
             await app.state.engine_pool.aclose()
             await redis_client.aclose()
             logger.info("app_stopped")
