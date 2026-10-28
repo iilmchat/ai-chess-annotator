@@ -78,6 +78,7 @@ def get_llm_client(
             retry_backoff_s=cfg.llm_retry_backoff_s,
             client=client,
             max_tokens=cfg.llm_max_tokens,
+            temperature=cfg.llm_temperature,
         )
 
     api_key = (cfg.deepseek_api_key or "").strip()
@@ -95,4 +96,5 @@ def get_llm_client(
         retry_backoff_s=cfg.llm_retry_backoff_s,
         client=client,
         max_tokens=cfg.llm_max_tokens,
+        temperature=cfg.llm_temperature,
     )

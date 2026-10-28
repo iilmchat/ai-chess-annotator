@@ -43,13 +43,14 @@
 | [reports/iteration-6/](development/reports/iteration-6/) | Пошаговые отчёты итерации 6 — API и LLM-адаптер (STEP-01…STEP-04) |
 | [reports/iteration-7/](development/reports/iteration-7/) | Пошаговые отчёты итерации 7 — промпты и валидатор (STEP-01…STEP-04) |
 | [reports/iteration-8/](development/reports/iteration-8/) | Отчёты итерации 8 — комментарий (STEP-01…STEP-02) |
+| [reports/iteration-9/](development/reports/iteration-9/) | Отчёты итерации 9 — RAG (STEP-01…STEP-02) |
 
 ### Состояние проекта
 
 | Документ | Что внутри |
 | :--- | :--- |
 | [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секция `[Unreleased]` |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-024 со статусами, severity и планом закрытия |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-026 со статусами, severity и планом закрытия |
 
 ### Тесты и данные
 
@@ -70,6 +71,8 @@
 | [../tests/unit/test_warmup.py](../tests/unit/test_warmup.py) | 3 теста прогрева LLM при старте (KI-022) |
 | [../tests/integration/test_generation.py](../tests/integration/test_generation.py) | Живой E2E: пакет фактов → LM Studio → валидатор (T-014/T-015) |
 | [../tests/integration/test_api_commentary.py](../tests/integration/test_api_commentary.py) | 7 тестов `/v1/commentary`: реконструкция анализа, retry, 404/422, живой прогон (T-016) |
+| [../tests/unit/test_rag.py](../tests/unit/test_rag.py) | 6 тестов хеш-эмбеддера (T-017) |
+| [../tests/integration/test_rag.py](../tests/integration/test_rag.py) | 9 тестов: ingest, retrieval по FEN, `/v1/ingest`, RAG в gm-промпте (T-017) |
 | [../tests/fixtures/example.pgn](../tests/fixtures/example.pgn) | Партия Гукеш — Каймер (Прага 2024), `1.d4 Nf6 2.c4 e6 … 27.Bg6+ 1-0`, ECO `E21` |
 | [../tests/fixtures/test_game.pgn](../tests/fixtures/test_game.pgn) | Та же партия с `Test White` / `Test Black` и без `[ECO]` — проверка метаданных и fallback-а ECO |
 | [../tests/fixtures/README.md](../tests/fixtures/README.md) | Инварианты обеих фикстур (полуходы, результат, ECO, фазы) |

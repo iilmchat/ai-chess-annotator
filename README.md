@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-165_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-181_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-0_yet-orange.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -208,8 +208,8 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*` и `/runs/*` (SSE) на
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP, в разработке) |
-| Итерация | **8 — `POST /v1/commentary` (T-016)** завершена; итерации 1–7 закрыты |
-| Backend-тесты | **165 passed, 1 xfailed** (16 файлов; `xfailed` — маркер KI-012) |
+| Итерация | **9 — RAG и ingest (T-017)** завершена; итерации 1–8 закрыты |
+| Backend-тесты | **181 passed, 1 xfailed** (18 файлов; `xfailed` — маркер KI-012) |
 | Frontend-тесты | **0** (0 файлов) — CI использует `--passWithNoTests`, см. KI-008 |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **8** (`alembic` ревизия `b802598c3778`) |
@@ -219,10 +219,11 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*` и `/runs/*` (SSE) на
 | LLM | `beginner`/`club` → LM Studio (`qwen/qwen3-4b-2507`, ≈1 c), `gm` → DeepSeek (`deepseek-chat`); таймауты, ретраи, учёт токенов, прогрев при старте |
 | Prompts/Validator | Промпты 3 уровней (SAN без Markdown); пакет фактов (до 10 моментов); валидатор легальности ходов из ответа LLM |
 | Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; при нелегальных ходах — 502, запись не создаётся |
+| RAG | `POST /v1/ingest` (PGN, до 5 МБ) → `annotated_games` (эмбеддинг 1024); `find_similar_positions` по FEN; контекст подмешивается в комментарий для `gm` |
 | Motifs | Проходные пешки, слабые поля, открытые линии/диагонали, безопасность короля, вилки/связки, мат — в таблице `motifs` (до 6 на позицию) |
 | Policy | `choose_recommended_move`: gm — топ-1, club — альтернатива при разнице < 20 cp, beginner — фильтр раннего ферзя и зевков |
 | Ключевых моментов в анализе | определяется движком (delta ≥ 200 cp) |
-| KI-реестр | **24** записи: 20 Open, 4 Closed (KI-014, KI-018, KI-020, KI-022) |
+| KI-реестр | **26** записей: 22 Open, 4 Closed (KI-014, KI-018, KI-020, KI-022) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test |
 | Docker | multi-stage образ + `docker-compose.prod.yml`, публикация в GHCR |
 

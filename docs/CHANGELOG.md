@@ -8,6 +8,14 @@
 
 ### Added
 
+- **RAG (T-017):** `app/rag/` — хеш-эмбеддер (1024, по FEN), ingest
+  аннотированных партий (`parse_pgn_games`, `ingest_pgn_text`), поиск
+  похожих позиций (`find_similar_positions`, косинус через pgvector),
+  RAG-контекст для уровня `gm` в `/v1/commentary`.
+- **`POST /v1/ingest`:** загрузка PGN (multipart, до 5 МБ, UTF-8/cp1251),
+  парсинг нескольких партий, сохранение аннотаций и эмбеддингов.
+- **Тесты:** `tests/unit/test_rag.py` (6), `tests/integration/test_rag.py`
+  (9: ingest, retrieval, `/v1/ingest`, RAG в промпте gm, не в club).
 - **Комментарий (T-016):** `POST /v1/commentary` — по `analysis_id` берёт
   партию и анализ из БД, собирает пакет фактов, генерирует текст, проверяет
   ходы валидатором (до 2 retry), сохраняет в `commentaries` с токенами и
@@ -167,6 +175,8 @@
 
 ### Fixed
 
+- Валидатор учитывает позиции PV-линий (xtra_fens): цитаты вариантов из пакета фактов больше не считаются нелегальными ходами; /v1/commentary передаёт их автоматически.
+- Температура LLM вынесена в настройку llm_temperature (в тестовой генерации — 0.0).
 - Пул соединений asyncpg закрывается в lifespan (ngine.dispose()): без этого несколько TestClient в одном процессе переиспользовали соединения из закрытого event loop и получали 500.
 - Alembic-миграция доведена руками: `import pgvector`,
   `CREATE EXTENSION vector`, явные `create/drop` нативного enum `level`

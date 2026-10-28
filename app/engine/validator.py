@@ -67,6 +67,7 @@ def validate_moves(
     initial_fen: str,
     *,
     mainline_san: Sequence[str] | None = None,
+    extra_fens: Sequence[str] | None = None,
 ) -> tuple[bool, list[str]]:
     """Проверить ходы на доске.
 
@@ -75,15 +76,20 @@ def validate_moves(
         initial_fen: стартовая позиция партии.
         mainline_san: ходы партии (SAN). Позволяет считать легальными
             альтернативы, упомянутые для других позиций партии.
+        extra_fens: дополнительные позиции (например, из PV-линий движка):
+            ход, легальный в них, считается корректным — модель имеет право
+            цитировать вариант из пакета фактов.
 
     Returns:
         ``(все_легальны, список_нелегальных)`` — нелегальные без повторов.
 
     Raises:
-        InvalidFenError: `initial_fen` некорректен.
+        InvalidFenError: `initial_fen` или один из `extra_fens` некорректен.
     """
     start = parse_fen(initial_fen)
     known_positions = _mainline_positions(start, mainline_san)
+    for fen in extra_fens or ():
+        known_positions.append(parse_fen(fen))
 
     cursor = chess.Board(start.fen())
     illegal: list[str] = []
@@ -107,6 +113,7 @@ async def validate_llm_response(
     engine_service: EngineService | None = None,
     *,
     mainline_san: Sequence[str] | None = None,
+    extra_fens: Sequence[str] | None = None,
 ) -> tuple[bool, list[str]]:
     """Извлечь ходы из ответа LLM и проверить их легальность.
 
@@ -122,7 +129,10 @@ async def validate_llm_response(
     """
     # Подпись из постановки; зарезервирован под strict-проверку (T-016).
     return validate_moves(
-        extract_moves_from_text(text), initial_fen, mainline_san=mainline_san
+        extract_moves_from_text(text),
+        initial_fen,
+        mainline_san=mainline_san,
+        extra_fens=extra_fens,
     )
 
 

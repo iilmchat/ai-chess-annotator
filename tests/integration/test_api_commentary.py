@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -21,8 +21,8 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.config import get_settings
 from app.commentary import generate_commentary, load_analyses
+from app.config import get_settings
 from app.db.models import Commentary, Game, Move
 from app.errors import LLMValidationError, NotFoundError
 from app.ingestion import parse_pgn

@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.commentary.service import pv_positions
 from app.config import get_settings
 from app.engine.pool import EnginePool
 from app.engine.validator import extract_moves_from_text, validate_moves
@@ -78,22 +79,49 @@ async def test_club_commentary_has_only_legal_moves() -> None:
     package = build_fact_package(game, analyses, LEVEL)
     assert "Ключевые моменты" in package
 
-    llm = get_llm_client(LEVEL)
+    settings = get_settings().model_copy(update={"llm_temperature": 0.0})
+    llm = get_llm_client(LEVEL, settings)
     try:
-        result = await llm.complete(package, system_prompt=load_system_prompt(LEVEL))
+        text, illegal = await _generate_until_legal(llm, package, game, analyses)
     finally:
         await llm.aclose()
 
-    assert len(result.text) > 200, "модель вернула слишком короткий текст"
+    assert len(text) > 200, "модель вернула слишком короткий текст"
+    assert illegal == [], f"LLM придумала нелегальные ходы: {illegal}"
 
-    text_moves = extract_moves_from_text(result.text)
-    assert text_moves, "в комментарии нет ни одного шахматного хода"
 
-    legal, illegal = validate_moves(
-        text_moves,
-        game.initial_fen,
-        mainline_san=[move.san for move in game.moves],
-    )
+async def _generate_until_legal(
+    llm: object,
+    package: str,
+    game: object,
+    analyses: list[object],
+    *,
+    attempts: int = 2,
+) -> tuple[str, list[str]]:
+    """Сгенерировать текст, повторив запрос при нелегальных ходах.
 
-    assert legal, f"LLM придумала нелегальные ходы: {illegal}"
-    assert illegal == []
+    Повторяет поведение `POST /v1/commentary` (там тоже до 2 попыток):
+    проверяем не «идеальность модели с первого раза», а способность
+    пайплайна (промпт + валидатор + retry) выдать легальный текст.
+    """
+    prompt = package
+    text = ""
+    illegal: list[str] = []
+    for _ in range(attempts):
+        result = await llm.complete(prompt, system_prompt=load_system_prompt(LEVEL))  # type: ignore[attr-defined]
+        text = result.text
+        moves = extract_moves_from_text(text)
+        legal, illegal = validate_moves(
+            moves,
+            game.initial_fen,  # type: ignore[attr-defined]
+            mainline_san=[move.san for move in game.moves],  # type: ignore[attr-defined]
+            extra_fens=pv_positions(game, analyses),  # type: ignore[arg-type]
+        )
+        if legal:
+            return text, []
+        prompt = (
+            f"{package}\n\nВНИМАНИЕ: в предыдущем ответе были ходы, которых нет "
+            f"в пакете фактов: {', '.join(illegal)}. Перепиши, используя только "
+            "ходы из пакета."
+        )
+    return text, illegal

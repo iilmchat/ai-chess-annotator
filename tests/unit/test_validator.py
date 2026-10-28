@@ -95,6 +95,21 @@ def test_castling_and_promotion_are_legal() -> None:
     assert (legal, illegal) == (True, [])
 
 
+def test_extra_fens_allow_pv_moves() -> None:
+    """Ход из PV легален в позиции варианта, хотя не входит в mainline."""
+    board = chess.Board(START)
+    board.push_san("e4")
+    board.push_san("e5")
+    board.push_san("Nf3")
+    pv_fen = board.fen()  # после 1.e4 e5 2.Nf3 — ход чёрных
+
+    legal_without, illegal_without = validate_moves(["Nc6"], START)
+    legal_with, illegal_with = validate_moves(["Nc6"], START, extra_fens=[pv_fen])
+
+    assert (legal_without, illegal_without) == (False, ["Nc6"])
+    assert (legal_with, illegal_with) == (True, [])
+
+
 def test_empty_text_is_legal() -> None:
     assert validate_moves([], START) == (True, [])
 

@@ -41,6 +41,7 @@ __all__ = [
     "generate_commentary",
     "load_analyses",
     "load_game",
+    "pv_positions",
 ]
 
 #: Функция, добавляющая RAG-контекст к пакету фактов (T-017).
@@ -169,7 +170,7 @@ async def generate_commentary(
     owns_client = client is None
     try:
         text, usage, attempts = await _generate_with_validation(
-            llm, package, system_prompt, parsed, cfg.commentary_max_retries
+            llm, package, system_prompt, parsed, analyses, cfg.commentary_max_retries
         )
     finally:
         if owns_client:
@@ -185,17 +186,24 @@ async def _generate_with_validation(
     package: str,
     system_prompt: str,
     parsed: ParsedGame,
+    analyses: list[MoveAnalysis],
     max_retries: int,
 ) -> tuple[str, LLMUsage, int]:
     """Сгенерировать текст; при нелегальных ходах — переспросить (до retry)."""
     mainline = [move.san for move in parsed.moves]
+    # Модель имеет право цитировать PV из пакета фактов — добавляем позиции
+    # этих линий в «разрешённое» множество, иначе валидатор ложно ругается.
+    extra_fens = pv_positions(parsed, analyses)
     illegal: list[str] = []
     for attempt in range(1, max_retries + 2):
         prompt = package if not illegal else _retry_prompt(package, illegal)
         result = await llm.complete(prompt, system_prompt=system_prompt)
         moves = extract_moves_from_text(result.text)
         legal, illegal = validate_moves(
-            moves, parsed.initial_fen, mainline_san=mainline
+            moves,
+            parsed.initial_fen,
+            mainline_san=mainline,
+            extra_fens=extra_fens,
         )
         if legal:
             return result.text, result.usage, attempt
@@ -204,6 +212,34 @@ async def _generate_with_validation(
         "LLM вернула нелегальные ходы после "
         f"{max_retries + 1} попыток: {', '.join(illegal)}"
     )
+
+
+def pv_positions(
+    parsed: ParsedGame, analyses: list[MoveAnalysis], *, limit: int = 8
+) -> list[str]:
+    """Позиции из PV-линий движка (по позиции «до хода» каждого анализа).
+
+    Нужны валидатору: если модель цитирует вариант из пакета фактов, его
+    ходы легальны в этих позициях, хотя и не входят в mainline партии.
+    """
+    positions: list[str] = []
+    for analysis in analyses:
+        if not analysis.lines:
+            continue
+        fen_before = (
+            parsed.initial_fen
+            if analysis.ply <= 1
+            else parsed.moves[analysis.ply - 2].fen
+        )
+        board = chess.Board(fen_before)
+        for uci in analysis.lines[0].pv[:limit]:
+            try:
+                move = board.parse_uci(uci)
+            except ValueError:
+                break
+            board.push(move)
+            positions.append(board.fen())
+    return positions
 
 
 def _retry_prompt(package: str, illegal: list[str]) -> str:

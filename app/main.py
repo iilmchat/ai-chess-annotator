@@ -19,12 +19,13 @@ from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.api.ratelimit import RateLimitMiddleware, RedisRateLimiter
-from app.api.v1 import analyze, commentary, health
+from app.api.v1 import analyze, commentary, health, ingest
 from app.config import Settings, get_settings
 from app.db.session import engine as db_engine
 from app.engine.pool import EnginePool
 from app.errors import AppError, EngineError
 from app.llm.warmup import warmup_local_llm
+from app.rag.context import make_rag_context_builder
 
 logger = structlog.get_logger(__name__)
 
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             cfg.redis_url, decode_responses=True
         )
         app.state.redis = redis_client
+        app.state.rag_context_builder = make_rag_context_builder(cfg)
         app.state.rate_limiter = (
             RedisRateLimiter(
                 redis_client,
@@ -110,6 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router, prefix=cfg.api_prefix)
     app.include_router(analyze.router, prefix=cfg.api_prefix)
     app.include_router(commentary.router, prefix=cfg.api_prefix)
+    app.include_router(ingest.router, prefix=cfg.api_prefix)
     return app
 
 

@@ -594,3 +594,68 @@ KI-001, KI-002, KI-006; они не блокируют продукт)
 
 - **T-017. RAG:** `POST /v1/ingest` (multipart PGN), эмбеддинги,
   `find_similar_positions`, RAG-контекст для `gm` в `/v1/commentary`.
+
+---
+
+## Итерация 9 — RAG и база аннотированных партий (T-017)
+
+**Дата:** 2026-10-28
+**Статус:** ✅ завершена (ingest → retrieval → RAG-контекст для gm)
+**Отчёты шагов:** `docs/development/reports/iteration-9/`
+
+### Что сделано
+
+- [x] **Эмбеддер** `app/rag/embedder.py`: детерминированный
+      `HashEmbedder` (1024 измерения, bag-of-words hashing, L2-нормализация)
+      по нормализованному FEN. Без torch/sentence-transformers.
+- [x] **RAG-сервис** `app/rag/service.py`: `parse_pgn_games`
+      (несколько партий в одном файле), `ingest_pgn_text` (pgn, метаданные,
+      аннотации из комментариев, год, эмбеддинг), `find_similar_positions`
+      (косинусное расстояние через pgvector, `top_k`).
+- [x] **`POST /v1/ingest`** `app/api/v1/ingest.py`: multipart-файл
+      (до 5 МБ, UTF-8/cp1251), ответ `{ingested, ids}`, ошибки 400.
+- [x] **RAG-контекст для `gm`:** `app/rag/context.py` +
+      `app.state.rag_context_builder` в lifespan; в `/v1/commentary` для
+      `gm` к пакету фактов добавляется раздел «Похожие позиции из базы
+      аннотаций (RAG)» по 2–3 ключевым моментам. Для `club`/`beginner`
+      RAG не вызывается. Сбой RAG не ломает генерацию.
+- [x] **Тесты:** `tests/unit/test_rag.py` (6) — эмбеддер;
+      `tests/integration/test_rag.py` (9) — парсинг, ingest, retrieval,
+      `/v1/ingest`, RAG-контекст (gm содержит, club — нет).
+- [x] **Документация:** отчёты `reports/iteration-9/`, `CHANGELOG.md`,
+      `KNOWN_ISSUES.md` (+KI-025, KI-026), `README.md`, `docs/README.md`,
+      `PROMPT_CURRENT.md`, `TODO.md`.
+
+### Живая демонстрация
+
+```
+POST /v1/ingest (2 партии с комментариями) → 200 {"ingested": 2, "ids": [57, 58]}
+query FEN после 3...a6 → r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4
+hit 1: «Развитие с темпом / Испанская партия, давление на c6»   ← нужная партия
+hit 2: «Ферзевый гамбит»
+```
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Настоящие эмбеддинги (`bge-m3`, 1024) | Нет sentence-transformers/torch; у LM Studio модель 768 dims ≠ `vector(1024)` | KI-025 |
+| Аутентификация `/v1/ingest` | JWT/роли — Фаза 5 | KI-026 |
+| Кэш retrieval по `fen_hash` | `retrieval_cache` есть в схеме, но пока не используется | T-018/T-108 |
+
+### Метрики
+
+- **Backend-тесты:** **181 passed, 1 xfailed** (18 файлов; +16 к итерации 8).
+  Полный прогон — 167.14 с.
+- **ruff:** 0; **mypy (strict):** 0 ошибок, **41** файл.
+- **RAG:** ingest 2 партий — 200, retrieval вернул нужную партию первой.
+- **KI:** 26 записей, 22 Open, 4 Closed.
+- **Стабильность:** два прогона подряд зелёные (192.79 с и 151.16 с).
+- **Время итерации:** ≈ 0.5 ч.
+
+### Что дальше
+
+- **T-018** (частично сделан): retrieval-слой уже подмешивается для `gm`;
+  осталось: кэш `retrieval_cache`, настройка top-k по уровням, метрика
+  релевантности.
+- Затем **Фаза 5**: React-клиент (T-019…T-022), аутентификация (KI-026).
