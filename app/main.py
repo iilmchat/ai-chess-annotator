@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.admin import AdminPathNormalizer, create_admin
 from app.api.ratelimit import RateLimitMiddleware, RedisRateLimiter
-from app.api.v1 import analyze, chat, commentary, games, health, ingest
+from app.api.v1 import analyze, chat, commentary, games, health, ingest, users
 from app.cache import cleanup_expired_cache
 from app.config import Settings, get_settings
 from app.db.session import SessionLocal
@@ -141,6 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         docs_url="/docs",
         openapi_url="/openapi.json",
     )
+    app.state.settings = cfg
 
     # Порядок важен: последним добавленный middleware — самый внешний.
     # CORS должен оборачивать rate limiting, чтобы браузер видел 429.
@@ -185,6 +186,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(commentary.router, prefix=cfg.api_prefix)
     app.include_router(chat.router, prefix=cfg.api_prefix)
     app.include_router(ingest.router, prefix=cfg.api_prefix)
+    app.include_router(users.router, prefix=cfg.api_prefix)
 
     # Admin control plane (T-028): монтируется до SPA, чтобы `/admin`
     # не перехватывался статикой.

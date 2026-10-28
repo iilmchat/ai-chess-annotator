@@ -76,6 +76,29 @@ def test_get_game_returns_saved_analysis_and_commentaries() -> None:
             asyncio.run(_delete_game(analysis_id))
 
 
+def test_list_games_contains_saved_game() -> None:
+    with _client() as client:
+        analyze = client.post(
+            "/v1/analyze", json={"pgn": SHORT_PGN, "level": "club"}
+        )
+        assert analyze.status_code == 200, analyze.text
+        analysis_id = int(analyze.json()["analysis_id"])
+        try:
+            response = client.get("/v1/games", params={"limit": 50})
+
+            assert response.status_code == 200, response.text
+            item = next(
+                row for row in response.json() if row["id"] == analysis_id
+            )
+            assert item["white"] == "White"
+            assert item["black"] == "Black"
+            assert item["event"] == "Saved"
+            assert item["level"] == "club"
+            assert item["created_at"]
+        finally:
+            asyncio.run(_delete_game(analysis_id))
+
+
 def test_get_unknown_game_returns_404() -> None:
     with _client() as client:
         response = client.get("/v1/games/999999999")

@@ -1,9 +1,12 @@
 import type {
   AnalyzeResponse,
+  ChatHistoryItem,
   ChatResponse,
   CommentaryResponse,
   EditedCommentary,
+  GameListItem,
   Level,
+  UsageResponse,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -57,6 +60,18 @@ export function analyzeGame(pgn: string, level: Level): Promise<AnalyzeResponse>
   });
 }
 
+export function getGame(analysisId: string): Promise<AnalyzeResponse> {
+  return request<AnalyzeResponse>(`/v1/games/${analysisId}`);
+}
+
+export function listGames(limit = 20): Promise<GameListItem[]> {
+  return request<GameListItem[]>(`/v1/games?limit=${limit}`);
+}
+
+export function getUsage(): Promise<UsageResponse> {
+  return request<UsageResponse>("/v1/users/me/usage");
+}
+
 export function generateCommentary(
   analysisId: string,
   level: Level,
@@ -81,6 +96,7 @@ export function askChat(
   analysisId: string,
   level: Level,
   message: string,
+  history: ChatHistoryItem[] = [],
 ): Promise<ChatResponse> {
   return request<ChatResponse>("/v1/chat", {
     method: "POST",
@@ -88,6 +104,7 @@ export function askChat(
       analysis_id: Number(analysisId),
       level,
       message,
+      history,
     }),
   });
 }
@@ -127,10 +144,16 @@ export async function streamChat(
   level: Level,
   message: string,
   handlers: StreamHandlers,
+  history: ChatHistoryItem[] = [],
 ): Promise<StreamDone> {
   return streamRequest(
     "/v1/chat/stream",
-    { analysis_id: Number(analysisId), level, message },
+    {
+      analysis_id: Number(analysisId),
+      level,
+      message,
+      history,
+    },
     handlers,
   );
 }

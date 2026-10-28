@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 
 import redis.asyncio as aioredis
 import structlog
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -31,6 +32,8 @@ __all__ = [
     "next_utc_midnight",
     "prices_for_level",
     "record_token_usage",
+    "request_subject",
+    "request_tier",
     "seconds_until_reset",
     "utc_day",
 ]
@@ -278,6 +281,22 @@ def _tracker_from_scope(scope: Scope) -> TokenUsageTracker | None:
     state = getattr(app, "state", None)
     tracker = getattr(state, "token_usage_tracker", None)
     return tracker if isinstance(tracker, TokenUsageTracker) else None
+
+
+def request_subject(request: Request, settings: Settings) -> str:
+    """Публичный subject запроса — тот же, что у middleware."""
+    return _subject_from_scope(
+        request.scope, settings.trust_forwarded_for
+    )
+
+
+def request_tier(request: Request, settings: Settings) -> str:
+    """Публичный tier запроса — тот же, что у middleware."""
+    return _tier_from_scope(
+        request.scope,
+        frozenset(settings.pro_ips_set),
+        settings.trust_forwarded_for,
+    )
 
 
 def _subject_from_scope(scope: Scope, trust_forwarded_for: bool) -> str:

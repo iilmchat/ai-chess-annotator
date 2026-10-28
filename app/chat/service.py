@@ -42,6 +42,7 @@ __all__ = [
     "ChatAnswer",
     "answer_question",
     "build_chat_prompt",
+    "format_chat_history",
 ]
 
 #: Системная роль чата (SPEC §2.7): отвечать только по фактам анализа.
@@ -65,12 +66,24 @@ class ChatAnswer:
     cached: bool = False
 
 
+def format_chat_history(
+    history: list[dict[str, str]] | None,
+) -> str:
+    """Сериализовать предыдущие реплики для промпта и prompt_hash."""
+    if not history:
+        return ""
+    return "\n".join(
+        f"{item['role']}: {item['content']}" for item in history
+    )
+
+
 async def answer_question(
     session: AsyncSession,
     analysis_id: int,
     level: str,
     message: str,
     *,
+    history: list[dict[str, str]] | None = None,
     settings: Settings | None = None,
     client: BaseLLMClient | None = None,
 ) -> ChatAnswer:
@@ -102,9 +115,14 @@ async def answer_question(
             "сначала вызовите /v1/analyze"
         )
 
+    history_text = format_chat_history(history)
     model = client.model if client is not None else model_for_level(cfg, level)
     prompt_hash_value = make_prompt_hash(
-        level, model, CHAT_SYSTEM_PROMPT, question=question
+        level,
+        model,
+        CHAT_SYSTEM_PROMPT,
+        question=question,
+        history=history_text,
     )
     position_fen = chat_position_fen(parsed)
     hit = await lookup(
@@ -123,7 +141,7 @@ async def answer_question(
         )
 
     package = build_fact_package(parsed, analyses, level)
-    prompt = build_chat_prompt(package, question)
+    prompt = build_chat_prompt(package, question, history)
     llm = client if client is not None else get_llm_client(level, cfg)
     llm.set_level(level)
     owns_client = client is None
@@ -153,10 +171,21 @@ async def answer_question(
     return ChatAnswer(reply=reply, usage=usage, attempts=attempts)
 
 
-def build_chat_prompt(fact_package: str, question: str) -> str:
-    """Собрать пользовательский промпт: факты анализа + вопрос."""
+def build_chat_prompt(
+    fact_package: str,
+    question: str,
+    history: list[dict[str, str]] | None = None,
+) -> str:
+    """Собрать промпт: факты + история диалога + вопрос."""
+    history_block = ""
+    if history:
+        history_block = (
+            "\n\n# История диалога\n"
+            + format_chat_history(history)
+            + "\n"
+        )
     return (
-        f"{fact_package}\n\n"
+        f"{fact_package}{history_block}\n\n"
         "# Вопрос пользователя\n"
         f"{question}\n\n"
         "Ответь кратко и по делу, опираясь только на факты выше. "

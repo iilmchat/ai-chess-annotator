@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +49,49 @@ class GameDetailResponse(AnalyzeResponse):
 
     commentaries: list[CommentaryItem] = Field(default_factory=list)
     created_at: datetime
+
+
+class GameListItem(BaseModel):
+    """Краткая строка истории партий."""
+
+    id: int
+    white: str | None
+    black: str | None
+    event: str | None
+    level: LevelName
+    created_at: datetime
+
+
+@router.get("/games", response_model=list[GameListItem])
+async def list_games(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, le=50, description="Сколько партий")] = 20,
+) -> list[GameListItem]:
+    """Последние `limit` партий (по умолчанию 20)."""
+    rows = (
+        await session.scalars(
+            select(Game).order_by(Game.created_at.desc(), Game.id.desc()).limit(limit)
+        )
+    ).all()
+    items: list[GameListItem] = []
+    for game in rows:
+        white = black = event = None
+        try:
+            meta = parse_pgn(game.pgn).metadata
+            white, black, event = meta.white, meta.black, meta.event
+        except Exception:
+            pass
+        items.append(
+            GameListItem(
+                id=game.id,
+                white=white,
+                black=black,
+                event=event,
+                level=(game.analysis_level or Level.club).value,
+                created_at=game.created_at,
+            )
+        )
+    return items
 
 
 @router.get("/games/{game_id}", response_model=GameDetailResponse)

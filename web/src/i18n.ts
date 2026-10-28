@@ -13,6 +13,47 @@ const resources = {
         footerNote:
           "Все варианты из ответа LLM проверяются Stockfish перед показом.",
       },
+      nav: {
+        label: "Навигация",
+        home: "Анализ",
+        history: "История",
+      },
+      usage: {
+        label: "{{tier}}: {{used}}/{{limit}}",
+        details: "Осталось {{remaining}} токенов сегодня",
+        tier: { free: "Free", pro: "Pro" },
+        modal: {
+          title: "Дневной лимит токенов",
+          titleOver: "Лимит токенов исчерпан",
+          body: "Использовано {{used}} из {{limit}} токенов за сегодня (UTC).",
+          proHint:
+            "Pro-тир даёт больше токенов и доступ к тяжёлым моделям. Подключение — в следующей версии.",
+        },
+      },
+      history: {
+        title: "История партий",
+        subtitle: "Последние 20 разобранных партий — откройте любую для просмотра.",
+        refresh: "Обновить",
+        empty: "Пока нет разобранных партий. Начните с анализа на главной.",
+        date: "Дата",
+        white: "Белые",
+        black: "Чёрные",
+        event: "Турнир",
+        level: "Уровень",
+        open: "Открыть",
+      },
+      analysis: {
+        title: "Разбор партии",
+        level: "Уровень: {{level}}",
+        backToHistory: "К истории",
+        missingId: "Не указан ID партии.",
+        notFound: "Партия не найдена или ещё не разобрана.",
+      },
+      errorBoundary: {
+        title: "Что-то сломалось",
+        body: "Интерфейс столкнулся с ошибкой, но приложение живое. Попробуйте перезагрузить страницу.",
+        reload: "Перезагрузить",
+      },
       pgn: {
         title: "Партия",
         hint: "PGN или FEN-старт",
@@ -68,6 +109,7 @@ const resources = {
         stopped: "Генерация остановлена.",
         editorLabel: "Текст комментария",
         savedEdit: "edit #{{id}}",
+        clear: "Очистить чат",
       },
       chat: {
         title: "Чат по партии",
@@ -92,6 +134,7 @@ const resources = {
         unknown: "Неизвестная ошибка",
         retry: "Повторить",
         editId: "edit #{{id}}",
+        close: "Закрыть",
       },
       level: {
         beginner: "Новичок",
@@ -121,6 +164,47 @@ const resources = {
         footer: "ChessAnnotator · MVP v0.1.0",
         footerNote:
           "Every move in an LLM answer is validated by Stockfish before display.",
+      },
+      nav: {
+        label: "Navigation",
+        home: "Analysis",
+        history: "History",
+      },
+      usage: {
+        label: "{{tier}}: {{used}}/{{limit}}",
+        details: "{{remaining}} tokens left today",
+        tier: { free: "Free", pro: "Pro" },
+        modal: {
+          title: "Daily token budget",
+          titleOver: "Token budget exhausted",
+          body: "Used {{used}} of {{limit}} tokens today (UTC).",
+          proHint:
+            "Pro gives more tokens and access to heavier models. Upgrade is planned for the next release.",
+        },
+      },
+      history: {
+        title: "Game history",
+        subtitle: "The last 20 analyzed games — open any of them.",
+        refresh: "Refresh",
+        empty: "No analyzed games yet. Start with an analysis on the home page.",
+        date: "Date",
+        white: "White",
+        black: "Black",
+        event: "Event",
+        level: "Level",
+        open: "Open",
+      },
+      analysis: {
+        title: "Game analysis",
+        level: "Level: {{level}}",
+        backToHistory: "Back to history",
+        missingId: "Game id is missing.",
+        notFound: "Game not found or not analyzed yet.",
+      },
+      errorBoundary: {
+        title: "Something went wrong",
+        body: "The UI hit an error, but the app is still alive. Try reloading the page.",
+        reload: "Reload",
       },
       pgn: {
         title: "Game",
@@ -174,6 +258,7 @@ const resources = {
         stopped: "Generation stopped.",
         editorLabel: "Commentary text",
         savedEdit: "edit #{{id}}",
+        clear: "Clear chat",
       },
       chat: {
         title: "Game chat",
@@ -198,6 +283,7 @@ const resources = {
         unknown: "Unknown error",
         retry: "Retry",
         editId: "edit #{{id}}",
+        close: "Close",
       },
       level: {
         beginner: "Beginner",

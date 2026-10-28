@@ -19,7 +19,11 @@ from app.cache import (
     model_for_level,
     store,
 )
-from app.chat.service import CHAT_SYSTEM_PROMPT, build_chat_prompt
+from app.chat.service import (
+    CHAT_SYSTEM_PROMPT,
+    build_chat_prompt,
+    format_chat_history,
+)
 from app.commentary.service import load_analyses, load_game, pv_positions
 from app.config import Settings, get_settings
 from app.engine.validator import extract_moves_from_text, validate_moves
@@ -42,6 +46,7 @@ async def stream_chat(
     level: str,
     message: str,
     *,
+    history: list[dict[str, str]] | None = None,
     settings: Settings | None = None,
     client: BaseLLMClient | None = None,
 ) -> AsyncIterator[dict[str, str]]:
@@ -65,9 +70,14 @@ async def stream_chat(
             return
 
         question = sanitize_user_input(message)
+        history_text = format_chat_history(history)
         model = client.model if client is not None else model_for_level(cfg, level)
         prompt_hash_value = make_prompt_hash(
-            level, model, CHAT_SYSTEM_PROMPT, question=question
+            level,
+            model,
+            CHAT_SYSTEM_PROMPT,
+            question=question,
+            history=history_text,
         )
         position_fen = chat_position_fen(parsed)
         hit = await lookup(
@@ -90,7 +100,7 @@ async def stream_chat(
             return
 
         package = build_fact_package(parsed, analyses, level)
-        prompt = build_chat_prompt(package, question)
+        prompt = build_chat_prompt(package, question, history)
         llm = client if client is not None else get_llm_client(level, cfg)
         llm.set_level(level)
         yield sse_event("meta", model=llm.model, level=level)

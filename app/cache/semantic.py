@@ -79,8 +79,9 @@ def make_prompt_hash(
     *,
     style: str | None = None,
     question: str | None = None,
+    history: str | None = None,
 ) -> str:
-    """Отпечаток «уровень + модель + системный промпт + style/question»."""
+    """Отпечаток «уровень + модель + sysprompt + style/question/history»."""
     payload = "\x1f".join(
         (
             level,
@@ -88,6 +89,7 @@ def make_prompt_hash(
             system_prompt,
             style or "",
             question or "",
+            history or "",
         )
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

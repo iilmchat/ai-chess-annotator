@@ -3,13 +3,11 @@ import { useTranslation } from "react-i18next";
 
 import { ApiError, streamChat } from "../api";
 import { useTypewriter } from "../hooks/useTypewriter";
+import {
+  conversationKey,
+  useChatStore,
+} from "../stores/chatStore";
 import type { Level } from "../types";
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  text: string;
-  tokens?: number;
-}
 
 interface ChatPanelProps {
   analysisId: string | null;
@@ -18,7 +16,11 @@ interface ChatPanelProps {
 
 export function ChatPanel({ analysisId, level }: ChatPanelProps) {
   const { t } = useTranslation();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const key = conversationKey(analysisId, level);
+  const messages = useChatStore((state) => state.messages[key]);
+  const appendMessage = useChatStore((state) => state.append);
+  const clearMessages = useChatStore((state) => state.clear);
+  const visibleMessages = messages ?? [];
   const [question, setQuestion] = useState("");
   const [streamText, setStreamText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -33,7 +35,6 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
   ];
 
   useEffect(() => {
-    setMessages([]);
     setQuestion("");
     setStreamText("");
     setError(null);
@@ -43,33 +44,44 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [messages, streamText, busy]);
+  }, [visibleMessages, streamText, busy]);
 
   async function ask(text: string) {
     const trimmed = text.trim();
-    if (!analysisId || !trimmed || busy) {
+    if (!analysisId || !trimmed || busy || !key) {
       return;
     }
     const controller = new AbortController();
     abortRef.current = controller;
-    setMessages((current) => [...current, { role: "user", text: trimmed }]);
+    const history = visibleMessages.map((message) => ({
+      role: message.role,
+      content: message.text,
+    }));
+    appendMessage(key, { role: "user", text: trimmed });
     setQuestion("");
     setStreamText("");
     setBusy(true);
     setError(null);
     let full = "";
     try {
-      const done = await streamChat(analysisId, level, trimmed, {
-        signal: controller.signal,
-        onDelta: (chunk) => {
-          full += chunk;
-          setStreamText(full);
+      const done = await streamChat(
+        analysisId,
+        level,
+        trimmed,
+        {
+          signal: controller.signal,
+          onDelta: (chunk) => {
+            full += chunk;
+            setStreamText(full);
+          },
         },
+        history,
+      );
+      appendMessage(key, {
+        role: "assistant",
+        text: full,
+        tokens: done.tokens_used,
       });
-      setMessages((current) => [
-        ...current,
-        { role: "assistant", text: full, tokens: done.tokens_used },
-      ]);
       setStreamText("");
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") {
@@ -96,12 +108,22 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
             {t("chat.level", { level: t(`level.${level}`) })}
           </span>
         </div>
+        {analysisId && visibleMessages.length > 0 ? (
+          <button
+            type="button"
+            className="button button--ghost button--small"
+            onClick={() => clearMessages(key)}
+            disabled={busy}
+          >
+            {t("chat.clear")}
+          </button>
+        ) : null}
       </div>
 
       {!analysisId ? <p className="empty">{t("chat.needAnalysis")}</p> : null}
 
       <div className="chat" aria-live="polite">
-        {messages.map((message, index) => (
+        {visibleMessages.map((message, index) => (
           <div
             key={`${message.role}-${index}`}
             className={`chat__message chat__message--${message.role}`}
@@ -127,7 +149,7 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
 
       {error ? <p className="error">{error}</p> : null}
 
-      {analysisId && messages.length === 0 && !busy ? (
+      {analysisId && visibleMessages.length === 0 && !busy ? (
         <div className="suggestions">
           {suggestions.map((suggestion) => (
             <button

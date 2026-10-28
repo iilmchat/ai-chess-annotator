@@ -21,7 +21,7 @@ from app.chat import answer_question
 from app.chat.streaming import stream_chat
 from app.db.session import get_session
 from app.errors import PromptInjectionError
-from app.security.guardrails import inspect_user_input
+from app.security.guardrails import inspect_user_input, sanitize_user_input
 
 router = APIRouter(tags=["chat"])
 
@@ -30,6 +30,13 @@ LevelName = Literal["beginner", "club", "gm"]
 
 #: Ограничение на вопрос пользователя (защита промпта от полотна).
 MAX_MESSAGE_CHARS = 2_000
+
+
+class ChatHistoryItem(BaseModel):
+    """Одна предыдущая реплика чата."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
 
 
 class ChatRequest(BaseModel):
@@ -41,6 +48,11 @@ class ChatRequest(BaseModel):
         min_length=1,
         max_length=MAX_MESSAGE_CHARS,
         description="Вопрос по партии",
+    )
+    history: list[ChatHistoryItem] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Предыдущие реплики (для контекста)",
     )
 
     @field_validator("message")
@@ -77,6 +89,7 @@ async def chat_stream(
             payload.analysis_id,
             payload.level,
             question,
+            history=_history(payload),
         )
     )
 
@@ -101,11 +114,22 @@ async def chat(
         payload.analysis_id,
         payload.level,
         question,
+        history=_history(payload),
     )
     return ChatResponse(
         reply=result.reply,
         tokens_used=result.usage.tokens_in + result.usage.tokens_out,
     )
+
+
+def _history(payload: ChatRequest) -> list[dict[str, str]]:
+    """Санитизированная история для промпта (пустые строки отбрасываются)."""
+    result: list[dict[str, str]] = []
+    for item in payload.history:
+        content = sanitize_user_input(item.content)
+        if content:
+            result.append({"role": item.role, "content": content})
+    return result
 
 
 async def _guard_message(request: Request, message: str) -> str:
