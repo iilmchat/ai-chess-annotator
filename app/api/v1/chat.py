@@ -89,7 +89,7 @@ async def chat_stream(
             payload.analysis_id,
             payload.level,
             question,
-            history=_history(payload),
+            history=await _history(request, payload),
         )
     )
 
@@ -114,7 +114,7 @@ async def chat(
         payload.analysis_id,
         payload.level,
         question,
-        history=_history(payload),
+        history=await _history(request, payload),
     )
     return ChatResponse(
         reply=result.reply,
@@ -122,11 +122,16 @@ async def chat(
     )
 
 
-def _history(payload: ChatRequest) -> list[dict[str, str]]:
-    """Санитизированная история для промпта (пустые строки отбрасываются)."""
+async def _history(
+    request: Request, payload: ChatRequest
+) -> list[dict[str, str]]:
+    """История для промпта: user-реплики проходят guardrails заново."""
     result: list[dict[str, str]] = []
     for item in payload.history:
-        content = sanitize_user_input(item.content)
+        if item.role == "user":
+            content = await _guard_message(request, item.content)
+        else:
+            content = sanitize_user_input(item.content)
         if content:
             result.append({"role": item.role, "content": content})
     return result

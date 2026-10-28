@@ -17,7 +17,6 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.admin import AdminPathNormalizer, create_admin
@@ -35,6 +34,7 @@ from app.observability import configure_telemetry, shutdown_telemetry
 from app.prompts import seed_prompts, warm_prompt_cache
 from app.prompts.pubsub import watch_prompt_updates
 from app.rag.context import make_rag_context_builder
+from app.web import SPAStaticFiles
 
 logger = structlog.get_logger(__name__)
 
@@ -196,7 +196,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # процессом. Монтируется последним, чтобы не перехватывать /v1/* и /docs.
     web_dist = Path(__file__).resolve().parent.parent / "web" / "dist"
     if web_dist.is_dir():
-        app.mount("/", StaticFiles(directory=web_dist, html=True), name="web")
+        app.mount("/", SPAStaticFiles(directory=web_dist, html=True), name="web")
 
     return app
 
