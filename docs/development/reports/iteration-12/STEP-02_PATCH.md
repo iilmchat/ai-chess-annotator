@@ -38,6 +38,19 @@
 | 404 | `PATCH /v1/commentaries/999999999` | `{"code": "not_found"}` |
 | 422 | `{"text": "   \n\t  "}` | `422` |
 
+Живая проверка на реальном комментарии (DeepSeek, `analysis_id=25`):
+
+```
+POST /v1/commentary {"analysis_id": 25, "level": "gm"}
+→ 200, commentary_id=11, 2017 символов, validated=true, 1 попытка
+
+PATCH /v1/commentaries/11 {"text": "<текст> + правка редактора"}
+→ 200, human_edited=true, edit_id=11
+
+БД: commentaries.text обновлён; edits: 1 запись,
+    original_len=2017, edited_len=2095, editor_id=NULL
+```
+
 Пример ответа:
 
 ```json
