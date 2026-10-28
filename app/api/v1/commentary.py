@@ -114,6 +114,7 @@ async def create_commentary(
         payload.level,
         payload.style,
         rag_context=rag_context,
+        settings=getattr(request.app.state, "settings", None),
     )
 
     row = Commentary(
@@ -142,6 +143,7 @@ async def create_commentary(
 @router.post("/commentary/stream")
 async def create_commentary_stream(
     payload: CommentaryRequest,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> EventSourceResponse:
     """Стримить комментарий через SSE (T-032).
@@ -155,6 +157,7 @@ async def create_commentary_stream(
             payload.analysis_id,
             payload.level,
             payload.style,
+            settings=getattr(request.app.state, "settings", None),
         )
     )
 

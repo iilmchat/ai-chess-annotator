@@ -90,6 +90,7 @@ async def chat_stream(
             payload.level,
             question,
             history=await _history(request, payload),
+            settings=getattr(request.app.state, "settings", None),
         )
     )
 
@@ -115,6 +116,7 @@ async def chat(
         payload.level,
         question,
         history=await _history(request, payload),
+        settings=getattr(request.app.state, "settings", None),
     )
     return ChatResponse(
         reply=result.reply,
