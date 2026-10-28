@@ -19,6 +19,14 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache import (
+    cache_usage,
+    commentary_position_fen,
+    lookup,
+    make_prompt_hash,
+    model_for_level,
+    store,
+)
 from app.config import Settings, get_settings
 from app.db.models import Commentary, Edit, Game, Move
 from app.db.models import Motif as MotifRow
@@ -60,6 +68,7 @@ class GeneratedCommentary:
     usage: LLMUsage
     validated: bool
     attempts: int
+    cached: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,15 +218,36 @@ async def generate_commentary(
             f"Для партии {game_id} нет анализа ходов — сначала вызовите /v1/analyze"
         )
 
+    system_prompt = await load_system_prompt(level, session)
+    if style:
+        system_prompt = f"{system_prompt}\n\nДОПОЛНИТЕЛЬНЫЙ СТИЛЬ: {style}"
+
+    model = client.model if client is not None else model_for_level(cfg, level)
+    prompt_hash_value = make_prompt_hash(
+        level, model, system_prompt, style=style
+    )
+    position_fen = commentary_position_fen(parsed, analyses)
+    hit = await lookup(
+        session,
+        fen=position_fen,
+        level=level,
+        prompt_hash_value=prompt_hash_value,
+        settings=cfg,
+    )
+    if hit is not None:
+        return GeneratedCommentary(
+            text=hit.text,
+            usage=cache_usage(),
+            validated=True,
+            attempts=1,
+            cached=True,
+        )
+
     package = build_fact_package(parsed, analyses, level)
     if rag_context is not None:
         extra = await rag_context(parsed, analyses)
         if extra:
             package = f"{package}\n\n{extra}"
-
-    system_prompt = await load_system_prompt(level, session)
-    if style:
-        system_prompt = f"{system_prompt}\n\nДОПОЛНИТЕЛЬНЫЙ СТИЛЬ: {style}"
 
     llm = client if client is not None else get_llm_client(level, cfg)
     llm.set_level(level)
@@ -230,6 +260,14 @@ async def generate_commentary(
         if owns_client:
             await llm.aclose()
 
+    await store(
+        session,
+        fen=position_fen,
+        level=level,
+        prompt_hash_value=prompt_hash_value,
+        response_text=text,
+        settings=cfg,
+    )
     return GeneratedCommentary(
         text=text, usage=usage, validated=True, attempts=attempts
     )

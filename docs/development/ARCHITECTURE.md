@@ -39,7 +39,8 @@
 | `app/finops.py` | дневные счётчики токенов в Redis, `TokenBudgetMiddleware` (429), `cost_usd` |
 | `app/security/` | prompt-injection guardrails: нормализация, эвристики, `422 prompt_injection` |
 | `app/audit.py` | append-only аудит, hash-chain, advisory-lock, верификация |
-| `app/commentary/` | сборка анализа из БД, генерация, retry, правка |
+| `app/cache/` | semantic cache: exact FEN-ключ, vector-поиск, TTL |
+| `app/commentary/` | сборка анализа из БД, генерация, retry, кэш, правка |
 | `app/chat/` | вопрос → контекст → LLM → валидатор → ответ |
 | `app/rag/` | ingest аннотированных партий, эмбеддинги, retrieval, контекст |
 | `app/api/v1/` | `analyze`, `games`, `commentary`, `chat`, `ingest`, `health` |

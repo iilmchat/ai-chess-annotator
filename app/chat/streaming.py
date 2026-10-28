@@ -12,6 +12,13 @@ from collections.abc import AsyncIterator
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache import (
+    chat_position_fen,
+    lookup,
+    make_prompt_hash,
+    model_for_level,
+    store,
+)
 from app.chat.service import CHAT_SYSTEM_PROMPT, build_chat_prompt
 from app.commentary.service import load_analyses, load_game, pv_positions
 from app.config import Settings, get_settings
@@ -22,7 +29,7 @@ from app.llm import BaseLLMClient, get_llm_client
 from app.llm.prompts import build_fact_package
 from app.llm.tokens import estimate_tokens
 from app.security.guardrails import sanitize_user_input
-from app.streaming import sse_event
+from app.streaming import chunk_text, sse_event
 
 __all__ = ["stream_chat"]
 
@@ -57,8 +64,33 @@ async def stream_chat(
             )
             return
 
+        question = sanitize_user_input(message)
+        model = client.model if client is not None else model_for_level(cfg, level)
+        prompt_hash_value = make_prompt_hash(
+            level, model, CHAT_SYSTEM_PROMPT, question=question
+        )
+        position_fen = chat_position_fen(parsed)
+        hit = await lookup(
+            session,
+            fen=position_fen,
+            level=level,
+            prompt_hash_value=prompt_hash_value,
+            settings=cfg,
+        )
+        if hit is not None:
+            yield sse_event("meta", model="semantic-cache", level=level)
+            for chunk in chunk_text(hit.text):
+                yield sse_event("delta", text=chunk)
+            yield sse_event(
+                "done",
+                tokens_used=0,
+                model="semantic-cache",
+                validated=True,
+            )
+            return
+
         package = build_fact_package(parsed, analyses, level)
-        prompt = build_chat_prompt(package, sanitize_user_input(message))
+        prompt = build_chat_prompt(package, question)
         llm = client if client is not None else get_llm_client(level, cfg)
         llm.set_level(level)
         yield sse_event("meta", model=llm.model, level=level)
@@ -95,6 +127,16 @@ async def stream_chat(
 
         tokens_in = estimate_tokens(prompt) + estimate_tokens(CHAT_SYSTEM_PROMPT)
         tokens_out = estimate_tokens(reply)
+        stored = await store(
+            session,
+            fen=position_fen,
+            level=level,
+            prompt_hash_value=prompt_hash_value,
+            response_text=reply,
+            settings=cfg,
+        )
+        if stored:
+            await session.commit()
         yield sse_event(
             "done",
             tokens_used=tokens_in + tokens_out,

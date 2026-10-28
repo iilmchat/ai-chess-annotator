@@ -420,8 +420,18 @@
   стоимости.
 - **Оценка:** 3
 
-### [ ] T-032. Semantic Cache
+### [x] T-032. Semantic Cache (итерация 19)
 - **Зависит от:** T-009, T-016, T-017, T-022
+- **Статус итерации 19:** таблица `semantic_cache` (`fen_hash`,
+  `fen_embedding vector(768)`, `level`, `prompt_hash`, `response_text`,
+  `created_at`), миграция `a5b6c7d8e9f0`, HNSW-индекс; exact по
+  `fen_hash+level+prompt_hash`, semantic по cosine distance < 0.05;
+  кэш в `/v1/commentary`, `/chat` и SSE-ветках; TTL 30 дней + чистка
+  при старте; `prompt_hash` включает sysprompt/модель/style/question.
+  Тесты: `test_semantic_cache.py`, `test_cache_integration.py`; smoke:
+  второй одинаковый комментарий — 0.030 с (< 100 мс).
+  Остаток (Redis hot-слой, метрики hit/miss, engine-cache, `cache=off`)
+  — T-032b.
 - **Что:** кэш ответов LLM и результатов движка по нормализованному FEN:
   точный ключ `(fen_hash, level, prompt_slug+version, model)` +
   семантический поиск по эмбеддингу позиции в `semantic_cache`
@@ -433,6 +443,16 @@
   ответ только при совпадении уровня; нет утечки между уровнями; тесты
   hit/miss/инвалидации; hit rate виден в метриках.
 - **Оценка:** 4
+
+### [ ] T-032b. Semantic Cache: Redis hot-слой и метрики
+- **Зависит от:** T-032
+- **Что:** Redis hot-слой exact-ключа, метрики hit/miss и
+  сэкономленных токенов, кэш результатов движка (engine), флаг
+  `cache=off`, инвалидация по смене промпта/модели, hit rate в
+  админке/OTel.
+- **DoD:** повторный exact-запрос не ходит в Postgres при горячем
+  Redis; метрики видны; engine-кэш не смешивается с LLM.
+- **Оценка:** 2
 
 ### [x] T-033. Prompt Injection Guardrails (итерация 18)
 - **Зависит от:** T-022, T-030
@@ -469,8 +489,13 @@
   false positive ≤5%; события и метрики доступны.
 - **Оценка:** 2
 
-### [ ] T-034. Dataset Export
+### [~] T-034. Dataset Export (частично, итерация 19)
 - **Зависит от:** T-021b, T-028
+- **Статус итерации 19:** `scripts/export_dataset.py` — streaming JSONL
+  из `edits` (messages + метаданные, фильтры `--level`, `--limit`,
+  `--min-id`). Остаток: админ-страница Export, подписанные ссылки,
+  checksum/размер, аудит выгрузки, фоновая задача — не входит в
+  DoD итерации 19.
 - **Что:** страница Export в админке и `GET
   /v1/admin/exports/edits.jsonl` (streaming): фильтры по дате, уровню,
   модели, `human_edited`; схема JSONL (`id`, `commentary_id`,
@@ -525,7 +550,9 @@
   уровня.
 - **T-102.** Lichess Studies / открытые базы как источник RAG.
 - **T-103.** Лицензия ChessBase Mega Database 2026.
-- **T-104.** Дообучение локальных LLM (LoRA) на `edits`.
+- **[x] T-104.** LoRA-каркас на `edits`: `scripts/export_dataset.py`,
+  `scripts/train_lora.py` (`--dry-run`), `LORA_ADAPTER_PATH` в
+  конфиге/фабрике; реальное обучение — на GPU/в облаке.
 - **T-105.** On-prem профиль без облачных LLM (`LLM_PROVIDER=local`).
 - **T-106.** Английская локализация комментариев.
 - **T-107.** Экспорт комментария в PDF / DOCX.

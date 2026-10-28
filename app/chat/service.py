@@ -15,6 +15,14 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache import (
+    cache_usage,
+    chat_position_fen,
+    lookup,
+    make_prompt_hash,
+    model_for_level,
+    store,
+)
 from app.commentary.service import (
     load_analyses,
     load_game,
@@ -54,6 +62,7 @@ class ChatAnswer:
     reply: str
     usage: LLMUsage
     attempts: int
+    cached: bool = False
 
 
 async def answer_question(
@@ -93,6 +102,26 @@ async def answer_question(
             "сначала вызовите /v1/analyze"
         )
 
+    model = client.model if client is not None else model_for_level(cfg, level)
+    prompt_hash_value = make_prompt_hash(
+        level, model, CHAT_SYSTEM_PROMPT, question=question
+    )
+    position_fen = chat_position_fen(parsed)
+    hit = await lookup(
+        session,
+        fen=position_fen,
+        level=level,
+        prompt_hash_value=prompt_hash_value,
+        settings=cfg,
+    )
+    if hit is not None:
+        return ChatAnswer(
+            reply=hit.text,
+            usage=cache_usage(),
+            attempts=1,
+            cached=True,
+        )
+
     package = build_fact_package(parsed, analyses, level)
     prompt = build_chat_prompt(package, question)
     llm = client if client is not None else get_llm_client(level, cfg)
@@ -110,6 +139,17 @@ async def answer_question(
         if owns_client:
             await llm.aclose()
 
+    stored = await store(
+        session,
+        fen=position_fen,
+        level=level,
+        prompt_hash_value=prompt_hash_value,
+        response_text=reply,
+        settings=cfg,
+    )
+    if stored:
+        # У чата нет собственной записи в БД; коммитим только кэш.
+        await session.commit()
     return ChatAnswer(reply=reply, usage=usage, attempts=attempts)
 
 

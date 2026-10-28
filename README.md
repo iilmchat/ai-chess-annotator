@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-257_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-275_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-20_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -206,11 +206,11 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP; качество LLM ниже 7/10 — KI-030) |
-| Итерация | **18 — Security Guardrails + Audit (Фаза 7)**; итерации 1–17 закрыты |
-| Backend-тесты | **257 passed, 1 xfailed** (32 файла; `xfailed` — маркер KI-012) |
+| Итерация | **19 — Semantic Cache + LoRA (Фаза 7)**; итерации 1–18 закрыты |
+| Backend-тесты | **275 passed, 1 xfailed** (37 файлов; `xfailed` — маркер KI-012) |
 | Frontend-тесты | **20 passed** (4 файла: chess.js FEN, react-chessboard-обвязка, SSE-парсер, форматирование; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
-| Таблиц в БД | **10** (5 ревизий, head `f4a5b6c7d8e9`; `prompts`, `audit_logs`, `annotated_games.embedding vector(768)`) |
+| Таблиц в БД | **11** (6 ревизий, head `a5b6c7d8e9f0`; `prompts`, `audit_logs`, `semantic_cache`, `annotated_games.embedding vector(768)`) |
 | Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
 | Engine | Stockfish 17 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; пул из 4 процессов |
 | API | `POST /v1/analyze`, `GET /v1/games/{id}`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, `POST /v1/chat`, SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest; `/admin` (starlette-admin: read-only RAG/комментарии/правки + редактируемые промпты) |
@@ -218,7 +218,9 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Prompts/Validator | Промпты 3 уровней в таблице `prompts` (seed из `.txt`, версия, редактирование в админке, hot-reload кэша); пакет фактов: `club` — топ-3 без PV, `gm` — до 10 с PV; валидатор SAN с retry |
 | FinOps | Дневные лимиты токенов в Redis (`usage:{date}:ip`), `429 token_budget_exceeded` + `X-RateLimit-Reset`; `pro` — только IP из `PRO_IPS`, заголовок `X-User-Tier` игнорируется; `cost_usd` по ценам из конфига |
 | Security | Guardrails чата: NFKC, control/zero-width/bidi, лимит 2000, 7 RU/EN-эвристик, `422 prompt_injection` + аудит; в sysprompt — запрет раскрывать инструкции |
-| Audit | Append-only `audit_logs` с hash-chain, advisory-lock, триггером `UPDATE/DELETE/TRUNCATE`; аудит промптов, правок комментариев и инъекций; read-only view + страница проверки целостности |
+| Audit | Append-only `audit_logs` с hash-chain, advisory-lock, триггером `UPDATE/DELETE/TRUNCATE`; аудит промптов (атомарно с правкой), правок комментариев и инъекций; read-only view + страница проверки целостности |
+| Semantic cache | `semantic_cache` (vector 768, HNSW): exact `fen_hash+level+prompt_hash`, semantic cosine < 0.05, TTL 30 дней; `/commentary`, `/chat` и SSE; второй запрос — 0.030 с |
+| LoRA | `scripts/export_dataset.py` (JSONL), `scripts/train_lora.py` (QLoRA-каркас, `--dry-run`), `LORA_ADAPTER_PATH` → adapter basename для vLLM |
 | Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `PATCH` пишет правку в `edits` |
 | Chat | `POST /v1/chat`: вопрос → контекст анализа → LLM → валидатор → `{reply, tokens_used}` |
 | Frontend | React 19 + Vite: `react-chessboard` 5.12.1, FEN из PGN через `chess.js`, RU/EN, Zustand + sessionStorage; комментарий/чат стримятся и печатаются постепенно |
@@ -228,7 +230,7 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | LLM-eval | 5 партий × club/gm, 3 шкалы; база **5.19/10** (9 из 10); после итерации 16 `club` — **4.40/10** (было 3.83), отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md); ниже 7/10 — KI-030 |
 | Streaming | SSE `/v1/commentary/stream` и `/v1/chat/stream`: `meta`/`delta`/`done`/`error`, финальная SAN-валидация; UI печатает постепенно |
 | Observability | OTel-спаны `llm_generate`/`llm_stream` (`llm.model`, `llm.level`, `tokens_in/out`, `cost_usd`); `OTEL_ENABLED=true`, экспорт `console`/`otlp` |
-| KI-реестр | **33** записи: 18 Open, 15 Closed (KI-031/KI-032 закрыты; новый KI-033) |
+| KI-реестр | **34** записи: 18 Open, 16 Closed (KI-031/KI-032/KI-033 закрыты; новый KI-034) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, docker build |
 | Docker | multi-stage образ (Node → Python + SPA), `docker-compose.prod.yml`, loopback-порты БД/Redis; публикация в GHCR — T-027 |
 

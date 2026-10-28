@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -59,6 +60,10 @@ class Settings(BaseSettings):
     # LLM (T-013): локально — LM Studio (OpenAI-совместимый API), облако — DeepSeek.
     #: Историческое имя: локальный провайдер (compose/healthcheck).
     llm_provider_local: str = "lmstudio"
+    #: Путь к LoRA-адаптеру (T-104). Если задан, локальный клиент просит
+    #: у vLLM adapter по имени (basename); LM Studio динамические адаптеры
+    #: через OpenAI API не поддерживает — нужен vLLM с `--lora-modules`.
+    lora_adapter_path: str | None = None
     #: Локальная модель (LM Studio). Имена vllm_* сохранены для совместимости.
     vllm_base_url: str = "http://127.0.0.1:8034/v1"
     #: Быстрая не-thinking модель: qwen3-8b «умнее», но генерирует reasoning
@@ -106,6 +111,12 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-nomic-embed-text-v1.5"
     embedding_dim: int = 768
 
+    # Semantic cache (T-032)
+    semantic_cache_enabled: bool = True
+    semantic_cache_ttl_days: int = 30
+    #: Максимальное косинусное расстояние для semantic-hit.
+    semantic_cache_similarity_threshold: float = 0.05
+
     # LLM pricing (KI-021 / T-030/T-031): доллары за 1M токенов.
     # Облачные цены — иллюстративные (DeepSeek), локальные — 0.
     llm_price_in_usd_per_1m: float = 0.27
@@ -125,6 +136,16 @@ class Settings(BaseSettings):
     @property
     def pro_ips_set(self) -> set[str]:
         return {item.strip() for item in self.pro_ips.split(",") if item.strip()}
+
+    @property
+    def lora_model(self) -> str:
+        """Имя модели для запроса: LoRA-adapter basename или базовая модель."""
+        if not self.lora_adapter_path:
+            return self.vllm_model
+        adapter = Path(
+            self.lora_adapter_path.rstrip("/\\")
+        ).name
+        return adapter or self.vllm_model
 
     # Observability
     otel_enabled: bool = False

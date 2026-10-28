@@ -20,6 +20,13 @@ from collections.abc import AsyncIterator
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache import (
+    commentary_position_fen,
+    lookup,
+    make_prompt_hash,
+    model_for_level,
+    store,
+)
 from app.commentary.service import load_analyses, load_game, pv_positions
 from app.config import Settings, get_settings
 from app.db.models import Commentary, Level
@@ -31,7 +38,7 @@ from app.llm import BaseLLMClient, get_llm_client
 from app.llm.prompts import build_fact_package
 from app.llm.tokens import estimate_tokens
 from app.prompts import load_system_prompt
-from app.streaming import sse_event
+from app.streaming import chunk_text, sse_event
 
 __all__ = ["stream_commentary"]
 
@@ -66,11 +73,49 @@ async def stream_commentary(
             )
             return
 
-        package = build_fact_package(parsed, analyses, level)
         system_prompt = await load_system_prompt(level, session)
         if style:
             system_prompt = f"{system_prompt}\n\nДОПОЛНИТЕЛЬНЫЙ СТИЛЬ: {style}"
 
+        model = client.model if client is not None else model_for_level(cfg, level)
+        prompt_hash_value = make_prompt_hash(
+            level, model, system_prompt, style=style
+        )
+        position_fen = commentary_position_fen(parsed, analyses)
+        hit = await lookup(
+            session,
+            fen=position_fen,
+            level=level,
+            prompt_hash_value=prompt_hash_value,
+            settings=cfg,
+        )
+        if hit is not None:
+            row = Commentary(
+                game_id=game.id,
+                level=Level(level),
+                text=hit.text,
+                model="semantic-cache",
+                tokens_in=0,
+                tokens_out=0,
+                cost_usd=0,
+                validated=True,
+            )
+            session.add(row)
+            await session.flush()
+            await session.commit()
+            yield sse_event("meta", model="semantic-cache", level=level)
+            for chunk in chunk_text(hit.text):
+                yield sse_event("delta", text=chunk)
+            yield sse_event(
+                "done",
+                commentary_id=row.id,
+                tokens_used=0,
+                model="semantic-cache",
+                validated=True,
+            )
+            return
+
+        package = build_fact_package(parsed, analyses, level)
         llm = client if client is not None else get_llm_client(level, cfg)
         llm.set_level(level)
         yield sse_event("meta", model=llm.model, level=level)
@@ -120,6 +165,14 @@ async def stream_commentary(
                 price_out_per_1m=price_out,
             ),
             validated=True,
+        )
+        await store(
+            session,
+            fen=position_fen,
+            level=level,
+            prompt_hash_value=prompt_hash_value,
+            response_text=text,
+            settings=cfg,
         )
         session.add(row)
         await session.commit()

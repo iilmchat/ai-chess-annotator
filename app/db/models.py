@@ -54,6 +54,7 @@ __all__ = [
     "Move",
     "Prompt",
     "RetrievalCache",
+    "SemanticCache",
     "User",
     "level_enum",
 ]
@@ -303,6 +304,47 @@ class Prompt(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class SemanticCache(Base):
+    """Кэш текстов LLM по позиции/уровню/отпечатку промпта (T-032).
+
+    `fen_hash` — точный ключ, `fen_embedding` — семантический поиск;
+    `prompt_hash` не даёт вернуть ответ на другой вопрос/стиль/версию
+    системного промпта. TTL проверяется по `created_at`.
+    """
+
+    __tablename__ = "semantic_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "fen_hash",
+            "level",
+            "prompt_hash",
+            name="uq_semantic_cache_key",
+        ),
+        Index(
+            "ix_semantic_cache_lookup",
+            "level",
+            "prompt_hash",
+            "created_at",
+        ),
+        Index(
+            "ix_semantic_cache_embedding",
+            "fen_embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"fen_embedding": "vector_cosine_ops"},
+        ),
+    )
+
+    id: Mapped[int] = _pk()
+    fen_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    fen_embedding: Mapped[list[float]] = mapped_column(
+        Vector(EMBEDDING_DIM), nullable=False
+    )
+    level: Mapped[Level] = mapped_column(level_enum, nullable=False)
+    prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = _created_at()
 
 
 class AuditLog(Base):

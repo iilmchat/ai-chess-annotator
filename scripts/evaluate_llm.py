@@ -295,6 +295,7 @@ def _judge_cli(
         update={
             "rate_limit_requests": 10_000,
             "token_budget_enabled": False,
+            "semantic_cache_enabled": False,
             "llm_warmup_enabled": False,
             "llm_timeout_s": timeout_s,
         }

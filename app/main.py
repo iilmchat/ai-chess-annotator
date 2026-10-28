@@ -23,6 +23,7 @@ from app import __version__
 from app.admin import AdminPathNormalizer, create_admin
 from app.api.ratelimit import RateLimitMiddleware, RedisRateLimiter
 from app.api.v1 import analyze, chat, commentary, games, health, ingest
+from app.cache import cleanup_expired_cache
 from app.config import Settings, get_settings
 from app.db.session import SessionLocal
 from app.db.session import engine as db_engine
@@ -60,6 +61,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await warm_prompt_cache(prompt_session)
             except Exception as exc:
                 logger.warning("prompts_init_failed", error=str(exc))
+        # T-032: физическая чистка записей старше TTL при старте.
+        async with SessionLocal() as cache_session:
+            try:
+                deleted = await cleanup_expired_cache(
+                    cache_session, settings=cfg
+                )
+                if deleted:
+                    await cache_session.commit()
+                logger.info("semantic_cache_cleanup", deleted=deleted)
+            except Exception as exc:
+                logger.warning("semantic_cache_cleanup_failed", error=str(exc))
         app.state.rag_context_builder = make_rag_context_builder(cfg)
         app.state.rate_limiter = (
             RedisRateLimiter(

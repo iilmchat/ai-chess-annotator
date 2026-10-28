@@ -43,6 +43,7 @@ SPEC_TABLES = {
     "moves",
     "prompts",
     "retrieval_cache",
+    "semantic_cache",
     "users",
 }
 
@@ -68,6 +69,12 @@ def test_moves_index_and_embedding_dimension() -> None:
 def test_level_enum_values() -> None:
     assert [level.value for level in Level] == ["beginner", "club", "gm"]
     assert Level("gm") is Level.gm
+
+
+def test_semantic_cache_table_has_vector_and_key() -> None:
+    cache = Base.metadata.tables["semantic_cache"]
+    assert getattr(cache.c.fen_embedding.type, "dim", None) == 768
+    assert cache.c.prompt_hash.nullable is False
 
 
 def test_audit_logs_table_has_hash_columns() -> None:

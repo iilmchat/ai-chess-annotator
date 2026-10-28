@@ -70,7 +70,9 @@ def get_llm_client(
     if provider == "lmstudio":
         return OpenAICompatibleClient(
             base_url=cfg.vllm_base_url,
-            model=cfg.vllm_model,
+            # T-104: если задан LoRA-адаптер, vLLM принимает его basename
+            # как имя модели (нужен запуск с --lora-modules).
+            model=cfg.lora_model,
             api_key=cfg.vllm_api_key,
             provider_name="lmstudio",
             timeout_s=cfg.llm_timeout_s,

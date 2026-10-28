@@ -16,3 +16,4 @@ os.environ.setdefault("ADMIN_API_KEY", "test-admin-token")
 os.environ.setdefault("TOKEN_BUDGET_ENABLED", "false")
 # Фоновый subscriber не нужен в каждом TestClient; проверяется отдельно.
 os.environ.setdefault("PROMPT_PUBSUB_ENABLED", "false")
+os.environ.setdefault("SEMANTIC_CACHE_ENABLED", "false")

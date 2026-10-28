@@ -1,0 +1,16 @@
+D:\Projects\AI\ai-chess-annotator\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+=== ATOMIC PROMPT AUDIT SMOKE (iteration 19) ===
+before: prompt id=2, version=1
+2026-10-29 02:18:56 [info     ] otel_disabled
+2026-10-29 02:18:56 [info     ] prompts_cache_warmed           levels=['beginner', 'club', 'gm']
+2026-10-29 02:18:56 [info     ] semantic_cache_cleanup         deleted=0
+2026-10-29 02:18:56 [info     ] app_started                    engine_pool_size=4 env=dev llm_warmup=False rate_limit=False
+2026-10-29 02:18:56 [info     ] prompt_updated                 version=2
+POST /admin/prompt/edit?pk=2 -> 303
+2026-10-29 02:18:56 [info     ] app_stopped
+after: version=2 (+1), marker=True
+audit: action=prompt.update, target=2
+chain: ok=True, checked=19, errors=0
+restored: version=1
+=== OK ===

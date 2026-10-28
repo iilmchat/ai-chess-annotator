@@ -1,9 +1,9 @@
 # DESIGN_ADMIN_AND_OPS — Production Hardening & Admin Panel
 
 > **Версия:** 1.0 · **Дата:** 2026-10-28 · **Статус:** частично реализовано
-> (итерации 16–18: `/admin`, OTel-спаны LLM, `prompts` + `PromptAdmin`,
-> Redis-бюджеты/`cost_usd`, prompt-injection guardrails, append-only
-> `audit_logs` + проверка целостности; остальное — T-029b…T-035b)
+> (итерации 16–19: `/admin`, OTel-спаны LLM, `prompts` + `PromptAdmin`,
+> Redis-бюджеты/`cost_usd`, guardrails, append-only `audit_logs` +
+> проверка целостности, `semantic_cache`; остальное — T-029b…T-035b)
 > **Задачи:** T-028…T-035 · **Источник истины:** [SPEC.md](SPEC.md) §10
 > **Связанные документы:** [TODO.md](../../TODO.md) (Фаза 7),
 > [KNOWN_ISSUES.md](../KNOWN_ISSUES.md), [RULES.md](RULES.md)

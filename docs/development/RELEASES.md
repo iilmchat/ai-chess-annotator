@@ -1097,3 +1097,46 @@ T-035 (аудит).
 
 T-033b (классификатор/корпус), T-035b (полный аудит/SIEM),
 T-028-полный (JWT/роли), T-029b (registry/TTL).
+
+---
+
+## Итерация 19 — Semantic Cache и LoRA (T-032, T-104)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ T-032/T-104 в объёме итерации; KI-033 закрыт
+**Полный отчёт (7 разделов):**
+`docs/development/reports/v0.1.0/ITERATION-19.md`
+
+### Что сделано
+
+- `semantic_cache` (vector 768, HNSW): exact `fen_hash+level+prompt_hash`,
+  semantic cosine < 0.05, TTL 30 дней; `/v1/commentary`, `/v1/chat` и
+  SSE отдают кэш; `prompt_hash` включает sysprompt/модель/style/question.
+- `scripts/export_dataset.py` — JSONL из `edits`; `scripts/train_lora.py`
+  — QLoRA-каркас с `--dry-run`; `LORA_ADAPTER_PATH` → basename adapter
+  для vLLM.
+- KI-033: аудит правки промпта перенесён в `after_edit` и пишется в той
+  же транзакции; сбой аудита откатывает правку.
+
+### Метрики
+
+- Backend-тесты: **275 passed, 1 xfailed** (187.47 с).
+- `ruff` — 0; `mypy app` — 0.
+- `alembic check` — без дрейфа; head `a5b6c7d8e9f0`.
+- Cache smoke: первый комментарий 43.54 с, второй **0.030 с**
+  (1440×, `<100 мс`), `model=semantic-cache`, tokens_used=0.
+- LoRA smoke: export 1 записи, `train_lora --dry-run` — 0 ошибок.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Redis hot-слой, метрики hit/miss, engine-cache, `cache=off` | Базовый durable-кэш | T-032b |
+| Реальное LoRA-обучение | Нет GPU; каркас + dry-run | T-104 |
+| Админ-страница Export, checksum, аудит выгрузки | Вне DoD итерации | T-034 |
+| Семантический кэш может переиспользовать комментарий другой партии | Ограничение FEN-подхода | «Что не так» |
+
+### Что дальше
+
+T-032b (hot-слой/метрики), T-034 (admin export), T-033b (guardrails),
+T-035b (аудит/SIEM).

@@ -192,6 +192,10 @@ prompts(id, level VARCHAR(32) UNIQUE, content TEXT,
 -- Аудит действий (T-035, итерация 18): append-only + hash-chain
 audit_logs(id, timestamp, actor, action, target_id,
            details JSONB, prev_hash, current_hash)
+
+-- Semantic cache (T-032, итерация 19): exact + vector поиск
+semantic_cache(id, fen_hash, fen_embedding vector(768), level,
+               prompt_hash, response_text TEXT, created_at)
 ```
 
 **Индексы:** `moves(game_id, ply)`,

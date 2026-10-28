@@ -8,6 +8,14 @@
 
 ### Added
 
+- **Semantic Cache (T-032, итерация 19):** `semantic_cache` (vector
+  768, HNSW), exact `fen_hash+level+prompt_hash` и semantic
+  cosine < 0.05; `/v1/commentary`, `/chat` и SSE отдают кэш; TTL 30
+  дней + чистка; `prompt_hash` включает sysprompt/модель/style/question.
+- **LoRA-пайплайн (T-104/T-034, итерация 19):**
+  `scripts/export_dataset.py` (JSONL из `edits`),
+  `scripts/train_lora.py` (QLoRA-каркас, `--dry-run`),
+  `LORA_ADAPTER_PATH` → basename adapter-модели для vLLM.
 - **Prompt Injection Guardrails (T-033, итерация 18):**
   `app/security/guardrails.py` — NFKC-нормализация, удаление
   control/zero-width/bidi, лимит 2000, 7 правил (override/leak/role/
@@ -65,6 +73,10 @@
 
 ### Changed
 
+- **KI-033 закрыт:** аудит правки промпта пишется в `PromptAdmin.after_edit`
+  в той же транзакции, что и `prompts`; сбой аудита откатывает правку.
+- **Semantic cache выключен в eval/тестах по умолчанию:** иначе повторные
+  прогоны не проверяют генерацию; включается `SEMANTIC_CACHE_ENABLED=true`.
 - **KI-031 закрыт:** тир `free/pro` больше не берётся из
   `X-User-Tier`/`X-User-Id`; `pro` — только IP из `PRO_IPS`,
   `X-Forwarded-For` — только при `TRUST_FORWARDED_FOR=true`.

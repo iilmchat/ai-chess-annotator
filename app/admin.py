@@ -324,6 +324,35 @@ class PromptAdmin(ModelView):
         obj.version = int(getattr(obj, "version", 0) or 0) + 1
         obj.updated_at = datetime.now(UTC)
 
+    async def after_edit(self, request: Request, obj: Any) -> None:
+        """Аудит в той же транзакции, что и правка (KI-033).
+
+        `DBSessionMiddleware` коммитит сессию после успешного ответа; если
+        `append_audit` упадёт, исключение превратит ответ в 4xx и
+        middleware откатит и правку, и аудит.
+        """
+        raw_level = getattr(obj, "level", None)
+        level = str(raw_level) if raw_level is not None else None
+        content = str(getattr(obj, "content", ""))
+        await append_audit(
+            request.state.session,
+            actor=actor_from_request(request),
+            action="prompt.update",
+            target_id=str(getattr(obj, "id", "")) or None,
+            details={
+                "level": level,
+                "old_version": getattr(
+                    request.state, "prompt_old_version", None
+                ),
+                "new_version": getattr(obj, "version", None),
+                "old_content_sha256": getattr(
+                    request.state, "prompt_old_hash", None
+                ),
+                "new_content_sha256": hash_text(content),
+                "new_len": len(content),
+            },
+        )
+
     async def after_edit_committed(self, request: Request, obj: Any) -> None:
         raw_level = getattr(obj, "level", None)
         level = str(raw_level) if raw_level is not None else None
@@ -333,42 +362,11 @@ class PromptAdmin(ModelView):
         redis_client = getattr(state, "redis", None)
         if redis_client is not None:
             await publish_prompt_update(redis_client, level)
-        await _write_prompt_audit(request, obj, level)
         logger.info(
             "prompt_updated",
             level=level,
             version=getattr(obj, "version", None),
         )
-
-
-async def _write_prompt_audit(
-    request: Request, obj: Any, level: str | None
-) -> None:
-    """Аудит правки промпта после commit (best-effort, отдельная сессия)."""
-    content = str(getattr(obj, "content", ""))
-    try:
-        async with SessionLocal() as session:
-            await append_audit(
-                session,
-                actor=actor_from_request(request),
-                action="prompt.update",
-                target_id=str(getattr(obj, "id", "")) or None,
-                details={
-                    "level": level,
-                    "old_version": getattr(
-                        request.state, "prompt_old_version", None
-                    ),
-                    "new_version": getattr(obj, "version", None),
-                    "old_content_sha256": getattr(
-                        request.state, "prompt_old_hash", None
-                    ),
-                    "new_content_sha256": hash_text(content),
-                    "new_len": len(content),
-                },
-            )
-            await session.commit()
-    except Exception as exc:
-        logger.error("audit_prompt_write_failed", error=str(exc))
 
 
 class AuditLogAdmin(_ReadOnlyModelView):
