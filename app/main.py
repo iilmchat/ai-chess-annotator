@@ -10,12 +10,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 import redis.asyncio as aioredis
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api.ratelimit import RateLimitMiddleware, RedisRateLimiter
@@ -115,6 +117,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(commentary.router, prefix=cfg.api_prefix)
     app.include_router(chat.router, prefix=cfg.api_prefix)
     app.include_router(ingest.router, prefix=cfg.api_prefix)
+
+    # SPA (T-025): production-сборка Vite лежит в web/dist и раздаётся тем же
+    # процессом. Монтируется последним, чтобы не перехватывать /v1/* и /docs.
+    web_dist = Path(__file__).resolve().parent.parent / "web" / "dist"
+    if web_dist.is_dir():
+        app.mount("/", StaticFiles(directory=web_dist, html=True), name="web")
+
     return app
 
 

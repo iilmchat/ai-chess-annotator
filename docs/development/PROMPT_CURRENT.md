@@ -1,6 +1,6 @@
 # PROMPT_CURRENT — актуальные системные инструкции
 
-> **Версия:** 1.8 · **Синхронизировано:** 2026-10-28 (итерация 9, T-017)
+> **Версия:** 1.9 · **Синхронизировано:** 2026-10-28 (итерация 14, MVP v0.1.0)
 > **Источник:** `docs/development/PROMPT_FOR_DSH.md` (копия 1:1, ниже — без
 > изменений) + метрики и правила текущей итерации.
 >
@@ -13,14 +13,14 @@
 
 | Показатель | Значение | Проверка |
 | :--- | :--- | :--- |
-| Итерация | 9 — RAG и ingest (T-017) завершена; следующая — T-018 / Фаза 5 | `TODO.md` |
-| Backend-тесты | 181 passed + 1 xfailed (18 файлов) | `pytest -q` |
-| Frontend-тесты | 0 (0 файлов, KI-008) | `pnpm --dir web test` |
+| Итерация | 14 — MVP v0.1.0: LLM-eval, Docker production, финальная документация | `TODO.md` |
+| Backend-тесты | 195 passed + 1 xfailed (21 файл) | `pytest -q` |
+| Frontend-тесты | 14 passed (2 файла, Vitest) | `pnpm --dir web test` |
 | `ruff check .` | 0 ошибок | CI job `backend` |
-| `mypy app` | 0 ошибок (strict), 41 файл | CI job `backend` |
+| `mypy app` | 0 ошибок (strict), 44 файла | CI job `backend` |
 | Миграции | 1 ревизия `b802598c3778`, 8 таблиц | `alembic current`, `alembic check` |
-| Healthcheck | `degraded` (db/redis/stockfish `ok`, llm `skipped`) | `GET /v1/health` |
-| Открытых KI | 22 открыто, 4 закрыто (KI-014, KI-018, KI-020, KI-022) — см. `docs/KNOWN_ISSUES.md` | реестр |
+| Healthcheck | `ok` (db/redis/stockfish/llm `ok`) | `GET /v1/health` |
+| Открытых KI | 23 открыто, 7 закрыто (KI-008, KI-009, KI-014, KI-018, KI-020, KI-022, KI-029) — см. `docs/KNOWN_ISSUES.md` | реестр |
 
 ---
 
@@ -153,6 +153,12 @@
 14. **RAG готов (T-017)** — `POST /v1/ingest` (multipart PGN, до 5 МБ),
     хеш-эмбеддинги 1024 (заглушка, KI-025), `find_similar_positions` по FEN,
     RAG-контекст для `gm` в `/v1/commentary`.
-15. **Следующая итерация** — T-018 (кэш retrieval, top-k по уровням) или
-    Фаза 5 (T-019 React). До публичного деплоя закрыть KI-026 (`/v1/ingest`
-    без auth) и учесть KI-024 (генерация ~54 с → стриминг/фон).
+15. **MVP v0.1.0 (T-019…T-026)** — SPA (React 19 + Vite): PGN → доска →
+    комментарий → правка → чат; `web/dist` раздаётся FastAPI; multi-stage
+    Docker + `docker-compose.prod.yml` (loopback-порты БД/Redis);
+    LLM-as-judge (5 партий × club/gm) и `LLM_EVAL.md`; USER_GUIDE,
+    ASSISTANT_LEVELS, ARCHITECTURE, MANUAL_TESTING_GUIDE.
+16. **Следующая итерация** — Фаза 7 (T-028…T-035: админка, prompt registry,
+    OTel, FinOps, semantic cache, guardrails, audit). До публичного деплоя
+    закрыть KI-026 (`/v1/ingest` без auth), KI-028 (нет SSE) и KI-030
+    (качество LLM-комментариев).

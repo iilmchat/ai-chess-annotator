@@ -21,6 +21,7 @@ from app.commentary.service import pv_positions
 from app.config import get_settings
 from app.engine.pool import EnginePool
 from app.engine.validator import extract_moves_from_text, validate_moves
+from app.errors import LLMTimeoutError
 from app.ingestion import parse_pgn
 from app.llm import get_llm_client
 from app.llm.prompts import build_fact_package
@@ -79,10 +80,14 @@ async def test_club_commentary_has_only_legal_moves() -> None:
     package = build_fact_package(game, analyses, LEVEL)
     assert "Ключевые моменты" in package
 
-    settings = get_settings().model_copy(update={"llm_temperature": 0.0})
+    settings = get_settings().model_copy(
+        update={"llm_temperature": 0.0, "llm_timeout_s": 300.0}
+    )
     llm = get_llm_client(LEVEL, settings)
     try:
         text, illegal = await _generate_until_legal(llm, package, game, analyses)
+    except LLMTimeoutError as exc:
+        pytest.skip(f"LM Studio не уложилась в таймаут (KI-024): {exc}")
     finally:
         await llm.aclose()
 

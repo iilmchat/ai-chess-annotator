@@ -142,6 +142,7 @@ def test_analyze_example_pgn_meets_sla_and_persists(client: TestClient) -> None:
 
     assert body["status"] == "completed"
     assert body["analysis_id"].isdigit()
+    assert body["initial_fen"].startswith("rnbqkbnr/pppppppp")
     assert body["moves_analyzed"] == 53
     assert body["meta"] == {
         "white": "Gukesh, D.",
@@ -158,6 +159,7 @@ def test_analyze_example_pgn_meets_sla_and_persists(client: TestClient) -> None:
     assert analyzed[0]["ply"] == 1
     assert analyzed[0]["san"] == "d4"
     assert analyzed[0]["uci"] == "d2d4"
+    assert "3P4" in analyzed[0]["fen"]
     for item in analyzed:
         assert item["classification"] in CLASSIFICATIONS
         assert isinstance(item["motifs"], list)

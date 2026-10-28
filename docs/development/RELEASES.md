@@ -792,3 +792,105 @@ PATCH на реальном комментарии (DeepSeek, `analysis_id=25`):
   изменения.
 - T-029 → T-030 → T-031 → T-032 → T-033 → T-034 по плану §11
   дизайн-документа.
+
+---
+
+## Итерация 14 — Финал MVP и релиз v0.1.0 (T-019…T-026)
+
+**Дата:** 2026-10-28
+**Статус:** ✅ MVP-релиз готов в объёме T-023/T-025/T-026; ⚠️ качество
+LLM ниже порога 7/10 (KI-030), T-024 и T-027 остаются открытыми
+**Отчёты шагов:** `docs/development/reports/iteration-14/`
+
+### Что сделано
+
+- [x] **SPA (T-019…T-022):** React 19 + Vite: PGN, доска из FEN, список
+      ходов, оценки/классы/мотивы, панель комментария с inline-редактором
+      и PATCH, чат по партии. 14 Vitest-тестов.
+- [x] **API для UI:** `initial_fen` в `/v1/analyze` и `fen` у каждого
+      хода; статика `web/dist` раздаётся FastAPI `StaticFiles`.
+- [x] **Docker production (T-025):** multi-stage Dockerfile (Node →
+      Python + SPA), non-root, Stockfish 17, `docker-compose.prod.yml`,
+      loopback-порты БД/Redis, healthcheck. Образ 512 MB; стек поднят на
+      `8011/5435/6382`, `/v1/health` = `ok`, `/` отдаёт SPA.
+- [x] **LLM-as-judge (T-023):** `scripts/evaluate_llm.py` — 5 партий ×
+      `club`/`gm`; 9 из 10 комментариев оценены (один `club` — 503);
+      полный пакет фактов передан судье (`scripts/rejudge_llm.py`).
+- [x] **Документация (T-026):** USER_GUIDE, ASSISTANT_LEVELS,
+      ARCHITECTURE, MANUAL_TESTING_GUIDE; README, CHANGELOG 0.1.0,
+      GETTING_STARTED, PROMPT_CURRENT, docs/README.
+- [x] **QA:** `ruff` 0, `mypy` 0, `pytest` 195 passed + 1 xfailed,
+      `pnpm typecheck/test/build` зелёные, Docker build/up/health.
+
+### LLM-as-judge (T-023)
+
+| Шкала | Средняя | Оценено |
+| :--- | ---: | ---: |
+| Фактическая точность | **4.78 / 10** | 9 |
+| Полезность | **5.22 / 10** | 9 |
+| Стиль | **5.56 / 10** | 9 |
+| **Итог** | **5.19 / 10** | 9 из 10 |
+
+По уровням: `club` — 3.25 / 4.00 / 4.25; `gm` — 6.00 / 6.20 / 6.60.
+Один `club`-комментарий не сгенерировался (`503`, LM Studio не загрузила
+модель). Судья отмечает перепутанные номера полуходов, неверную
+атрибуцию «лучшего хода» и выдуманные оценки. Порог 7/10 **не
+достигнут** → **KI-030** (план: сократить пакет фактов, усилить промпт,
+few-shot, 8B/облачная mini, повторный eval). Релиз не блокируется
+решением итерации.
+
+### Docker production (T-025)
+
+```
+image: chessannotator-prod-app:latest  512 MB
+app        healthy  127.0.0.1:8011->8000
+postgres   healthy  127.0.0.1:5435->5432
+redis      healthy  127.0.0.1:6382->6379
+
+GET /v1/health -> 200 {"status":"ok",
+  "components":{"db":"ok","redis":"ok","stockfish":"ok","llm":"ok"}}
+GET /        -> 200 text/html (SPA)
+POST /v1/analyze -> 200 (analysis_id=1)
+POST /v1/chat    -> 200 (948 токенов)
+```
+
+Публикация в GHCR не выполнялась (нет registry-доступа) — T-027.
+
+### DoD итерации
+
+| Пункт | Статус |
+| :--- | :--- |
+| Оценка LLM, отчёт `LLM_EVAL.md` | ✅ 5.19/10, 9/10, KI-030 |
+| Docker production проверен и безопасен | ✅ образ, стек, health, loopback-порты |
+| README, USER_GUIDE, CHANGELOG под v0.1.0 | ✅ |
+| `pytest`, `pnpm test` зелёные | ✅ 195+1 xfail; 14 passed |
+| T-023, T-025, T-026 `[x]` | ✅ |
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Качество LLM ≥ 7/10 | Локальная 4B-модель, длинный пакет фактов, таймауты; нужен тюнинг промптов/модели | KI-030 |
+| Слепой тест уровней | Нужны 10 живых шахматистов | T-024 |
+| Тег v0.1.0 и GHCR | Нет registry-доступа; T-024 не закрыт | T-027 |
+| SSE-стриминг | Синхронный JSON-контракт | KI-028 |
+| Playwright/скриншот-тест | Заменены Vitest + интеграционным тестом SPA | T-020 |
+
+### Метрики
+
+- **Backend-тесты:** 195 passed, 1 xfailed (21 файл), 199.09 с.
+- **Frontend-тесты:** 14 passed (2 файла), typecheck/build — 0.
+- **ruff:** 0; **mypy:** 0, 44 файла.
+- **Docker:** образ 512 MB, 3 контейнера healthy, health `ok`.
+- **LLM-eval:** 5.19/10; 9/10; club 3.83 средняя, gm 6.27 средняя.
+- **KI:** 30 записей, 23 Open, 7 Closed.
+- **Время итерации:** ≈ 1.5 ч.
+
+### Что дальше
+
+1. **KI-030:** сократить пакет фактов, усилить промпт и few-shot,
+   повторить eval; при необходимости — 8B/облачная mini для `club`.
+2. **T-024:** слепой тест 10 шахматистов.
+3. **T-027:** тег `v0.1.0`, GHCR, релиз-ноты после registry-доступа.
+4. **Phase 7:** admin control plane, prompt registry, OTel, FinOps,
+   semantic cache, guardrails, audit.

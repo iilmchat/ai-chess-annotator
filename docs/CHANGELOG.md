@@ -4,10 +4,28 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
 версионирование — [Semantic Versioning](https://semver.org/lang/ru/).
 
-## [Unreleased]
+## [0.1.0] — 2026-10-28
 
 ### Added
 
+- **Web UI (T-019…T-022):** React 19 + Vite SPA: вставка PGN, выбор уровня,
+  доска из FEN, список ходов с оценками и классами, карточка хода с
+  мотивами/рекомендацией, панель комментария с inline-редактором и PATCH,
+  чат по партии. 14 Vitest-тестов на FEN и форматирование.
+- **Production-раздача SPA (T-025):** Vite-сборка `web/dist` отдаётся
+  FastAPI `StaticFiles`; multi-stage Dockerfile (Node → Python), non-root
+  пользователь, Stockfish в образе; `docker-compose.prod.yml` с loopback-
+  портами БД/Redis и healthcheck.
+- **LLM-as-judge (T-023):** `scripts/evaluate_llm.py` — 5 партий ×
+  `club`/`gm`, оценки DeepSeek по трём шкалам, отчёт
+  `docs/development/reports/LLM_EVAL.md`. Средняя **5.19/10** (9 из 10),
+  ниже порога 7/10 — заведён KI-030 (план улучшения промптов); часть
+  `club`-генераций не укладывается в production-таймаут (KI-024).
+- **Документация MVP (T-026):** `USER_GUIDE.md`, `ASSISTANT_LEVELS.md`,
+  `ARCHITECTURE.md`, `MANUAL_TESTING_GUIDE.md`, README и RELEASES под
+  v0.1.0.
+- **API для доски:** `AnalyzeResponse.initial_fen` и `fen` у каждого хода —
+  чтобы клиент рисовал позицию без собственного шахматного движка.
 - **Production hardening plan (T-028…T-035, документация):** в `TODO.md`
   добавлена Фаза 7 — admin control plane, prompt management, LLMOps,
   FinOps, semantic cache, prompt-injection guardrails, dataset export и
@@ -210,8 +228,3 @@
   `sqlalchemy.text`), устаревшие стабы `types-redis`.
 - `ruff`: неиспользуемый импорт `Field`, `AsyncIterator` из `typing`,
   бесполезные `noqa`.
-
-## [0.1.0] — 2026-10-28
-
-- Первый релиз (MVP) — будет проставлен на T-027. Содержимое секции
-  заполняется по итогам итераций 1–6.

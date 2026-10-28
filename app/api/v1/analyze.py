@@ -87,6 +87,7 @@ class AnalyzedMove(BaseModel):
     ply: int = Field(ge=1)
     san: str
     uci: str
+    fen: str = Field(description="FEN позиции после хода")
     eval_cp: int | None = Field(
         default=None, description="Оценка позиции после хода (с точки зрения белых)"
     )
@@ -104,6 +105,7 @@ class AnalyzeResponse(BaseModel):
     analysis_id: str = Field(description="ID сохранённой партии (games.id)")
     status: Literal["completed"] = "completed"
     meta: AnalyzeMeta
+    initial_fen: str = Field(description="Стартовая позиция партии (FEN)")
     moves_analyzed: int = Field(ge=0)
     time_taken_ms: int = Field(ge=0)
     summary: AnalyzeSummary
@@ -143,6 +145,7 @@ async def analyze(
             black=parsed.metadata.black,
             eco=parsed.eco_code,
         ),
+        initial_fen=parsed.initial_fen,
         moves_analyzed=len(analyses),
         time_taken_ms=elapsed_ms,
         summary=_summarize(analyses),
@@ -247,6 +250,7 @@ def _build_moves(
                 ply=analysis.ply,
                 san=analysis.played_move_san,
                 uci=analysis.played_move_uci,
+                fen=parsed.moves[analysis.ply - 1].fen,
                 eval_cp=eval_cp,
                 mate=eval_mate,
                 best_move_san=analysis.best_move_san,

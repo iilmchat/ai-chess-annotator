@@ -1,7 +1,7 @@
 # GETTING STARTED — развернуть ChessAnnotator за ~20 минут
 
 > Цель этого документа — довести вас от `git clone` до работающего
-> `curl localhost:8000/v1/health` с зелёными `db`, `redis`, `stockfish`.
+> `curl 127.0.0.1:8000/v1/health` с зелёными `db`, `redis`, `stockfish`.
 > LLM на этом этапе **не требуется**: уровень «новичок» заработает после
 > T-013, а healthcheck покажет `llm: skipped` — это нормально.
 
@@ -93,7 +93,7 @@ pip install -e ".[dev]" && cp .env.example .env && alembic upgrade head
 uvicorn app.main:app --reload
 
 # Терминал 2
-curl -s http://localhost:8000/v1/health | python -m json.tool
+curl -s http://127.0.0.1:8000/v1/health | python -m json.tool
 ```
 
 Ожидаемый ответ — см. §4.
@@ -216,9 +216,9 @@ INFO:     Application startup complete.
 
 Откройте в браузере:
 
-- **Swagger UI:** http://localhost:8000/docs
-- **OpenAPI JSON:** http://localhost:8000/openapi.json
-- **Healthcheck:** http://localhost:8000/v1/health
+- **Swagger UI:** http://127.0.0.1:8000/docs
+- **OpenAPI JSON:** http://127.0.0.1:8000/openapi.json
+- **Healthcheck:** http://127.0.0.1:8000/v1/health
 
 ### 3.7. Запустить frontend (опционально)
 
@@ -233,7 +233,7 @@ pnpm --dir web dev
 Скелет фронтенда» (полный UI — в T-019…T-022).
 
 Vite проксирует `/v1/*`, `/auth/*`, `/chat/*`, `/runs/*` на
-`http://localhost:8000`, поэтому backend должен быть запущен первым.
+`http://127.0.0.1:8000`, поэтому backend должен быть запущен первым.
 
 ---
 
@@ -242,7 +242,7 @@ Vite проксирует `/v1/*`, `/auth/*`, `/chat/*`, `/runs/*` на
 ### 4.1. Healthcheck
 
 ```bash
-curl -s http://localhost:8000/v1/health | python -m json.tool
+curl -s http://127.0.0.1:8000/v1/health | python -m json.tool
 ```
 
 **Ожидаемый результат:**
@@ -418,40 +418,59 @@ cp .env.example .env
 
 - `JWT_SECRET` — `openssl rand -hex 32`.
 - `POSTGRES_PASSWORD` — сильный пароль.
-- `APP_ENV=prod`.
-- `COOKIE_SECURE=true` (уже в `docker-compose.prod.yml`).
-- `CORS_ORIGINS` — ваш домен (например, `https://chess.example.com`).
+- `DEEPSEEK_API_KEY` — если нужен уровень `gm`.
+- `PROD_CORS_ORIGINS` — ваш домен (например, `https://chess.example.com`).
+
+`APP_ENV=prod`, адреса `postgres`/`redis` и путь к Stockfish выставляются
+в `docker-compose.prod.yml`; dev-значения `127.0.0.1` и Windows-путь
+внутрь контейнера не попадают. При необходимости задайте:
+
+- `API_PORT` — loopback-порт API (по умолчанию `8000`);
+- `PROD_POSTGRES_PORT` / `PROD_REDIS_PORT` — loopback-порты БД/Redis
+  (по умолчанию `5434`/`6380`);
+- `PROD_VLLM_BASE_URL` — LM Studio на хосте;
+- `WORKERS` — число uvicorn-воркеров (по умолчанию `1`; каждый воркер
+  создаёт свой пул Stockfish).
 
 ### 7.2. Собрать и запустить
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -p chessannotator-prod -f docker-compose.prod.yml build
+docker compose -p chessannotator-prod -f docker-compose.prod.yml up -d
 ```
 
 Проверка:
 
 ```bash
-docker compose -f docker-compose.prod.yml ps
-curl -s http://localhost:8000/v1/health | python -m json.tool
+docker compose -p chessannotator-prod -f docker-compose.prod.yml ps
+curl -s http://127.0.0.1:8000/v1/health | python -m json.tool
+curl -s http://127.0.0.1:8000/ | head -n 5   # SPA
+```
+
+Если 8000/5434/6380 заняты (KI-001/KI-002), используйте отдельные порты:
+
+```bash
+API_PORT=8011 PROD_POSTGRES_PORT=5435 PROD_REDIS_PORT=6382 \
+  docker compose -p chessannotator-prod -f docker-compose.prod.yml up -d
 ```
 
 ### 7.3. HTTPS / reverse proxy
 
-`COOKIE_SECURE=true` требует HTTPS. Поставьте reverse proxy (nginx,
-Caddy, Traefik) перед контейнером `app`:
+Поставьте reverse proxy (nginx, Caddy, Traefik) перед контейнером `app`:
 
 - nginx: `proxy_pass http://127.0.0.1:8000;` + `proxy_set_header Host $host;`
 - Caddy: `reverse_proxy 127.0.0.1:8000` (автоматический Let's Encrypt).
 - Traefik: labels на контейнере.
 
-Порты `5434` и `6380` в prod **не** проброшены наружу (только loopback) —
-это правильно. БД и Redis доступны только из контейнера `app`.
+Порты `5434`/`6380` опубликованы **только на `127.0.0.1`** (или не
+публикуются вовсе) — наружу они не смотрят. БД и Redis доступны
+контейнеру `app` по compose-сети.
 
 ### 7.4. Обновление
 
 ```bash
 git pull
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -p chessannotator-prod -f docker-compose.prod.yml up -d --build
 ```
 
 Миграции применяются автоматически в entrypoint **до** старта

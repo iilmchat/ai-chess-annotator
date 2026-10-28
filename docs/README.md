@@ -24,9 +24,18 @@
 | Документ | Что внутри |
 | :--- | :--- |
 | [SPEC.md](development/SPEC.md) | **Источник истины:** цель, 7 модулей, три уровня, схема БД, API, промпты, стек, roadmap, критерии приёмки, non-functional |
+| [ARCHITECTURE.md](development/ARCHITECTURE.md) | Фактическая архитектура v0.1.0: модули, потоки данных, API, БД, frontend, Docker |
 | [DESIGN_ADMIN_AND_OPS.md](development/DESIGN_ADMIN_AND_OPS.md) | Production hardening: админ-панель, prompt registry, OTel-трейсинг, FinOps, semantic cache, guardrails, audit (T-028…T-035) |
 | [GETTING_STARTED.md](development/GETTING_STARTED.md) | Разворачивание за ~20 минут: Docker, venv, миграции, uvicorn, фронтенд, troubleshooting |
 | [../TODO.md](../TODO.md) | Последовательность задач T-001…T-035 с зависимостями, DoD и оценками |
+
+### Пользователю и QA
+
+| Документ | Что внутри |
+| :--- | :--- |
+| [user_guide/USER_GUIDE.md](user_guide/USER_GUIDE.md) | Сценарий: PGN → доска → комментарий → правка → чат |
+| [user_guide/ASSISTANT_LEVELS.md](user_guide/ASSISTANT_LEVELS.md) | Чем отличаются новичок / клуб / гроссмейстер |
+| [qa/MANUAL_TESTING_GUIDE.md](qa/MANUAL_TESTING_GUIDE.md) | Ручные кейсы и чек-лист приёмки MVP |
 
 ### Правила и процесс
 
@@ -46,13 +55,15 @@
 | [reports/iteration-8/](development/reports/iteration-8/) | Отчёты итерации 8 — комментарий (STEP-01…STEP-02) |
 | [reports/iteration-9/](development/reports/iteration-9/) | Отчёты итерации 9 — RAG (STEP-01…STEP-02) |
 | [reports/iteration-12/](development/reports/iteration-12/) | Отчёты итерации 12 — сброс БД, ingest, PATCH и чат (STEP-01…STEP-04) |
+| [reports/iteration-14/](development/reports/iteration-14/) | Отчёты итерации 14 — LLM-eval, Docker production, документация MVP |
+| [reports/LLM_EVAL.md](development/reports/LLM_EVAL.md) | LLM-as-judge: средние оценки по трём шкалам (T-023) |
 
 ### Состояние проекта
 
 | Документ | Что внутри |
 | :--- | :--- |
 | [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секция `[Unreleased]` |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-029 со статусами, severity и планом закрытия |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-030 со статусами, severity и планом закрытия |
 
 ### Тесты и данные
 
@@ -75,6 +86,9 @@
 | [../tests/integration/test_api_commentary.py](../tests/integration/test_api_commentary.py) | 7 тестов `/v1/commentary`: реконструкция анализа, retry, 404/422, живой прогон (T-016) |
 | [../tests/unit/test_rag.py](../tests/unit/test_rag.py) | 6 тестов хеш-эмбеддера (T-017) |
 | [../tests/integration/test_rag.py](../tests/integration/test_rag.py) | 9 тестов: ingest, retrieval по FEN, `/v1/ingest`, RAG в gm-промпте (T-017) |
+| [../tests/integration/test_api_commentaries_patch.py](../tests/integration/test_api_commentaries_patch.py) | 4 теста PATCH: правка, повторная правка, `edits`, 404/422 (T-021b) |
+| [../tests/integration/test_api_chat.py](../tests/integration/test_api_chat.py) | 9 тестов чата: контекст, имена, retry, 404/422/502, живой прогон (T-022) |
+| [../tests/integration/test_web_static.py](../tests/integration/test_web_static.py) | SPA из `web/dist` раздаётся FastAPI и не перехватывает `/v1` (T-025) |
 | [../tests/fixtures/example.pgn](../tests/fixtures/example.pgn) | Партия Гукеш — Каймер (Прага 2024), `1.d4 Nf6 2.c4 e6 … 27.Bg6+ 1-0`, ECO `E21` |
 | [../tests/fixtures/test_game.pgn](../tests/fixtures/test_game.pgn) | Та же партия с `Test White` / `Test Black` и без `[ECO]` — проверка метаданных и fallback-а ECO |
 | [../tests/fixtures/README.md](../tests/fixtures/README.md) | Инварианты обеих фикстур (полуходы, результат, ECO, фазы) |
@@ -88,10 +102,6 @@
 
 | Документ | Задача | Назначение |
 | :--- | :--- | :--- |
-| `ARCHITECTURE.md` | T-026 | Как система устроена сейчас: модули, потоки данных, контракты |
-| `USER_GUIDE.md` | T-026 | Пользовательский сценарий: загрузка PGN, уровни, чат, правки |
-| `ASSISTANT_LEVELS.md` | T-026 | Чем отличаются новичок / клуб / гроссмейстер |
-| `MANUAL_TESTING_GUIDE.md` | T-026 | Ручные кейсы и чек-лист приёмки |
 | `v0.1/DESIGN_V010.md` | T-017/T-019 | Дизайн-документ MVP: scope, схема, API, промпты |
 
 ---
