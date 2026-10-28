@@ -135,6 +135,7 @@ const resources = {
         retry: "Повторить",
         editId: "edit #{{id}}",
         close: "Закрыть",
+        loading: "Загрузка…",
       },
       level: {
         beginner: "Новичок",
@@ -284,6 +285,7 @@ const resources = {
         retry: "Retry",
         editId: "edit #{{id}}",
         close: "Close",
+        loading: "Loading…",
       },
       level: {
         beginner: "Beginner",

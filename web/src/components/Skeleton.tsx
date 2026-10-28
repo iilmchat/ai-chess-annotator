@@ -1,6 +1,13 @@
+import i18n from "../i18n";
+
 export function Skeleton({ lines = 3 }: { lines?: number }) {
   return (
-    <div className="skeleton" aria-hidden="true">
+    <div
+      className="skeleton"
+      role="status"
+      aria-live="polite"
+      aria-label={i18n.t("common.loading")}
+    >
       {Array.from({ length: lines }, (_, index) => (
         <span
           key={index}

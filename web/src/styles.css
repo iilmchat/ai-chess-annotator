@@ -998,3 +998,38 @@ button:disabled {
     flex: 1;
   }
 }
+
+@media (max-width: 480px) {
+  .topbar__subtitle {
+    display: none;
+  }
+
+  .topbar__nav {
+    flex-wrap: wrap;
+  }
+
+  .topbar__right {
+    gap: 8px;
+  }
+
+  .usage-badge {
+    font-size: 11.5px;
+    padding: 6px 10px;
+  }
+
+  .page__head h1 {
+    font-size: 21px;
+  }
+
+  .board-wrap {
+    padding: 6px;
+  }
+
+  .history__table {
+    min-width: 520px;
+  }
+
+  .modal {
+    padding: 16px;
+  }
+}
