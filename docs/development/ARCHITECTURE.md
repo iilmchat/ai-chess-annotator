@@ -35,7 +35,10 @@
 | `app/engine/` | async UCI-клиент Stockfish, пул, классификация, Policy, валидатор |
 | `app/motifs/` | эвристики мотивов (слабые поля, линии, вилки, мат и т.д.) |
 | `app/llm/` | OpenAI-совместимый клиент, фабрика по уровню, пакет фактов, прогрев |
-| `app/prompts/` | системные промпты `beginner`/`club`/`gm` |
+| `app/prompts/` | системные промпты `beginner`/`club`/`gm`: `.txt` — seed/fallback, таблица `prompts` — источник истины, in-memory кэш |
+| `app/finops.py` | дневные счётчики токенов в Redis, `TokenBudgetMiddleware` (429), `cost_usd` |
+| `app/security/` | prompt-injection guardrails: нормализация, эвристики, `422 prompt_injection` |
+| `app/audit.py` | append-only аудит, hash-chain, advisory-lock, верификация |
 | `app/commentary/` | сборка анализа из БД, генерация, retry, правка |
 | `app/chat/` | вопрос → контекст → LLM → валидатор → ответ |
 | `app/rag/` | ingest аннотированных партий, эмбеддинги, retrieval, контекст |

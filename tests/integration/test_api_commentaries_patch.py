@@ -14,8 +14,9 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.audit import hash_text
 from app.config import get_settings
-from app.db.models import Commentary, Edit, Game, Level
+from app.db.models import AuditLog, Commentary, Edit, Game, Level
 from app.main import create_app
 
 SHORT_PGN = "1. d4 Nf6 2. c4 e6 1/2-1/2"
@@ -97,6 +98,21 @@ async def _read_state(
         await engine.dispose()
 
 
+async def _read_audit(commentary_id: int) -> AuditLog | None:
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            return await session.scalar(
+                select(AuditLog)
+                .where(AuditLog.target_id == str(commentary_id))
+                .order_by(AuditLog.id.desc())
+                .limit(1)
+            )
+    finally:
+        await engine.dispose()
+
+
 async def _delete_game(game_id: int) -> None:
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
     try:
@@ -129,6 +145,13 @@ def test_patch_updates_text_sets_human_edited_and_writes_edit() -> None:
         assert row.human_edited is True
         assert len(edits) == 1
         assert edits[0] == (ORIGINAL_TEXT, NEW_TEXT, None)
+
+        audit = asyncio.run(_read_audit(commentary_id))
+        assert audit is not None
+        assert audit.action == "commentary.update"
+        assert audit.details["after_sha256"] == hash_text(NEW_TEXT)
+        assert audit.details["before_sha256"] == hash_text(ORIGINAL_TEXT)
+        assert "Белые" not in str(audit.details)
     finally:
         asyncio.run(_delete_game(game_id))
 

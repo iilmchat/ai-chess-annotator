@@ -124,6 +124,8 @@ async def test_completion_parsed_with_usage() -> None:
         api_key="lm-studio",
         provider_name="lmstudio",
         client=client,
+        price_in_usd_per_1m=0.27,
+        price_out_usd_per_1m=1.10,
     )
 
     result = await llm.complete("Скажи 'Привет, шахматы!'")
@@ -133,6 +135,8 @@ async def test_completion_parsed_with_usage() -> None:
     assert result.usage.model == "qwen3-8b"
     assert result.usage.tokens_in == 12
     assert result.usage.tokens_out == 7
+    # Стоимость округляется до 6 знаков в `compute_cost_usd`.
+    assert result.usage.cost_usd == pytest.approx(0.000011)
 
     body = json.loads(requests[0].content)
     assert body["model"] == "qwen3-8b"

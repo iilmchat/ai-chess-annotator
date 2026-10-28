@@ -1,0 +1,45 @@
+2026-10-29 00:40:30 [info     ] otel_configured                exporter=console service=chessannotator
+2026-10-29 00:40:33 [info     ] llm_completed                  cost_usd=0.0 elapsed_ms=2471 model=qwen/qwen3-4b-2507 provider=lmstudio tokens_in=45 tokens_out=32
+{
+    "name": "llm_generate",
+    "context": {
+        "trace_id": "0xac352f6f5706d14a2ae75e1c75d1a77f",
+        "span_id": "0xf6507283ac931f9c",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": null,
+    "start_time": "2026-10-28T21:40:30.908875Z",
+    "end_time": "2026-10-28T21:40:33.380668Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "llm.provider": "lmstudio",
+        "llm.model": "qwen/qwen3-4b-2507",
+        "llm.level": "club",
+        "llm.tokens_in": 45,
+        "llm.tokens_out": 32,
+        "llm.cost_usd": 0.0,
+        "llm.status": "ok",
+        "llm.latency_ms": 2471
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "telemetry.sdk.language": "python",
+            "telemetry.sdk.name": "opentelemetry",
+            "telemetry.sdk.version": "1.45.1",
+            "service.instance.id": "6fc314e6-be1a-494c-93f6-0dc10197a5c7",
+            "service.name": "chessannotator",
+            "service.version": "0.1.0",
+            "deployment.environment": "dev"
+        },
+        "schema_url": ""
+    }
+}
+
+TEXT: ��������� ����� � ��� �������, ��� ������� ����� ������ ��� ���� ������, ����� ���������� ����������� ����������.
+USAGE: LLMUsage(provider='lmstudio', model='qwen/qwen3-4b-2507', tokens_in=45, tokens_out=32)
+2026-10-29 00:40:33 [info     ] otel_shutdown

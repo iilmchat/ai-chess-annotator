@@ -101,6 +101,12 @@ def validate_moves(
         if any(_try_parse(position, san) is not None for position in known_positions):
             # Альтернатива к одной из позиций партии — допустимо.
             continue
+        if _is_bare_square(san):
+            # Одиночная клетка (`e1`, `a4`) неоднозначна: это может быть
+            # название поля («король на e1»), а не ход. Если она нелегальна
+            # во всех позициях партии, считаем её упоминанием поля, иначе
+            # валидатор массово отбраковывает нормальные комментарии.
+            continue
         if san not in illegal:
             illegal.append(san)
 
@@ -134,6 +140,11 @@ async def validate_llm_response(
         mainline_san=mainline_san,
         extra_fens=extra_fens,
     )
+
+
+def _is_bare_square(san: str) -> bool:
+    """``True`` для одиночной клетки без фигуры/взятия/превращения."""
+    return len(san) == 2 and san[0] in "abcdefgh" and san[1] in "12345678"
 
 
 def _try_parse(board: chess.Board, san: str) -> chess.Move | None:

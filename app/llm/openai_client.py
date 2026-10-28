@@ -28,9 +28,13 @@ from typing import Any
 
 import httpx
 import structlog
+from opentelemetry.trace import Span, Status, StatusCode, Tracer
 
 from app.errors import LLMError, LLMTimeoutError
+from app.finops import compute_cost_usd, record_token_usage
 from app.llm.base import BaseLLMClient, LLMResult, LLMUsage
+from app.llm.tokens import estimate_tokens
+from app.observability import get_tracer
 
 __all__ = ["OpenAICompatibleClient"]
 
@@ -57,6 +61,9 @@ class OpenAICompatibleClient(BaseLLMClient):
         client: готовый `httpx.AsyncClient` (для тестов с `MockTransport`).
         temperature: температура генерации.
         max_tokens: ограничение ответа (None — решает сервер).
+        price_in_usd_per_1m: цена входных токенов (для `llm.cost_usd`).
+        price_out_usd_per_1m: цена выходных токенов.
+        tracer: трейсер OTel (тесты подставляют свой провайдер).
     """
 
     def __init__(
@@ -72,6 +79,9 @@ class OpenAICompatibleClient(BaseLLMClient):
         client: httpx.AsyncClient | None = None,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        price_in_usd_per_1m: float = 0.0,
+        price_out_usd_per_1m: float = 0.0,
+        tracer: Tracer | None = None,
     ) -> None:
         super().__init__(
             model=model,
@@ -88,6 +98,9 @@ class OpenAICompatibleClient(BaseLLMClient):
         self._owns_client = client is None
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._price_in = price_in_usd_per_1m
+        self._price_out = price_out_usd_per_1m
+        self._tracer = tracer or get_tracer()
 
     @property
     def provider(self) -> str:
@@ -109,17 +122,34 @@ class OpenAICompatibleClient(BaseLLMClient):
         """
         payload = self._build_payload(prompt, system_prompt)
         started = time.perf_counter()
-        response = await self._post_with_retries(payload)
-        result = self._parse(response)
-        logger.info(
-            "llm_completed",
-            provider=self.provider,
-            model=result.usage.model,
-            tokens_in=result.usage.tokens_in,
-            tokens_out=result.usage.tokens_out,
-            elapsed_ms=int((time.perf_counter() - started) * 1000),
-        )
-        return result
+        with self._tracer.start_as_current_span("llm_generate") as span:
+            self._set_span_attributes(span)
+            try:
+                response = await self._post_with_retries(payload)
+                result = self._parse(response)
+            except Exception as exc:
+                self._record_span_error(span, exc, started)
+                raise
+
+            span.set_attribute("llm.tokens_in", result.usage.tokens_in)
+            span.set_attribute("llm.tokens_out", result.usage.tokens_out)
+            span.set_attribute("llm.cost_usd", result.usage.cost_usd)
+            span.set_attribute("llm.status", "ok")
+            span.set_attribute("llm.latency_ms", self._elapsed_ms(started))
+            span.set_status(Status(StatusCode.OK))
+            logger.info(
+                "llm_completed",
+                provider=self.provider,
+                model=result.usage.model,
+                tokens_in=result.usage.tokens_in,
+                tokens_out=result.usage.tokens_out,
+                cost_usd=result.usage.cost_usd,
+                elapsed_ms=self._elapsed_ms(started),
+            )
+            await record_token_usage(
+                result.usage.tokens_in, result.usage.tokens_out
+            )
+            return result
 
     async def stream_generate(
         self, prompt: str, system_prompt: str | None = None
@@ -132,50 +162,89 @@ class OpenAICompatibleClient(BaseLLMClient):
         payload = self._build_payload(prompt, system_prompt, stream=True)
         started = time.perf_counter()
         chars = 0
-        try:
-            client = self._http_client()
-            async with client.stream(
-                "POST", self.endpoint, json=payload, headers=self._headers()
-            ) as response:
-                if response.status_code != httpx.codes.OK:
-                    body = (await response.aread()).decode(
-                        "utf-8", errors="replace"
-                    )
-                    raise LLMError(
-                        f"{self.provider}: HTTP {response.status_code}: "
-                        f"{body[:300]}"
-                    )
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        delta = chunk["choices"][0].get("delta") or {}
-                        content = delta.get("content")
-                    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-                        continue
-                    if isinstance(content, str) and content:
-                        chars += len(content)
-                        yield content
-        except httpx.TimeoutException as exc:
-            raise LLMTimeoutError(
-                f"{self.provider}: таймаут стрима {self.timeout_s:.0f} с"
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise LLMError(
-                f"{self.provider}: сеть недоступна: {exc}"
-            ) from exc
-        finally:
-            logger.info(
-                "llm_stream_completed",
-                provider=self.provider,
-                model=self.model,
-                chars=chars,
-                elapsed_ms=int((time.perf_counter() - started) * 1000),
-            )
+        failed = False
+        tokens_in_est = estimate_tokens(prompt) + estimate_tokens(
+            system_prompt or ""
+        )
+        tokens_out_est = 0
+        with self._tracer.start_as_current_span("llm_stream") as span:
+            self._set_span_attributes(span)
+            try:
+                client = self._http_client()
+                async with client.stream(
+                    "POST", self.endpoint, json=payload, headers=self._headers()
+                ) as response:
+                    if response.status_code != httpx.codes.OK:
+                        body = (await response.aread()).decode(
+                            "utf-8", errors="replace"
+                        )
+                        raise LLMError(
+                            f"{self.provider}: HTTP {response.status_code}: "
+                            f"{body[:300]}"
+                        )
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                            delta = chunk["choices"][0].get("delta") or {}
+                            content = delta.get("content")
+                        except (
+                            json.JSONDecodeError,
+                            KeyError,
+                            IndexError,
+                            TypeError,
+                        ):
+                            continue
+                        if isinstance(content, str) and content:
+                            chars += len(content)
+                            yield content
+            except httpx.TimeoutException as exc:
+                failed = True
+                self._record_span_error(span, exc, started)
+                raise LLMTimeoutError(
+                    f"{self.provider}: таймаут стрима {self.timeout_s:.0f} с"
+                ) from exc
+            except httpx.HTTPError as exc:
+                failed = True
+                self._record_span_error(span, exc, started)
+                raise LLMError(
+                    f"{self.provider}: сеть недоступна: {exc}"
+                ) from exc
+            except Exception as exc:
+                failed = True
+                self._record_span_error(span, exc, started)
+                raise
+            finally:
+                tokens_out_est = max(1, chars // 4) if chars else 0
+                cost_est = compute_cost_usd(
+                    tokens_in_est,
+                    tokens_out_est,
+                    price_in_per_1m=self._price_in,
+                    price_out_per_1m=self._price_out,
+                )
+                span.set_attribute("llm.chars_out", chars)
+                span.set_attribute("llm.tokens_in", tokens_in_est)
+                span.set_attribute("llm.tokens_out", tokens_out_est)
+                span.set_attribute("llm.cost_usd", cost_est)
+                if not failed:
+                    span.set_attribute("llm.status", "ok")
+                    span.set_status(Status(StatusCode.OK))
+                logger.info(
+                    "llm_stream_completed",
+                    provider=self.provider,
+                    model=self.model,
+                    chars=chars,
+                    tokens_in=tokens_in_est,
+                    tokens_out=tokens_out_est,
+                    cost_usd=cost_est,
+                    elapsed_ms=self._elapsed_ms(started),
+                )
+        if not failed:
+            await record_token_usage(tokens_in_est, tokens_out_est)
 
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:
@@ -184,6 +253,26 @@ class OpenAICompatibleClient(BaseLLMClient):
             self._owns_client = False
 
     # --- внутреннее -------------------------------------------------------
+
+    def _set_span_attributes(self, span: Span) -> None:
+        """Базовые атрибуты спана: модель, провайдер, уровень (T-030)."""
+        span.set_attribute("llm.provider", self.provider)
+        span.set_attribute("llm.model", self.model)
+        if self._level is not None:
+            span.set_attribute("llm.level", self._level)
+
+    def _record_span_error(
+        self, span: Span, exc: Exception, started: float
+    ) -> None:
+        """Отметить ошибку, не кладя в спан текст исключения (privacy)."""
+        span.set_attribute("llm.status", "error")
+        span.set_attribute("llm.error_type", type(exc).__name__)
+        span.set_attribute("llm.latency_ms", self._elapsed_ms(started))
+        span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+
+    @staticmethod
+    def _elapsed_ms(started: float) -> int:
+        return int((time.perf_counter() - started) * 1000)
 
     def _build_payload(
         self,
@@ -289,10 +378,18 @@ class OpenAICompatibleClient(BaseLLMClient):
             ) from exc
 
         usage_raw = data.get("usage") or {}
+        tokens_in = int(usage_raw.get("prompt_tokens") or 0)
+        tokens_out = int(usage_raw.get("completion_tokens") or 0)
         usage = LLMUsage(
             provider=self.provider,
             model=str(data.get("model") or self.model),
-            tokens_in=int(usage_raw.get("prompt_tokens") or 0),
-            tokens_out=int(usage_raw.get("completion_tokens") or 0),
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost_usd=compute_cost_usd(
+                tokens_in,
+                tokens_out,
+                price_in_per_1m=self._price_in,
+                price_out_per_1m=self._price_out,
+            ),
         )
         return LLMResult(text=str(text).strip(), usage=usage)

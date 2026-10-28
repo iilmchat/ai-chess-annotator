@@ -1,0 +1,11 @@
+<stdin>:5: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+=== TOKEN BUDGET SMOKE (iteration 17) ===
+request 1: HTTP 200, body={'ok': True}
+request 2: HTTP 200, body={'ok': True}
+2026-10-29 01:09:34 [info     ] token_budget_exceeded          limit=100 subject=ip:testclient tier=free used=120
+request 3: HTTP 429, body={'detail': 'Daily token budget exceeded', 'code': 'token_budget_exceeded'}
+  X-RateLimit-Reset: 1793232000
+  X-RateLimit-Limit: 100
+  X-Token-Budget-Period: day
+redis key usage:2026-10-28:ip:testclient = 120 tokens, ttl=6685 s
+=== OK ===

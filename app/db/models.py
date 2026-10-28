@@ -23,6 +23,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -33,6 +34,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy import text as sql_text
@@ -43,12 +45,14 @@ from app.db.base import Base
 
 __all__ = [
     "AnnotatedGame",
+    "AuditLog",
     "Commentary",
     "Edit",
     "Game",
     "Level",
     "Motif",
     "Move",
+    "Prompt",
     "RetrievalCache",
     "User",
     "level_enum",
@@ -271,3 +275,59 @@ class Edit(Base):
 
     commentary: Mapped[Commentary] = relationship(back_populates="edits")
     editor: Mapped[User | None] = relationship()
+
+
+class Prompt(Base):
+    """Системный промпт уровня в БД (T-029, итерация 17).
+
+    Одна строка на уровень; `version` инкрементируется при правке в
+    админке, `updated_at` — серверное время. Полная история версий и
+    rollback — следующий шаг T-029 (см. отчёт итерации 17).
+    """
+
+    __tablename__ = "prompts"
+    __table_args__ = (
+        UniqueConstraint("level", name="uq_prompts_level"),
+        CheckConstraint("length(content) > 0", name="ck_prompts_content_nonempty"),
+    )
+
+    id: Mapped[int] = _pk()
+    level: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sql_text("1")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class AuditLog(Base):
+    """Append-only аудит действий с hash-chain (T-035, итерация 18).
+
+    `current_hash` считается по `prev_hash + timestamp + actor + action +
+    target_id + canonical_json(details)`. Триггер в миграции запрещает
+    UPDATE/DELETE; разрыв цепочки ловится `verify_audit_chain`.
+    """
+
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("ix_audit_logs_timestamp", "timestamp"),
+        Index("ix_audit_logs_action_timestamp", "action", "timestamp"),
+    )
+
+    id: Mapped[int] = _pk()
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    actor: Mapped[str] = mapped_column(String(320), nullable=False)
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    details: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")
+    )
+    prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    current_hash: Mapped[str] = mapped_column(String(64), nullable=False)

@@ -3,7 +3,7 @@
 Тесты делятся на два уровня:
 
 * чистые unit-тесты метаданных (не требуют БД) — проверяют, что в
-  ``Base.metadata`` есть все 8 таблиц SPEC.md §4, индексы и размерность
+  ``Base.metadata`` есть все таблицы SPEC.md §4, индексы и размерность
   эмбеддинга;
 * интеграционные тесты на живой PostgreSQL — проверяют server_default'ы
   и каскадное удаление. Если БД недоступна, они помечаются ``skipped``
@@ -35,11 +35,13 @@ from app.db.models import (
 
 SPEC_TABLES = {
     "annotated_games",
+    "audit_logs",
     "commentaries",
     "edits",
     "games",
     "motifs",
     "moves",
+    "prompts",
     "retrieval_cache",
     "users",
 }
@@ -66,6 +68,25 @@ def test_moves_index_and_embedding_dimension() -> None:
 def test_level_enum_values() -> None:
     assert [level.value for level in Level] == ["beginner", "club", "gm"]
     assert Level("gm") is Level.gm
+
+
+def test_audit_logs_table_has_hash_columns() -> None:
+    audit = Base.metadata.tables["audit_logs"]
+    assert audit.c.prev_hash.nullable is False
+    assert audit.c.current_hash.nullable is False
+    assert audit.c.details.nullable is False
+
+
+def test_prompts_table_has_unique_level_and_version() -> None:
+    prompts = Base.metadata.tables["prompts"]
+    unique = {
+        constraint.name
+        for constraint in prompts.constraints
+        if constraint.name == "uq_prompts_level"
+    }
+    assert unique == {"uq_prompts_level"}
+    assert prompts.c.version.nullable is False
+    assert prompts.c.updated_at.nullable is False
 
 
 @pytest.fixture

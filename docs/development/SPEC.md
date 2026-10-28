@@ -184,6 +184,14 @@ commentaries(id, game_id, level, text TEXT, model,
 
 -- Правки (для датасета дообучения)
 edits(id, commentary_id, original_text, edited_text, editor_id, created_at)
+
+-- Промпты уровней (T-029, итерация 17)
+prompts(id, level VARCHAR(32) UNIQUE, content TEXT,
+        version INT, updated_at TIMESTAMPTZ)
+
+-- Аудит действий (T-035, итерация 18): append-only + hash-chain
+audit_logs(id, timestamp, actor, action, target_id,
+           details JSONB, prev_hash, current_hash)
 ```
 
 **Индексы:** `moves(game_id, ply)`,

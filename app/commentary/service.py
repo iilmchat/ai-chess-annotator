@@ -64,10 +64,11 @@ class GeneratedCommentary:
 
 @dataclass(frozen=True, slots=True)
 class EditedCommentary:
-    """Результат ручной правки: обновлённый комментарий и id записи в `edits`."""
+    """Результат ручной правки: комментарий, `edits.id` и старый текст."""
 
     commentary: Commentary
     edit_id: int
+    original_text: str
 
 
 async def edit_commentary(
@@ -107,7 +108,9 @@ async def edit_commentary(
     )
     session.add(edit)
     await session.flush()
-    return EditedCommentary(commentary=row, edit_id=edit.id)
+    return EditedCommentary(
+        commentary=row, edit_id=edit.id, original_text=original_text
+    )
 
 
 async def load_game(session: AsyncSession, game_id: int) -> Game:
@@ -212,11 +215,12 @@ async def generate_commentary(
         if extra:
             package = f"{package}\n\n{extra}"
 
-    system_prompt = load_system_prompt(level)
+    system_prompt = await load_system_prompt(level, session)
     if style:
         system_prompt = f"{system_prompt}\n\nДОПОЛНИТЕЛЬНЫЙ СТИЛЬ: {style}"
 
     llm = client if client is not None else get_llm_client(level, cfg)
+    llm.set_level(level)
     owns_client = client is None
     try:
         text, usage, attempts = await _generate_with_validation(

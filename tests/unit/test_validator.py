@@ -62,6 +62,13 @@ def test_illegal_move_is_reported() -> None:
     assert illegal == ["Ke8"]
 
 
+def test_bare_square_reference_is_not_treated_as_illegal_move() -> None:
+    """«Король на e1» — это поле, а не ход; не 502-им за упоминание клетки."""
+    legal, illegal = validate_moves(["e1"], START)
+
+    assert (legal, illegal) == (True, [])
+
+
 def test_illegal_moves_are_deduplicated() -> None:
     legal, illegal = validate_moves(["Nf3", "Ke8", "Ke8"], START)
 

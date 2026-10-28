@@ -1,0 +1,102 @@
+[
+  {
+    "game_id": 150,
+    "white": "Stein, Leonid",
+    "black": "Geller, Efim",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 77,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2426,
+    "attempts": 0,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 3.0,
+      "usefulness": 4.0,
+      "style": 5.0
+    },
+    "judge_comment": "Комментарий путает полуходы с ходами, неверно трактует потери cp как оценку лучшего хода и приписывает мотивы не тому ходу, что снижает фактическую точность.",
+    "judge_tokens": 1656,
+    "error": null
+  },
+  {
+    "game_id": 151,
+    "white": "Stein, Leonid",
+    "black": "Suetin, Alexei",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 78,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2340,
+    "attempts": 0,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 3.0,
+      "usefulness": 4.0,
+      "style": 4.0
+    },
+    "judge_comment": "Комментарий путает полуходы с ходами, неверно называет дебют и искажает оценки и класс ходов из пакета анализа.",
+    "judge_tokens": 1594,
+    "error": null
+  },
+  {
+    "game_id": 152,
+    "white": "Bronstein, David",
+    "black": "Spassky, Boris",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 79,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2551,
+    "attempts": 0,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 4.0,
+      "usefulness": 5.0,
+      "style": 4.0
+    },
+    "judge_comment": "Комментарий путает полуходы с ходами, неверно приписывает Bb7 и Bd4 к разным сторонам и содержит неточные формулировки о мотивах, хотя общая идея слабых полей передана.",
+    "judge_tokens": 1810,
+    "error": null
+  },
+  {
+    "game_id": 153,
+    "white": "Bronstein, David",
+    "black": "Kholmov, Ratmir",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 80,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2573,
+    "attempts": 0,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 5.0,
+      "usefulness": 4.0,
+      "style": 5.0
+    },
+    "judge_comment": "Комментарий в основном согласуется с оценками и мотивами, но путает полуходы с номерами ходов, ошибочно приписывает Rad1 защиту короля и слабо объясняет планы и альтернативы.",
+    "judge_tokens": 1833,
+    "error": null
+  },
+  {
+    "game_id": 154,
+    "white": "Bronstein, David",
+    "black": "Stein, Leonid",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 81,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2481,
+    "attempts": 0,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 5.0,
+      "usefulness": 5.0,
+      "style": 6.0
+    },
+    "judge_comment": "Комментарий в целом согласуется с фактами, но путает рекомендации движка с лучшими ходами и содержит неточные формулировки о слабых полях и оценках.",
+    "judge_tokens": 1738,
+    "error": null
+  }
+]

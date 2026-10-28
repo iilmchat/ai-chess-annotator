@@ -1,14 +1,18 @@
 # DESIGN_ADMIN_AND_OPS — Production Hardening & Admin Panel
 
-> **Версия:** 1.0 · **Дата:** 2026-10-28 · **Статус:** proposed (design only)
+> **Версия:** 1.0 · **Дата:** 2026-10-28 · **Статус:** частично реализовано
+> (итерации 16–18: `/admin`, OTel-спаны LLM, `prompts` + `PromptAdmin`,
+> Redis-бюджеты/`cost_usd`, prompt-injection guardrails, append-only
+> `audit_logs` + проверка целостности; остальное — T-029b…T-035b)
 > **Задачи:** T-028…T-035 · **Источник истины:** [SPEC.md](SPEC.md) §10
 > **Связанные документы:** [TODO.md](../../TODO.md) (Фаза 7),
 > [KNOWN_ISSUES.md](../KNOWN_ISSUES.md), [RULES.md](RULES.md)
 
 Документ фиксирует архитектуру production-hardening слоя: админ-панель,
 управление промптами, LLMOps-трейсинг, FinOps, семантический кэш, защиту
-от prompt injection и неизменяемый аудит. Код в этой итерации **не
-пишется**: документ — вход для задач T-028…T-035.
+от prompt injection и неизменяемый аудит. Документ остаётся входом для
+задач T-028…T-035; фактические отклонения и остатки фиксируются в
+отчётах итераций 16–17 и `KNOWN_ISSUES.md`.
 
 ---
 

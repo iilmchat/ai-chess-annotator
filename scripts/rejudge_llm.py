@@ -124,7 +124,12 @@ def main(argv: list[str] | None = None) -> int:
     overall = _averages(rows)
     average = sum(overall.values()) / len(overall) if overall else 0.0
 
-    report = _report(rows, games, ["club", "gm"], 300.0)
+    levels = sorted({row.level for row in rows})
+    report = _report(rows, games, levels, 300.0)
+    report = report.replace(
+        "**Статус:** завершено (MVP v0.1.0)",
+        "**Статус:** повторная оценка сохранённых комментариев",
+    )
     report = report.replace(
         "- Судья получает метаданные, ходы, ключевые моменты и сам комментарий;",
         "- Судья получает **полный пакет фактов** (ходы, ключевые моменты, PV, "
@@ -134,6 +139,10 @@ def main(argv: list[str] | None = None) -> int:
         "## Итоговые оценки",
         "> Повторная оценка сохранённых комментариев с полным пакетом фактов; "
         "генерация не повторялась.\n\n## Итоговые оценки",
+    )
+    report = report.replace(
+        "_Сырые результаты: `docs/development/reports/llm_eval_results.json`_",
+        f"_Сырые результаты: `{args.json_output.as_posix()}`_",
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(report, encoding="utf-8")

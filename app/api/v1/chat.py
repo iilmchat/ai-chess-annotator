@@ -11,14 +11,17 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
+from app.audit import record_injection_attempt
 from app.chat import answer_question
 from app.chat.streaming import stream_chat
 from app.db.session import get_session
+from app.errors import PromptInjectionError
+from app.security.guardrails import inspect_user_input
 
 router = APIRouter(tags=["chat"])
 
@@ -59,6 +62,7 @@ class ChatResponse(BaseModel):
 @router.post("/chat/stream")
 async def chat_stream(
     payload: ChatRequest,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> EventSourceResponse:
     """Стримить ответ чата через SSE (T-032).
@@ -66,12 +70,13 @@ async def chat_stream(
     События: `meta` → `delta`* → `done` | `error`. Итоговый текст
     проверяется SAN-валидатором.
     """
+    question = await _guard_message(request, payload.message)
     return EventSourceResponse(
         stream_chat(
             session,
             payload.analysis_id,
             payload.level,
-            payload.message,
+            question,
         )
     )
 
@@ -79,6 +84,7 @@ async def chat_stream(
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> ChatResponse:
     """Ответить на вопрос пользователя по анализу партии.
@@ -89,13 +95,31 @@ async def chat(
         LLMTimeoutError: провайдер не ответил (→ 504).
         LLMValidationError: нелегальные ходы даже после retry (→ 502).
     """
+    question = await _guard_message(request, payload.message)
     result = await answer_question(
         session,
         payload.analysis_id,
         payload.level,
-        payload.message,
+        question,
     )
     return ChatResponse(
         reply=result.reply,
         tokens_used=result.usage.tokens_in + result.usage.tokens_out,
+    )
+
+
+async def _guard_message(request: Request, message: str) -> str:
+    """Проверить вопрос и записать заблокированную инъекцию в аудит."""
+    decision = inspect_user_input(message)
+    if not decision.blocked:
+        return decision.text
+    await record_injection_attempt(
+        request,
+        rule_ids=decision.rule_ids,
+        message_hash=decision.message_hash,
+        message_len=decision.original_len,
+    )
+    raise PromptInjectionError(
+        "Запрос заблокирован: обнаружена попытка prompt injection",
+        rule_ids=decision.rule_ids,
     )

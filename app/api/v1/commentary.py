@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
+from app.audit import actor_from_request, append_audit, hash_text
 from app.commentary import RagContextBuilder, edit_commentary, generate_commentary
 from app.commentary.streaming import stream_commentary
 from app.db.models import Commentary, Level
@@ -122,6 +123,7 @@ async def create_commentary(
         model=result.usage.model,
         tokens_in=result.usage.tokens_in,
         tokens_out=result.usage.tokens_out,
+        cost_usd=result.usage.cost_usd,
         validated=result.validated,
     )
     session.add(row)
@@ -166,6 +168,7 @@ async def patch_commentary(
         int, Path(gt=0, description="ID комментария из /v1/commentary")
     ],
     payload: CommentaryPatchRequest,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> CommentaryPatchResponse:
     """Отредактировать комментарий человеком (T-021b).
@@ -178,6 +181,21 @@ async def patch_commentary(
         NotFoundError: комментарий не найден (→ 404).
     """
     result = await edit_commentary(session, commentary_id, payload.text)
+    await append_audit(
+        session,
+        actor=actor_from_request(request),
+        action="commentary.update",
+        target_id=str(commentary_id),
+        details={
+            "commentary_id": commentary_id,
+            "edit_id": result.edit_id,
+            "level": result.commentary.level.value,
+            "before_sha256": hash_text(result.original_text),
+            "after_sha256": hash_text(payload.text),
+            "before_len": len(result.original_text),
+            "after_len": len(payload.text),
+        },
+    )
     await session.commit()
     row = result.commentary
     return CommentaryPatchResponse(

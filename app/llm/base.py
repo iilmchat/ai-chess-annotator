@@ -9,8 +9,8 @@
   `commentaries.tokens_in/tokens_out`);
 * :meth:`BaseLLMClient.aclose` — закрыть HTTP-клиент.
 
-Стоимость (`cost_usd`) здесь не считается: цен нет в настройках, это задача
-T-016/KI-021.
+Стоимость (`cost_usd`) считается в клиенте по ценам из настроек (T-031)
+и переносится в `LLMUsage`, чтобы API мог записать её в `commentaries`.
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ class LLMUsage:
     model: str
     tokens_in: int
     tokens_out: int
+    #: Оценка стоимости по прайсу провайдера (0 для локальной модели).
+    cost_usd: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,11 +78,23 @@ class BaseLLMClient(ABC):
         self._timeout_s = timeout_s
         self._max_retries = max_retries
         self._retry_backoff_s = retry_backoff_s
+        # Уровень ассистента выставляет вызывающий сервис; нужен только для
+        # атрибута спана `llm.level` (T-030) и не влияет на запрос.
+        self._level: str | None = None
 
     @property
     def model(self) -> str:
         """Имя модели, с которой работает клиент."""
         return self._model
+
+    @property
+    def level(self) -> str | None:
+        """Уровень ассистента, если вызывающий его указал."""
+        return self._level
+
+    def set_level(self, level: str | None) -> None:
+        """Запомнить уровень ассистента для OTel-спана (`llm.level`)."""
+        self._level = level
 
     @property
     def timeout_s(self) -> float:

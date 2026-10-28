@@ -21,6 +21,7 @@ from app.ingestion import parse_pgn
 from app.llm import BaseLLMClient, get_llm_client
 from app.llm.prompts import build_fact_package
 from app.llm.tokens import estimate_tokens
+from app.security.guardrails import sanitize_user_input
 from app.streaming import sse_event
 
 __all__ = ["stream_chat"]
@@ -57,8 +58,9 @@ async def stream_chat(
             return
 
         package = build_fact_package(parsed, analyses, level)
-        prompt = build_chat_prompt(package, message.strip())
+        prompt = build_chat_prompt(package, sanitize_user_input(message))
         llm = client if client is not None else get_llm_client(level, cfg)
+        llm.set_level(level)
         yield sse_event("meta", model=llm.model, level=level)
 
         chunks: list[str] = []

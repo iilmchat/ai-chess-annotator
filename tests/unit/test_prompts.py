@@ -10,6 +10,8 @@ from app.ingestion import parse_pgn
 from app.llm.prompts import (
     KEY_MOTIF_IMPORTANCE,
     MAX_KEY_MOMENTS,
+    MAX_KEY_MOMENTS_BY_LEVEL,
+    PV_LEVELS,
     _select_key_moments,
     build_fact_package,
 )
@@ -86,8 +88,8 @@ def _short_analyses() -> list[MoveAnalysis]:
 
 
 @pytest.mark.parametrize("level", sorted(PROMPT_LEVELS))
-def test_prompt_exists_and_has_rules(level: str) -> None:
-    text = load_system_prompt(level)
+async def test_prompt_exists_and_has_rules(level: str) -> None:
+    text = await load_system_prompt(level)
 
     assert len(text) > 300
     assert "SAN" in text
@@ -95,15 +97,15 @@ def test_prompt_exists_and_has_rules(level: str) -> None:
     assert "Markdown" in text, "промпт обязан запрещать разметку внутри ходов"
 
 
-def test_prompt_unknown_level_raises() -> None:
+async def test_prompt_unknown_level_raises() -> None:
     with pytest.raises(InvalidLevelError):
-        load_system_prompt("master")
+        await load_system_prompt("master")
 
 
-def test_prompts_are_distinct() -> None:
-    beginner = load_system_prompt("beginner")
-    club = load_system_prompt("club")
-    gm = load_system_prompt("gm")
+async def test_prompts_are_distinct() -> None:
+    beginner = await load_system_prompt("beginner")
+    club = await load_system_prompt("club")
+    gm = await load_system_prompt("gm")
 
     assert len({beginner, club, gm}) == 3
 
@@ -135,7 +137,9 @@ def test_fact_package_lists_key_moments_with_motifs_and_recommendation() -> None
     assert "потеря 150 cp" in package
     assert "Рекомендация для club" in package
     assert "king_safety" in package
-    assert "PV (до 8 ходов):" in package
+    assert "PV (до 8 ходов):" not in package, (
+        "для club PV отключены: они перегружали контекст (KI-030)"
+    )
     assert "**" not in package, "в пакете не должно быть Markdown-разметки ходов"
 
 
@@ -160,6 +164,50 @@ def test_fact_package_respects_key_moment_limit() -> None:
 
     headings = [line for line in package.splitlines() if line.startswith("## ")]
     assert len(headings) == MAX_KEY_MOMENTS
+
+
+def test_club_fact_package_is_compact() -> None:
+    game = parse_pgn(
+        "1. Nf3 Nf6 2. Ng1 Ng8 3. Nf3 Nf6 4. Ng1 Ng8 5. Nf3 Nf6 "
+        "6. Ng1 Ng8 7. Nf3 Nf6 8. Ng1 Ng8 1/2-1/2"
+    )
+    analyses = [
+        _analysis(
+            ply,
+            move.san,
+            "g1f3",
+            delta=100 + ply * 10,
+            classification="blunder",
+        )
+        for ply, move in enumerate(game.moves, start=1)
+    ]
+
+    package = build_fact_package(game, analyses, "club")
+
+    headings = [line for line in package.splitlines() if line.startswith("## ")]
+    assert len(headings) == MAX_KEY_MOMENTS_BY_LEVEL["club"] == 3
+    assert "PV (до" not in package
+    assert "club" not in PV_LEVELS
+
+
+def test_gm_fact_package_keeps_pv_and_more_moments() -> None:
+    game = parse_pgn(SHORT_PGN)
+
+    package = build_fact_package(game, _short_analyses(), "gm")
+
+    assert "PV (до 8 ходов):" in package
+    assert "gm" in PV_LEVELS
+
+
+async def test_club_prompt_has_few_shot_examples() -> None:
+    text = await load_system_prompt("club")
+
+    assert "few-shot" in text.lower()
+    assert "Хорошо:" in text
+    assert "НЕТ конкретных ходов" in text, (
+        "примеры не должны содержать SAN-ходы: 4B-модель копирует их в ответ"
+    )
+    assert "ПЕРЕД ОТВЕТОМ ПРОВЕРЬ" in text
 
 
 def test_select_key_moments_prioritises_delta() -> None:

@@ -26,6 +26,7 @@ __all__ = [
     "LLMTimeoutError",
     "LLMValidationError",
     "NotFoundError",
+    "PromptInjectionError",
 ]
 
 
@@ -115,3 +116,14 @@ class NotFoundError(AppError):
 
     code = "not_found"
     http_status = 404
+
+
+class PromptInjectionError(AppError):
+    """Входные данные содержат попытку prompt injection (T-033)."""
+
+    code = "prompt_injection"
+    http_status = 422
+
+    def __init__(self, message: str, *, rule_ids: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.rule_ids = rule_ids

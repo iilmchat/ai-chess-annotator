@@ -113,7 +113,8 @@ async def _generate_until_legal(
     text = ""
     illegal: list[str] = []
     for _ in range(attempts):
-        result = await llm.complete(prompt, system_prompt=load_system_prompt(LEVEL))  # type: ignore[attr-defined]
+        system_prompt = await load_system_prompt(LEVEL)
+        result = await llm.complete(prompt, system_prompt=system_prompt)  # type: ignore[attr-defined]
         text = result.text
         moves = extract_moves_from_text(text)
         legal, illegal = validate_moves(

@@ -8,6 +8,44 @@
 
 ### Added
 
+- **Prompt Injection Guardrails (T-033, итерация 18):**
+  `app/security/guardrails.py` — NFKC-нормализация, удаление
+  control/zero-width/bidi, лимит 2000, 7 правил (override/leak/role/
+  jailbreak/role-tags, RU+EN); `inspect_user_input` → 422
+  `prompt_injection` в `/v1/chat` и `/chat/stream`; запрет раскрывать
+  системные инструкции в `CHAT_SYSTEM_PROMPT`.
+- **Security Audit (T-035, итерация 18):** append-only `audit_logs`
+  (`timestamp`, `actor`, `action`, `target_id`, `details`,
+  `prev_hash`, `current_hash`), миграция `f4a5b6c7d8e9`, hash-chain,
+  advisory-lock и триггер `UPDATE/DELETE/TRUNCATE`; аудит правки промпта,
+  `PATCH /v1/commentaries/{id}` и заблокированных инъекций; read-only
+  view и страница «Проверить целостность».
+- **Redis Pub/Sub кэша промптов (KI-032):** канал `prompts_updates`,
+  watcher в lifespan, публикация после commit в админке.
+- **Prompt Management (T-029, итерация 17):** таблица `prompts`
+  (`level`, `content`, `version`, `updated_at`), миграция
+  `e3f4a5b6c7d8`, seed из `app/prompts/*.txt` при старте, async
+  `load_system_prompt` с in-memory кэшем, `reset_prompt_cache`, горячая
+  инвалидация после правки и редактируемый view `PromptAdmin` (версия
+  инкрементируется, `content` меняется без рестарта).
+- **FinOps / token budget (T-031, итерация 17):** дневные Redis-счётчики
+  `usage:{date}:{ip|user}`, `TokenBudgetMiddleware` для
+  analyze/commentary/chat (+stream), `429 token_budget_exceeded` с
+  `X-RateLimit-Reset`/`Retry-After`, лимиты
+  `DAILY_TOKEN_LIMIT_FREE/PRO`, `cost_usd` по ценам из конфига в
+  `commentaries` и OTel-спанах.
+- **Admin Panel (T-028, частично):** `app/admin.py` — `/admin` на
+  `starlette-admin` 1.0 (тот же `AsyncEngine`), защита `X-Admin-Token`
+  (тот же `ADMIN_API_KEY`) или cookie-сессия формы входа
+  (`ADMIN_USERNAME`/`ADMIN_PASSWORD`), 401 без учётных данных и 403 на
+  неверный токен. Read-only views `annotated_games`, `commentaries`,
+  `edits`; `tzdata` для конвертации времени на Windows.
+- **OTel-спаны LLM (T-030, частично):** `llm_generate` и `llm_stream` в
+  `OpenAICompatibleClient` с атрибутами `llm.model`, `llm.level`,
+  `llm.tokens_in`, `llm.tokens_out`, `llm.cost_usd`, `llm.status`;
+  экспорт `console`/`otlp` при `OTEL_ENABLED=true`.
+- **Стандарт отчётов (RULES §2.18):** отчёт о фазе — строго 7 разделов;
+  файл `docs/development/reports/v0.1.0/ITERATION-16.md`.
 - **Синхронизация UI (итерация 15):** `react-chessboard` 5.12.1
   (`<Chessboard options={{position}} />`), `chess.js`
   `history({verbose:true})` для FEN из PGN, `react-i18next` (RU/EN),
@@ -27,6 +65,24 @@
 
 ### Changed
 
+- **KI-031 закрыт:** тир `free/pro` больше не берётся из
+  `X-User-Tier`/`X-User-Id`; `pro` — только IP из `PRO_IPS`,
+  `X-Forwarded-For` — только при `TRUST_FORWARDED_FOR=true`.
+- **KI-032 закрыт:** кэш промптов инвалидируется между воркерами через
+  Redis Pub/Sub; локальный reset остаётся fallback'ом.
+- **Промпты из БД:** `load_system_prompt` стал async (читает `prompts`
+  при промахе кэша и падает обратно на `.txt` при недоступной БД);
+  вызовы в commentary service/streaming обновлены.
+- **KI-021 закрыт:** `LLMUsage.cost_usd`, `commentaries.cost_usd` и
+  OTel-атрибут `llm.cost_usd` считаются по `LLM_PRICE_*`/
+  `LLM_LOCAL_PRICE_*`.
+- **KI-030 / `club`:** промпт `club.txt` сокращён и получил few-shot
+  примеры **без SAN**; пакет фактов для `club` — только топ-3 момента без
+  PV (было до 10 с PV); заголовки моментов однозначно называют сторону и
+  номер. LLM-as-judge (полный пакет): **4.40/10** против 3.83, 5/5 без
+  `502`, prompt-токены ≈ 3.4k → 1.9k. Конкретные few-shot (V1) оказались
+  вредны — 4B-модель копировала ходы из примеров (3.00/10). Валидатор
+  больше не считает одиночную клетку (`e1`) ходом.
 - `games` получила `analysis_level` и `analysis_time_ms`; `AnalyzeResponse`
   отдаёт `analysis_level`.
 

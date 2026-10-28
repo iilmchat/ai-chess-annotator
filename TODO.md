@@ -311,8 +311,14 @@
 задач — сверху вниз: T-028 задаёт control plane, остальные на него
 опираются.
 
-### [ ] T-028. Admin Control Plane
+### [~] T-028. Admin Control Plane (частично, итерация 16)
 - **Зависит от:** T-004, T-025, T-027
+- **Статус итерации 16:** `/admin` смонтирован, защищён `X-Admin-Token`
+  / cookie-сессией, подключены read-only views `annotated_games`,
+  `commentaries`, `edits`; тесты `tests/integration/test_admin.py`.
+  Осталось: роли `user/admin/auditor`, миграция `users.role`,
+  `password_hash`, серверные сессии в Redis, мягкое удаление RAG,
+  RBAC и аудит мутаций (T-035).
 - **Что:** смонтировать `starlette-admin` на `/admin` (AsyncEngine из
   `app.db.session`), добавить роль `admin` в `users` (enum `user/admin/
   auditor`, `password_hash`, миграция), аутентификацию админки через
@@ -326,8 +332,15 @@
   миграция `users.role`/`password_hash` с backfill `user`.
 - **Оценка:** 3
 
-### [ ] T-029. Prompt Management
+### [x] T-029. Prompt Management (итерация 17)
 - **Зависит от:** T-014, T-028
+- **Статус итерации 17:** таблица `prompts` (`level`, `content`,
+  `version`, `updated_at`), миграция `e3f4a5b6c7d8`, seed из `.txt` при
+  старте, async `load_system_prompt` с in-memory кэшем и
+  `reset_prompt_cache`, редактируемый `PromptAdmin` (только `content`;
+  версия инкрементируется, кэш сбрасывается после commit). Тесты:
+  `tests/integration/test_prompts_db.py`, `tests/unit/test_prompt_admin.py`.
+  Остаток (история версий/rollback/API/аудит/preview) — T-029b.
 - **Что:** вынести `app/prompts/{beginner,club,gm}.txt` в таблицу
   `prompts` с версиями и одной активной версией на `slug`; API
   `GET/PUT /v1/admin/prompts`, `POST /v1/admin/prompts/{slug}/rollback`;
@@ -341,8 +354,26 @@
   `audit_logs`.
 - **Оценка:** 3
 
-### [ ] T-030. LLMOps Observability
+### [ ] T-029b. Prompt Registry: история, rollback, API, аудит
+- **Зависит от:** T-029, T-035
+- **Что:** неизменяемые версии `prompts` (новая строка на правку), diff
+  и история в админке, `POST /v1/admin/prompts/{slug}/rollback`,
+  `GET/PUT /v1/admin/prompts`, предпросмотр на тестовой партии; запись
+  каждого изменения в `audit_logs`; мультипроцессная инвалидация кэша
+  через Redis Pub/Sub + TTL.
+- **DoD:** правка создаёт версию, старые версии неизменяемы, rollback
+  возвращает предыдущую; изменения видны в аудите; тесты версий/кеша.
+- **Оценка:** 2
+
+### [~] T-030. LLMOps Observability (частично, итерация 16)
 - **Зависит от:** T-013, T-025, T-028
+- **Статус итерации 16:** OTel-спаны `llm_generate`/`llm_stream` в
+  `OpenAICompatibleClient` с атрибутами `llm.model`, `llm.level`,
+  `llm.tokens_in`, `llm.tokens_out`, `llm.cost_usd`; экспорт
+  `console`/`otlp` при `OTEL_ENABLED=true`; тесты
+  `tests/unit/test_observability.py`. Осталось: W3C-пропагация
+  `trace_id`, durable-таблица `llm_calls`, спаны `http.request` /
+  `validator` / `rag.retrieve`, дашборды.
 - **Что:** сквозной `trace_id` (W3C Trace Context) от HTTP-запроса до
   вызова LLM и валидатора; OTel-спаны `http.request`, `llm.complete`,
   `validator`, `rag.retrieve`; экспорт OTLP в коллектор (Jaeger/Tempo),
@@ -355,8 +386,17 @@
   попадает.
 - **Оценка:** 4
 
-### [ ] T-031. FinOps & Token Rate Limiting
+### [x] T-031. FinOps & Token Rate Limiting (итерация 17)
 - **Зависит от:** T-009, T-013, T-030
+- **Статус итерации 17:** дневные Redis-счётчики
+  `usage:{date}:{ip|user}`, `TokenBudgetMiddleware` для
+  analyze/commentary/chat (+stream), `429 token_budget_exceeded` с
+  `X-RateLimit-Reset`/`Retry-After`; `daily_token_limit_free/pro`;
+  стоимость `cost_usd` считается по ценам из конфига и пишется в
+  `commentaries` + OTel-спан. Тесты: `tests/unit/test_token_budget.py`,
+  `tests/integration/test_token_budget_api.py`. Остаток (durable
+  `usage_daily`, месячные/пользовательские бюджеты, админ-настройки,
+  алерты) — T-031b.
 - **Что:** бюджеты не только по числу запросов, но и по токенам/стоимости
   на пользователя, IP и глобально (день/месяц); Redis-счётчики с
   атомарным `INCRBY`/Lua, durable-агрегаты `usage_daily`; настройки
@@ -366,6 +406,18 @@
 - **DoD:** тесты: запрос сверх бюджета отклоняется, счётчики не
   превышают лимит при гонке, сброс периода корректен; стоимость считается
   по прайсу модели; админ может менять лимит; дашборд расходов.
+- **Оценка:** 3
+
+### [ ] T-031b. FinOps: durable-агрегаты, месячные бюджеты, дашборд
+- **Зависит от:** T-031, T-035
+- **Что:** `usage_daily` (upsert из Redis), лимиты на пользователя/IP/
+  глобально и на месяц, reserve/reconcile по фактическим токенам,
+  настройка лимитов в `system_settings`/админке, алерты 80/100%,
+  дашборд расходов; резолвинг тира из JWT, а не из `X-User-Tier`
+  (KI-031); точные `X-Token-Budget-*` в успешных ответах.
+- **DoD:** счётчики переживают рестарт Redis; суммарные списания не
+  превышают лимит при гонке; тир нельзя подделать заголовком; дашборд
+  стоимости.
 - **Оценка:** 3
 
 ### [ ] T-032. Semantic Cache
@@ -382,8 +434,17 @@
   hit/miss/инвалидации; hit rate виден в метриках.
 - **Оценка:** 4
 
-### [ ] T-033. Prompt Injection Guardrails
+### [x] T-033. Prompt Injection Guardrails (итерация 18)
 - **Зависит от:** T-022, T-030
+- **Статус итерации 18:** `app/security/guardrails.py` —
+  NFKC-нормализация, удаление control/zero-width/bidi, лимит 2000,
+  7 эвристик (override/leak/role/jailbreak/role-tags, RU+EN);
+  `inspect_user_input` блокирует и возвращает `rule_ids`, в
+  `/v1/chat` и `/v1/chat/stream` — 422 `prompt_injection` + запись в
+  аудит; в системный промпт чата добавлен запрет раскрывать инструкции.
+  Тесты: `tests/unit/test_guardrails.py`, `test_api_chat.py`.
+  Остаток (классификатор, `<user_question>`, `style`, корпус 20 атак,
+  метрики) — T-033b.
 - **Что:** защита `/v1/chat` (и полей `style`/`message`): лимиты длины и
   кодировки, нормализация Unicode, явные разделители
   `<user_question>…</user_question>`, инструкция иерархии в системном
@@ -396,6 +457,17 @@
   `prompt_injection`; системный промпт не утекает; события пишутся в
   аудит/метрики; тесты на корпусе.
 - **Оценка:** 3
+
+### [ ] T-033b. Guardrails: классификатор, корпус, output filter
+- **Зависит от:** T-033, T-030
+- **Что:** опциональный LLM-классификатор инъекций, обёртка
+  `<user_question>…</user_question>`, защита поля `style` в
+  `/v1/commentary`, выходной фильтр на утечку системного промпта,
+  `injection_events` без сырого текста, метрики block/flag, корпус
+  ≥20 атак + 50 легальных вопросов (detection ≥95%, FP ≤5%).
+- **DoD:** все поверхности (chat/style/stream) защищены; корпус в CI;
+  false positive ≤5%; события и метрики доступны.
+- **Оценка:** 2
 
 ### [ ] T-034. Dataset Export
 - **Зависит от:** T-021b, T-028
@@ -411,8 +483,18 @@
   в аудите; интеграционный тест.
 - **Оценка:** 2
 
-### [ ] T-035. Security Audit
+### [x] T-035. Security Audit (итерация 18)
 - **Зависит от:** T-028
+- **Статус итерации 18:** таблица `audit_logs` (`timestamp`, `actor`,
+  `action`, `target_id`, `details`, `prev_hash`, `current_hash`),
+  миграция `f4a5b6c7d8e9`, advisory-lock + hash-chain, триггер
+  `UPDATE/DELETE → append-only`; аудит правки промпта, `PATCH
+  /v1/commentaries/{id}` и заблокированной инъекции; read-only
+  `AuditLogAdmin` и страница «Проверить целостность» с проверкой всей
+  цепочки. Тесты: `tests/integration/test_audit.py`, `test_admin.py`,
+  `test_api_chat.py`, `test_api_commentaries_patch.py`.
+  Остаток (audit login/logout/бюджетов/экспорта, отдельные IP/UA,
+  retention/SIEM, роль `auditor`) — T-035b.
 - **Что:** append-only `audit_logs`: actor (id/hash, без FK), IP,
   user-agent, action, entity, before/after JSONB, `trace_id`,
   `request_id`; hash-chain (`prev_hash`/`self_hash`) и триггеры,
@@ -424,6 +506,16 @@
   CLI/тестом; запись содержит актора, IP, действие и diff; страница
   Audit Log доступна роли `auditor`.
 - **Оценка:** 3
+
+### [ ] T-035b. Audit: полный охват, SIEM, retention
+- **Зависит от:** T-035, T-028
+- **Что:** отдельные `actor_ip`/`user_agent`/`request_id`/`trace_id`,
+  аудит login/logout, бюджетов, экспорта и CRUD RAG; фильтры по
+  actor/action/entity/date; CLI `python -m app.audit.verify`; retention
+  и экспорт в SIEM; роль `auditor` (read-only); партиционирование.
+- **DoD:** каждая админ-мутация и вход/выход в аудите; фильтры и
+  экспорт; проверка цепочки из CLI; retention-политика.
+- **Оценка:** 2
 
 ---
 

@@ -1,0 +1,102 @@
+[
+  {
+    "game_id": 51,
+    "white": "Stein, Leonid",
+    "black": "Geller, Efim",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 77,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2426,
+    "attempts": 1,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 2.0,
+      "usefulness": 3.0,
+      "style": 3.0
+    },
+    "judge_comment": "Комментарий путает стороны, ходы и оценки: 12.O-O назван ходом белых с оценкой -0.05 и лучшим O-O-O, 11...Bd6 приписан чёрным с оценкой +1.16, а рекомендации Be6 и Rh8 выдуманы; текст фрагментарен и содержит неверные мотивы.",
+    "judge_tokens": 1463,
+    "error": null
+  },
+  {
+    "game_id": 16,
+    "white": "Stein, Leonid",
+    "black": "Suetin, Alexei",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 78,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2340,
+    "attempts": 1,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 3.0,
+      "usefulness": 4.0,
+      "style": 5.0
+    },
+    "judge_comment": "Комментарий содержит фактические ошибки: неверно назван дебют (Берлинский вместо сицилианской защиты), перепутаны стороны и ходы в ключевых моментах (8...e6 вместо 4...e6, 8.a3 вместо 8-го полухода, 21...Bb5 с неверной интерпретацией потери cp), хотя общая структура изложения связная.",
+    "judge_tokens": 1420,
+    "error": null
+  },
+  {
+    "game_id": 32,
+    "white": "Bronstein, David",
+    "black": "Spassky, Boris",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 79,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2551,
+    "attempts": 1,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 3.0,
+      "usefulness": 4.0,
+      "style": 4.0
+    },
+    "judge_comment": "Комментарий содержит выдуманные мотивы и неверные оценки (Bb7 назван неточным при потере всего 33 cp, Bf4 — «лучший» при оценке +0.76 за белых), путает полуходы и ходы, а также приписывает слабые поля g5/g3/c5 без подтверждения в фактах.",
+    "judge_tokens": 1437,
+    "error": null
+  },
+  {
+    "game_id": 17,
+    "white": "Bronstein, David",
+    "black": "Kholmov, Ratmir",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 80,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2573,
+    "attempts": 1,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 3.0,
+      "usefulness": 3.0,
+      "style": 4.0
+    },
+    "judge_comment": "Комментарий путает полуходы с ходами, приписывает ходам несуществующие мотивы и слабости (h3, диагональ h1–a8), а также неверно трактует оценки и рекомендации, что снижает точность и пользу.",
+    "judge_tokens": 1432,
+    "error": null
+  },
+  {
+    "game_id": 23,
+    "white": "Bronstein, David",
+    "black": "Stein, Leonid",
+    "event": "Moscow zt",
+    "level": "club",
+    "commentary_id": 81,
+    "model": "qwen/qwen3-4b-2507",
+    "tokens_used": 2481,
+    "attempts": 1,
+    "validated": true,
+    "scores": {
+      "factual_accuracy": 3.0,
+      "usefulness": 4.0,
+      "style": 5.0
+    },
+    "judge_comment": "Комментарий путает ходы и стороны (12.Bg5 приписан неверный лучший ход Re1 вместо b3, 15...f5 и 15.Bc1 перепутаны местами), содержит выдуманные мотивы и не опирается на ключевые моменты анализа.",
+    "judge_tokens": 1414,
+    "error": null
+  }
+]

@@ -20,13 +20,19 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
+from app.admin import AdminPathNormalizer, create_admin
 from app.api.ratelimit import RateLimitMiddleware, RedisRateLimiter
 from app.api.v1 import analyze, chat, commentary, games, health, ingest
 from app.config import Settings, get_settings
+from app.db.session import SessionLocal
 from app.db.session import engine as db_engine
 from app.engine.pool import EnginePool
 from app.errors import AppError, EngineError
+from app.finops import TokenBudgetMiddleware, TokenUsageTracker
 from app.llm.warmup import warmup_local_llm
+from app.observability import configure_telemetry, shutdown_telemetry
+from app.prompts import seed_prompts, warm_prompt_cache
+from app.prompts.pubsub import watch_prompt_updates
 from app.rag.context import make_rag_context_builder
 
 logger = structlog.get_logger(__name__)
@@ -38,11 +44,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # T-030: трейсинг включается только при OTEL_ENABLED=true;
+        # без провайдера спаны в клиенте — no-op.
+        app.state.telemetry_provider = configure_telemetry(cfg)
         app.state.engine_pool = EnginePool(cfg)
         redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
             cfg.redis_url, decode_responses=True
         )
         app.state.redis = redis_client
+        # T-029: сид/прогрев промптов из БД. Сбой БД не блокирует старт —
+        # load_system_prompt в этом случае падает обратно на .txt-файлы.
+        async with SessionLocal() as prompt_session:
+            try:
+                await seed_prompts(prompt_session)
+                await warm_prompt_cache(prompt_session)
+            except Exception as exc:
+                logger.warning("prompts_init_failed", error=str(exc))
         app.state.rag_context_builder = make_rag_context_builder(cfg)
         app.state.rate_limiter = (
             RedisRateLimiter(
@@ -53,6 +70,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if cfg.rate_limit_enabled
             else None
         )
+        app.state.token_usage_tracker = (
+            TokenUsageTracker(
+                redis_client,
+                free_limit=cfg.daily_token_limit_free,
+                pro_limit=cfg.daily_token_limit_pro,
+            )
+            if cfg.token_budget_enabled
+            else None
+        )
+        # KI-032: каждый воркер слушает канал и сбрасывает локальный кэш
+        # промптов. Недоступный Redis просто логируется.
+        prompt_updates_task: asyncio.Task[None] | None = None
+        if cfg.prompt_pubsub_enabled:
+            prompt_updates_task = asyncio.create_task(
+                watch_prompt_updates(redis_client), name="prompt-updates"
+            )
+            app.state.prompt_updates_task = prompt_updates_task
         # KI-022: грузим локальную модель в фоне, чтобы первый реальный
         # запрос не ждал ~12 с. Отсутствие LM Studio не ломает старт.
         warmup_task: asyncio.Task[bool] | None = None
@@ -75,12 +109,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 warmup_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await warmup_task
+            if prompt_updates_task is not None and not prompt_updates_task.done():
+                prompt_updates_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await prompt_updates_task
             await app.state.engine_pool.aclose()
             await redis_client.aclose()
             # Закрываем пул соединений БД внутри текущего event loop: иначе
             # соединения asyncpg остаются привязанными к закрытому циклу
             # (актуально для тестов с несколькими TestClient).
             await db_engine.dispose()
+            shutdown_telemetry(app.state.telemetry_provider)
             logger.info("app_stopped")
 
     app = FastAPI(
@@ -105,12 +144,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ],
     )
     app.add_middleware(
+        TokenBudgetMiddleware,
+        protected=[
+            ("POST", f"{cfg.api_prefix}/analyze"),
+            ("POST", f"{cfg.api_prefix}/commentary"),
+            ("POST", f"{cfg.api_prefix}/commentary/stream"),
+            ("POST", f"{cfg.api_prefix}/chat"),
+            ("POST", f"{cfg.api_prefix}/chat/stream"),
+        ],
+        pro_ips=cfg.pro_ips_set,
+        trust_forwarded_for=cfg.trust_forwarded_for,
+    )
+    app.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.cors_origin_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # `/admin` → `/admin/` до маршрутизации: Mount не матчит точный префикс.
+    app.add_middleware(AdminPathNormalizer)
 
     app.add_exception_handler(AppError, _app_error_handler)
 
@@ -120,6 +173,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(commentary.router, prefix=cfg.api_prefix)
     app.include_router(chat.router, prefix=cfg.api_prefix)
     app.include_router(ingest.router, prefix=cfg.api_prefix)
+
+    # Admin control plane (T-028): монтируется до SPA, чтобы `/admin`
+    # не перехватывался статикой.
+    create_admin(cfg).mount_to(app)
 
     # SPA (T-025): production-сборка Vite лежит в web/dist и раздаётся тем же
     # процессом. Монтируется последним, чтобы не перехватывать /v1/* и /docs.

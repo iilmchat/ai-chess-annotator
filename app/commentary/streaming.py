@@ -25,6 +25,7 @@ from app.config import Settings, get_settings
 from app.db.models import Commentary, Level
 from app.engine.validator import extract_moves_from_text, validate_moves
 from app.errors import AppError
+from app.finops import compute_cost_usd, prices_for_level
 from app.ingestion import parse_pgn
 from app.llm import BaseLLMClient, get_llm_client
 from app.llm.prompts import build_fact_package
@@ -66,11 +67,12 @@ async def stream_commentary(
             return
 
         package = build_fact_package(parsed, analyses, level)
-        system_prompt = load_system_prompt(level)
+        system_prompt = await load_system_prompt(level, session)
         if style:
             system_prompt = f"{system_prompt}\n\nДОПОЛНИТЕЛЬНЫЙ СТИЛЬ: {style}"
 
         llm = client if client is not None else get_llm_client(level, cfg)
+        llm.set_level(level)
         yield sse_event("meta", model=llm.model, level=level)
 
         chunks: list[str] = []
@@ -103,6 +105,7 @@ async def stream_commentary(
 
         tokens_in = estimate_tokens(package) + estimate_tokens(system_prompt)
         tokens_out = estimate_tokens(text)
+        price_in, price_out = prices_for_level(cfg, level)
         row = Commentary(
             game_id=game.id,
             level=Level(level),
@@ -110,6 +113,12 @@ async def stream_commentary(
             model=llm.model,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            cost_usd=compute_cost_usd(
+                tokens_in,
+                tokens_out,
+                price_in_per_1m=price_in,
+                price_out_per_1m=price_out,
+            ),
             validated=True,
         )
         session.add(row)

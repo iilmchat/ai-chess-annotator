@@ -79,6 +79,8 @@ def get_llm_client(
             client=client,
             max_tokens=cfg.llm_max_tokens,
             temperature=cfg.llm_temperature,
+            price_in_usd_per_1m=cfg.llm_local_price_in_usd_per_1m,
+            price_out_usd_per_1m=cfg.llm_local_price_out_usd_per_1m,
         )
 
     api_key = (cfg.deepseek_api_key or "").strip()
@@ -97,4 +99,6 @@ def get_llm_client(
         client=client,
         max_tokens=cfg.llm_max_tokens,
         temperature=cfg.llm_temperature,
+        price_in_usd_per_1m=cfg.llm_price_in_usd_per_1m,
+        price_out_usd_per_1m=cfg.llm_price_out_usd_per_1m,
     )

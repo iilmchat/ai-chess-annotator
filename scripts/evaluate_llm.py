@@ -24,6 +24,7 @@ import json
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -293,6 +294,7 @@ def _judge_cli(
     client_settings = settings.model_copy(
         update={
             "rate_limit_requests": 10_000,
+            "token_budget_enabled": False,
             "llm_warmup_enabled": False,
             "llm_timeout_s": timeout_s,
         }
@@ -376,7 +378,8 @@ def _report(
     lines = [
         "# LLM-as-judge: оценка комментариев (T-023)",
         "",
-        "> **Дата:** 2026-10-28 · **Статус:** завершено (MVP v0.1.0)",
+        f"> **Дата:** {date.today().isoformat()} · "
+        "**Статус:** завершено (MVP v0.1.0)",
         "> **Скрипт:** `scripts/evaluate_llm.py` · **Судья:** DeepSeek",
         "> **Генерация:** `club` → LM Studio, `gm` → DeepSeek",
         "",

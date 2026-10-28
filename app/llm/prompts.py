@@ -23,12 +23,26 @@ from app.prompts import PROMPT_LEVELS
 __all__ = [
     "KEY_MOTIF_IMPORTANCE",
     "MAX_KEY_MOMENTS",
+    "MAX_KEY_MOMENTS_BY_LEVEL",
+    "PV_LEVELS",
     "PV_LIMIT",
     "build_fact_package",
 ]
 
-#: Сколько ключевых моментов максимум попадает в пакет.
+#: Сколько ключевых моментов максимум попадает в пакет (базовый лимит).
 MAX_KEY_MOMENTS = 10
+
+#: Лимит по уровням (KI-030): локальной 4B-модели для `club` нужен
+#: короткий пакет — только три самые крупные потери, без PV.
+MAX_KEY_MOMENTS_BY_LEVEL: dict[str, int] = {
+    "beginner": MAX_KEY_MOMENTS,
+    "club": 3,
+    "gm": MAX_KEY_MOMENTS,
+}
+
+#: Уровни, для которых в пакет попадают PV-линии. Для `club` они
+#: перегружали контекст и провоцировали ошибки атрибуции (KI-030).
+PV_LEVELS = frozenset({"gm"})
 
 #: Мотив с такой важностью делает ход «ключевым» даже без ошибки.
 KEY_MOTIF_IMPORTANCE = 4
@@ -82,14 +96,20 @@ def build_fact_package(
     lines.append(_format_game_moves(game))
     lines.append("")
 
-    key_moments = _select_key_moments(analyses)
+    moment_limit = MAX_KEY_MOMENTS_BY_LEVEL[level]
+    include_pv = level in PV_LEVELS
+    key_moments = _select_key_moments(analyses, limit=moment_limit)
     lines.append(
-        f"# Ключевые моменты (до {MAX_KEY_MOMENTS}, по убыванию потери)"
+        f"# Ключевые моменты (до {moment_limit}, по убыванию потери)"
     )
     if not key_moments:
         lines.append("Ключевых моментов не найдено.")
     for number, analysis in enumerate(key_moments, start=1):
-        lines.extend(_format_key_moment(number, analysis, game, level))
+        lines.extend(
+            _format_key_moment(
+                number, analysis, game, level, include_pv=include_pv
+            )
+        )
         lines.append("")
 
     lines.append(
@@ -99,8 +119,10 @@ def build_fact_package(
     return "\n".join(lines).strip() + "\n"
 
 
-def _select_key_moments(analyses: list[MoveAnalysis]) -> list[MoveAnalysis]:
-    """Ошибки + тактически важные мотивы, не больше `MAX_KEY_MOMENTS`."""
+def _select_key_moments(
+    analyses: list[MoveAnalysis], *, limit: int = MAX_KEY_MOMENTS
+) -> list[MoveAnalysis]:
+    """Ошибки + тактически важные мотивы, не больше ``limit``."""
     flagged = [
         analysis
         for analysis in analyses
@@ -117,19 +139,28 @@ def _select_key_moments(analyses: list[MoveAnalysis]) -> list[MoveAnalysis]:
         ),
         reverse=True,
     )
-    return flagged[:MAX_KEY_MOMENTS]
+    return flagged[:limit]
 
 
 def _format_key_moment(
-    number: int, analysis: MoveAnalysis, game: ParsedGame, level: str
+    number: int,
+    analysis: MoveAnalysis,
+    game: ParsedGame,
+    level: str,
+    *,
+    include_pv: bool = True,
 ) -> list[str]:
     ply = analysis.ply
     move_number = (ply + 1) // 2
-    side = "белые" if ply % 2 == 1 else "чёрные"
-    prefix = f"{move_number}." if ply % 2 == 1 else f"{move_number}..."
+    side_nom = "белые" if ply % 2 == 1 else "чёрные"
+    side_gen = "белых" if ply % 2 == 1 else "чёрных"
 
-    lines = [f"## {number}. Полуход {ply} ({prefix}), {side}: {analysis.played_move_san}"]
-    lines.append(f"- Оценка после хода: {_format_eval(analysis)}")
+    lines = [
+        f"## {number}. Ход {move_number} {side_gen}: "
+        f"{analysis.played_move_san} (полуход {ply})"
+    ]
+    lines.append(f"- Сыграно: {analysis.played_move_san} ({side_nom})")
+    lines.append(f"- Оценка после хода (за белых): {_format_eval(analysis)}")
     lines.append(
         f"- Лучший ход движка: {analysis.best_move_san}; "
         f"потеря {analysis.delta_cp} cp; класс: {analysis.classification}"
@@ -143,9 +174,10 @@ def _format_key_moment(
             f"{_uci_to_san(fen_before, recommended.move_uci)}"
         )
 
-    pv = _pv_san(fen_before, analysis.lines)
-    if pv:
-        lines.append(f"- PV (до {PV_LIMIT} ходов): {' '.join(pv)}")
+    if include_pv:
+        pv = _pv_san(fen_before, analysis.lines)
+        if pv:
+            lines.append(f"- PV (до {PV_LIMIT} ходов): {' '.join(pv)}")
 
     if analysis.motifs:
         lines.append("- Мотивы:")

@@ -28,6 +28,11 @@ dependencies = [
     "httpx>=0.28",
     "python-multipart>=0.0.20",
     "sse-starlette>=2.1",
+    "starlette-admin>=1.0",
+    "itsdangerous>=2.2",
+    # ZoneInfo на Windows не имеет системной базы часовых поясов, а
+    # starlette-admin конвертирует datetime в TZ пользователя.
+    "tzdata>=2024.1",
     "opentelemetry-api>=1.29",
     "opentelemetry-sdk>=1.29",
     "opentelemetry-exporter-otlp-proto-http>=1.29",

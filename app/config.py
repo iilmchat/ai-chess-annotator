@@ -46,6 +46,15 @@ class Settings(BaseSettings):
 
     # Admin API (T-031): защита /v1/ingest общим токеном до появления JWT.
     admin_api_key: str | None = None
+    # Admin Panel (T-028): тот же токен принимается заголовком X-Admin-Token,
+    # а форма входа /admin/login — паролем (или тем же токеном).
+    admin_username: str = "admin"
+    admin_password: str | None = None
+    #: Секрет подписи cookie админ-сессии; по умолчанию — JWT_SECRET.
+    admin_session_secret: str | None = None
+    admin_session_ttl_min: int = 30
+    #: Redis Pub/Sub-инвалидация кэша промптов между воркерами (KI-032).
+    prompt_pubsub_enabled: bool = True
 
     # LLM (T-013): локально — LM Studio (OpenAI-совместимый API), облако — DeepSeek.
     #: Историческое имя: локальный провайдер (compose/healthcheck).
@@ -97,8 +106,31 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-nomic-embed-text-v1.5"
     embedding_dim: int = 768
 
+    # LLM pricing (KI-021 / T-030/T-031): доллары за 1M токенов.
+    # Облачные цены — иллюстративные (DeepSeek), локальные — 0.
+    llm_price_in_usd_per_1m: float = 0.27
+    llm_price_out_usd_per_1m: float = 1.10
+    llm_local_price_in_usd_per_1m: float = 0.0
+    llm_local_price_out_usd_per_1m: float = 0.0
+
+    # FinOps / token budget (T-031): дневные лимиты на IP.
+    token_budget_enabled: bool = True
+    daily_token_limit_free: int = 50_000
+    daily_token_limit_pro: int = 500_000
+    #: IP, которым выдаётся `pro` до появления JWT (KI-031).
+    pro_ips: str = ""
+    #: Доверять `X-Forwarded-For` (только за известным reverse-proxy).
+    trust_forwarded_for: bool = False
+
+    @property
+    def pro_ips_set(self) -> set[str]:
+        return {item.strip() for item in self.pro_ips.split(",") if item.strip()}
+
     # Observability
     otel_enabled: bool = False
+    #: `console` — печать спанов в stdout; `otlp` — OTLP/HTTP экспортёр.
+    otel_exporter: str = "console"
+    otel_service_name: str = "chessannotator"
     otel_exporter_otlp_endpoint: str = "http://localhost:4318"
 
     @property

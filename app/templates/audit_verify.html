@@ -1,0 +1,34 @@
+{% extends "layout.html" %}
+{% block header %}
+    <div class="d-flex justify-content-between align-items-center">
+        <h1>{{ title }}</h1>
+    </div>
+{% endblock %}
+{% block content %}
+    <div class="card">
+        <div class="card-body">
+            {% if ok %}
+                <div class="alert alert-success" role="alert">
+                    OK: проверено {{ checked }} записей, цепочка хешей цела.
+                </div>
+            {% else %}
+                <div class="alert alert-danger" role="alert">
+                    Ошибка целостности: {{ errors|length }} проблем(ы).
+                </div>
+                <ul class="mb-3">
+                    {% for error in errors[:50] %}
+                        <li><code>{{ error }}</code></li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+            <a class="btn btn-primary"
+               href="{{ url_for(__name__ ~ ':audit-verify') }}">
+                Проверить целостность ещё раз
+            </a>
+            <a class="btn btn-secondary"
+               href="{{ url_for(__name__ ~ ':list', key='audit-log') }}">
+                К журналу аудита
+            </a>
+        </div>
+    </div>
+{% endblock %}

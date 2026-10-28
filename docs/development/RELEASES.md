@@ -965,3 +965,135 @@ KI-030 (качество LLM 5.19/10) остаётся открытым и не 
 ### Что дальше
 
 Phase 7 / T-028 (Admin Control Plane).
+
+---
+
+## Итерация 16 — Admin Panel, KI-030, OTel (T-028, T-030, частично)
+
+**Дата:** 2026-10-29
+**Статус:** ⚠️ частично: T-028/T-030 в объёме итерации; KI-030 Open
+**Полный отчёт (7 разделов):**
+`docs/development/reports/v0.1.0/ITERATION-16.md`
+
+### Что сделано
+
+- `/admin` на `starlette-admin`: `X-Admin-Token` / cookie-сессия,
+  401/403, read-only views `annotated_games`, `commentaries`, `edits`.
+- OTel-спаны `llm_generate`/`llm_stream` с моделью, уровнем, токенами,
+  стоимостью и статусом; `console`/`otlp` при `OTEL_ENABLED=true`.
+- `club`: промпт сокращён, few-shot без SAN, пакет — топ-3 без PV.
+  Валидатор не считает одиночную клетку ходом.
+- `RULES.md` §2.18 — стандарт отчётов из 7 разделов.
+
+### Метрики
+
+- Backend-тесты: **218 passed, 1 xfailed** (182.06 с).
+- `ruff` — 0; `mypy app` — 0 (51 файл).
+- LLM `club`: **4.40/10** (было 3.83), 5/5 без 5xx; prompt-токены
+  ≈ 3.4k → 1.9k.
+- Админка: 401/403/200, login 303 + cookie, 3 списка 200.
+- OTel: спан `llm_generate`, status OK, 2.47 с.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| RBAC, `users.role`, Redis-сессии, soft-delete RAG | Следующий шаг control plane | T-028 |
+| `trace_id` propagation, `llm_calls`, спаны HTTP/validator/RAG | Базовый OTel-слой только включён | T-030 |
+| Качество LLM ≥ 7/10 | 4B-модель путает атрибуцию; KI-023 | KI-030 |
+| Prompt Editor, Export, Audit Log | Зависят от T-028/T-035 | T-029, T-034, T-035 |
+
+### Что дальше
+
+T-028-полный (роли + Redis-сессии + soft-delete), T-029 (Prompt Registry),
+T-030-полный (`llm_calls`, propagation), T-035 (audit).
+
+---
+
+## Итерация 17 — Prompt Management и FinOps (T-029, T-031)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ T-029/T-031 в объёме итерации; остатки — T-029b/T-031b
+**Полный отчёт (7 разделов):**
+`docs/development/reports/v0.1.0/ITERATION-17.md`
+
+### Что сделано
+
+- Таблица `prompts` (`level`, `content`, `version`, `updated_at`),
+  миграция `e3f4a5b6c7d8`; seed из `.txt` при старте.
+- `load_system_prompt` читает БД с in-memory кэшем, `reset_prompt_cache`;
+  редактируемый `PromptAdmin`, версия +1, hot-reload без рестарта.
+- `TokenUsageTracker` и `TokenBudgetMiddleware`: дневные лимиты
+  `free`/`pro`, `429 token_budget_exceeded` с `X-RateLimit-Reset`.
+- `cost_usd` по ценам из конфига в `LLMUsage`, `commentaries` и OTel;
+  KI-021 закрыт.
+
+### Метрики
+
+- Backend-тесты: **235 passed, 1 xfailed** (182.79 с).
+- `ruff` — 0; `mypy app` — 0 (52 файла).
+- `alembic check` — без дрейфа; head `e3f4a5b6c7d8`.
+- Prompt smoke: POST 303, version +1, следующий `load_system_prompt`
+  вернул новый текст без ручного reset.
+- Token smoke: 200 / 200 / 429, счётчик 120 токенов, TTL до UTC-полуночи.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| История версий/rollback/API/аудит промптов | Одна строка на уровень; нужен registry | T-029b |
+| Multi-worker инвалидация кэша | Нужен Redis Pub/Sub | KI-032 |
+| Доверенный тир/субъект бюджета | Нет JWT/ролей | KI-031, T-028 |
+| Durable `usage_daily`, месячные лимиты, дашборд | Горячий путь MVP | T-031b |
+
+### Что дальше
+
+T-029b (registry), T-031b (durable FinOps), T-028-полный (JWT/роли),
+T-035 (аудит).
+
+---
+
+## Итерация 18 — Guardrails и Security Audit (T-033, T-035)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ T-033/T-035 в объёме итерации; KI-031/KI-032 закрыты
+**Полный отчёт (7 разделов):**
+`docs/development/reports/v0.1.0/ITERATION-18.md`
+
+### Что сделано
+
+- `app/security/guardrails.py`: NFKC, control/zero-width/bidi, лимит
+  2000, 7 RU/EN-правил; `/v1/chat` и `/chat/stream` → 422
+  `prompt_injection` + аудит; sysprompt запрещает раскрывать инструкции.
+- `audit_logs`: hash-chain, advisory-lock, trigger `UPDATE/DELETE/
+  TRUNCATE → append-only`; аудит промптов, PATCH комментариев и инъекций;
+  read-only view + страница «Проверить целостность».
+- KI-032: Redis Pub/Sub `prompts_updates`, watcher в lifespan,
+  публикация после commit.
+- KI-031: тир только по IP из `PRO_IPS`; `X-User-Tier`/`X-User-Id`
+  игнорируются; XFF — только при `TRUST_FORWARDED_FOR=true`.
+
+### Метрики
+
+- Backend-тесты: **257 passed, 1 xfailed** (177.23 с).
+- `ruff` — 0; `mypy app` — 0 (56 файлов).
+- `alembic check` — без дрейфа; head `f4a5b6c7d8e9`.
+- Injection smoke: 422, audit `prompt_injection.blocked`, verify OK,
+  `UPDATE` заблокирован триггером.
+- Prompt audit smoke: 303, `prompt.update`, Pub/Sub subscribed,
+  chain OK (5 записей).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Классификатор, `<user_question>`, style, output filter, корпус атак | Regex — первый барьер | T-033b |
+| IP/UA/request_id, аудит login/бюджетов/экспорта, SIEM, auditor | Остаток T-035 | T-035b |
+| Атомарный аудит правки промпта | starlette-admin коммитит до hook | KI-033 |
+| TTL-fallback Pub/Sub | Сообщение может потеряться | T-029b |
+| JWT-тир и роли | Нет JWT | T-028/T-031b |
+
+### Что дальше
+
+T-033b (классификатор/корпус), T-035b (полный аудит/SIEM),
+T-028-полный (JWT/роли), T-029b (registry/TTL).
