@@ -1,6 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +34,34 @@ class Settings(BaseSettings):
     jwt_alg: str = "HS256"
     access_token_ttl_min: int = 15
     refresh_token_ttl_days: int = 7
+    # KI-037: refresh-токен — в HttpOnly-cookie, а не в теле ответа.
+    #: Имя cookie с refresh JWT.
+    auth_cookie_name: str = "refresh_token"
+    #: Флаг Secure (в проде за HTTPS — true; в dev по http — false).
+    auth_cookie_secure: bool = False
+    #: SameSite для refresh-cookie; lax — разумный дефолт для SPA.
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    #: Path cookie: refresh уходит только на /auth/*, не на весь API.
+    auth_cookie_path: str = "/auth"
+    #: Домен cookie; None — host-only (текущий хост).
+    auth_cookie_domain: str | None = None
+    #: Redis-denylist отозванных refresh-токенов (`/auth/logout`).
+    refresh_denylist_enabled: bool = True
+
+    @model_validator(mode="after")
+    def _validate_auth_cookie_flags(self) -> "Settings":
+        """SameSite=None без Secure браузеры отвергают — не допускаем конфиг.
+
+        Проверка ловит мисконфиг на старте, а не «тихо потерянную» cookie в
+        проде: `AUTH_COOKIE_SAMESITE=none` имеет смысл только под HTTPS.
+        """
+        if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure:
+            raise ValueError(
+                "AUTH_COOKIE_SAMESITE=none требует AUTH_COOKIE_SECURE=true "
+                "(браузеры не принимают SameSite=None без Secure)"
+            )
+        return self
+
     #: Тестовый seam (T-028): подмена get_current_user для старой сюиты.
     #: Работает ТОЛЬКО при APP_ENV=test; в dev/prod значение игнорируется.
     test_auth_bypass: bool = False
