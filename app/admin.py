@@ -817,9 +817,10 @@ class DatasetExportView(CustomView):
     path = "/exports/dataset"
     route_name = "dataset-export"
 
-    def __init__(self, *, export_url: str) -> None:
+    def __init__(self, *, export_url: str, jobs_url: str) -> None:
         super().__init__()
         self._export_url = export_url
+        self._jobs_url = jobs_url
 
     @route("")
     async def index(self, request: Request) -> Response:
@@ -832,6 +833,10 @@ class DatasetExportView(CustomView):
             context={
                 "title": "Экспорт датасета",
                 "export_url": self._export_url,
+                "jobs_url": self._jobs_url,
+                # KI-045: auditor read-only — форма создания джобы скрыта,
+                # API всё равно ответит 403 (защита не только в UI).
+                "can_create": _admin_role(request) != _ROLE_AUDITOR,
                 "levels": ("beginner", "club", "gm"),
             },
         )
@@ -903,7 +908,8 @@ def create_admin(settings: Settings) -> Admin:
     )
     admin.add_view(
         DatasetExportView(
-            export_url=f"{settings.api_prefix}/admin/exports/edits.jsonl"
+            export_url=f"{settings.api_prefix}/admin/exports/edits.jsonl",
+            jobs_url=f"{settings.api_prefix}/admin/exports/jobs",
         )
     )
     admin.add_view(AuditVerifyView())

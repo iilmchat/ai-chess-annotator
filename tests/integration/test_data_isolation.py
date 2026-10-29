@@ -87,6 +87,10 @@ def _settings() -> Settings:
         llm_warmup_enabled=False,
         prompt_pubsub_enabled=False,
         semantic_cache_enabled=False,
+        # `_env_file=None` не читает .env, а skipif выше проверяет путь из
+        # get_settings(): без переноса пути приложение искало бы
+        # /usr/bin/stockfish на Windows-dev (KI-006).
+        stockfish_path=get_settings().stockfish_path,
     )
 
 

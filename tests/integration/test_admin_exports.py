@@ -490,6 +490,12 @@ def test_admin_export_page_is_available(
         assert response.status_code == 200, (role, response.text)
         assert "dataset-export-form" in response.text
         assert "/v1/admin/exports/edits.jsonl" in response.text
+        # KI-050: форма фоновой выгрузки; auditor — read-only.
+        assert "/v1/admin/exports/jobs" in response.text
+        if role == "admin":
+            assert "Создать экспорт" in response.text
+        else:
+            assert "Роль auditor" in response.text
 
 
 # --- Аудит выгрузки (KI-050, итерация 29) ---------------------------------

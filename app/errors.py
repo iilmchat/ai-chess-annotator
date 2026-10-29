@@ -20,6 +20,8 @@ __all__ = [
     "EngineError",
     "EngineNotFoundError",
     "EngineTimeoutError",
+    "ExportJobFileMissingError",
+    "ExportJobNotReadyError",
     "ForbiddenError",
     "InvalidFenError",
     "InvalidLevelError",
@@ -183,3 +185,17 @@ class PdfFontUnavailableError(PdfExportError):
 
     code = "pdf_font_unavailable"
     http_status = 503
+
+
+class ExportJobNotReadyError(AppError):
+    """Фоновая выгрузка ещё не завершена — файла для скачивания нет (KI-050)."""
+
+    code = "export_job_not_ready"
+    http_status = 409
+
+
+class ExportJobFileMissingError(AppError):
+    """Джоба помечена `done`, но файл удалён/пропал с диска (KI-050)."""
+
+    code = "export_job_file_missing"
+    http_status = 410

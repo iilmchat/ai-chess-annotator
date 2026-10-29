@@ -63,9 +63,36 @@
             </form>
         </div>
     </div>
+    <div class="card mt-3" id="export-job-card">
+        <div class="card-body">
+            <h2 class="h5">Фоновая выгрузка</h2>
+            <p class="text-muted">
+                Для больших объёмов: сервер соберёт JSONL в фоне, браузер
+                не ждёт стрим. Создайте джобу, дождитесь статуса «Готово»
+                и скачайте файл — фильтры берутся из формы выше.
+            </p>
+            {% if can_create %}
+                <button type="button" class="btn btn-success"
+                        id="export-job-create">
+                    Создать экспорт
+                </button>
+            {% else %}
+                <div class="alert alert-info mb-0">
+                    Роль auditor: создание экспорта недоступно, но готовые
+                    файлы можно скачать.
+                </div>
+            {% endif %}
+            <div class="mt-3" id="export-job-status" aria-live="polite"></div>
+        </div>
+    </div>
     <script>
         (function () {
             const form = document.getElementById("dataset-export-form");
+            const jobsUrl = {{ jobs_url|tojson }};
+            const canCreate = {{ can_create|tojson }};
+            const createButton = document.getElementById("export-job-create");
+            const statusBox = document.getElementById("export-job-status");
+
             form.addEventListener("submit", function (event) {
                 const params = new URLSearchParams();
                 for (const [name, value] of new FormData(form).entries()) {
@@ -78,6 +105,109 @@
                     (query ? "?" + query : "");
                 event.preventDefault();
             });
+
+            function showStatus(text, cssClass) {
+                statusBox.textContent = "";
+                const alert = document.createElement("div");
+                alert.className = "alert " + (cssClass || "alert-secondary");
+                alert.textContent = text;
+                statusBox.appendChild(alert);
+            }
+
+            function showDownload(job) {
+                statusBox.textContent = "";
+                const box = document.createElement("div");
+                box.className = "alert alert-success";
+                box.textContent = "Готово: строк " + job.rows_exported +
+                    ", размер " + (job.file_size || 0) + " байт. ";
+                const link = document.createElement("a");
+                link.className = "alert-link";
+                link.href = jobsUrl + "/" + job.id + "/download";
+                link.textContent = "Скачать JSONL";
+                box.appendChild(link);
+                statusBox.appendChild(box);
+            }
+
+            async function pollJob(jobId) {
+                let response;
+                try {
+                    response = await fetch(jobsUrl + "/" + jobId, {
+                        credentials: "same-origin"
+                    });
+                } catch (error) {
+                    showStatus("Сеть недоступна: " + error, "alert-danger");
+                    if (createButton) { createButton.disabled = false; }
+                    return;
+                }
+                if (!response.ok) {
+                    showStatus("Не удалось получить статус джобы: " +
+                        response.status, "alert-danger");
+                    if (createButton) { createButton.disabled = false; }
+                    return;
+                }
+                const job = await response.json();
+                if (job.status === "done") {
+                    showDownload(job);
+                    if (createButton) { createButton.disabled = false; }
+                    return;
+                }
+                if (job.status === "failed") {
+                    showStatus("Ошибка выгрузки: " + (job.error || "неизвестно"),
+                        "alert-danger");
+                    if (createButton) { createButton.disabled = false; }
+                    return;
+                }
+                showStatus(job.status === "running"
+                    ? "Выполняется…"
+                    : "В очереди…", "alert-info");
+                window.setTimeout(function () { pollJob(jobId); }, 1000);
+            }
+
+            async function createJob() {
+                const payload = {};
+                for (const [name, value] of new FormData(form).entries()) {
+                    if (value === "") { continue; }
+                    if (name === "schema_version") {
+                        payload[name] = Number(value);
+                    } else if (name === "human_edited") {
+                        payload[name] = value === "true";
+                    } else {
+                        payload[name] = value;
+                    }
+                }
+                if (createButton) { createButton.disabled = true; }
+                showStatus("Создаём джобу…", "alert-info");
+                let response;
+                try {
+                    response = await fetch(jobsUrl, {
+                        method: "POST",
+                        credentials: "same-origin",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload)
+                    });
+                } catch (error) {
+                    showStatus("Сеть недоступна: " + error, "alert-danger");
+                    if (createButton) { createButton.disabled = false; }
+                    return;
+                }
+                if (!response.ok) {
+                    let detail = "HTTP " + response.status;
+                    try {
+                        const body = await response.json();
+                        detail = body.detail || detail;
+                    } catch (error) { /* тело не JSON */ }
+                    showStatus("Не удалось создать экспорт: " + detail,
+                        "alert-danger");
+                    if (createButton) { createButton.disabled = false; }
+                    return;
+                }
+                const job = await response.json();
+                pollJob(job.id);
+            }
+
+            if (canCreate && createButton) {
+                createButton.addEventListener("click", createJob);
+            }
         })();
     </script>
 {% endblock %}

@@ -39,6 +39,7 @@ SPEC_TABLES = {
     "commentaries",
     "edits",
     "engine_cache",
+    "export_jobs",
     "games",
     "llm_calls",
     "llm_evaluations",
@@ -73,6 +74,24 @@ def test_engine_cache_table_has_unique_key_and_ttl_index() -> None:
     assert "uq_engine_cache_key" in names
     indexes = {index.name for index in table.indexes}
     assert "ix_engine_cache_created" in indexes
+
+
+def test_export_jobs_table_has_status_and_integrity_fields() -> None:
+    """KI-050: фоновая выгрузка — статус, снимок фильтров, файл, sha256."""
+    table = Base.metadata.tables["export_jobs"]
+    assert table.c.status.nullable is False
+    assert table.c.actor.nullable is False
+    assert table.c.filters.nullable is False
+    assert table.c.rows_exported.nullable is False
+    indexes = {index.name for index in table.indexes}
+    assert "ix_export_jobs_created" in indexes
+    assert "ix_export_jobs_status_created" in indexes
+    checks = {
+        str(constraint.name)
+        for constraint in table.constraints
+        if constraint.name
+    }
+    assert any("status" in name for name in checks)
 
 
 def test_llm_calls_table_has_trace_and_indexes() -> None:

@@ -1,7 +1,7 @@
-"""JSONL-экспорт датасета правок для админ-панели (T-034b).
+"""JSONL-экспорт датасета правок для админ-панели (T-034b, KI-050).
 
-Эндпоинт живёт под API-префиксом (`/v1/admin/exports/edits.jsonl`), но вне
-смонтированного `/admin` (starlette-admin), поэтому не получает
+Эндпоинты живут под API-префиксом (`/v1/admin/exports/...`), но вне
+смонтированного `/admin` (starlette-admin), поэтому не получают
 `request.session`. Авторизация — два пути:
 
 * **JWT** access-токен роли ``admin``/``auditor`` (``Authorization: Bearer``)
@@ -18,50 +18,56 @@
 Проблемные записи (нет партии/PGN не разобран/нет анализа) в v2
 пропускаются, стрим не падает.
 
-Чтение — keyset-пагинацией по `edits.id` (батчами), без загрузки всей
-таблицы в память; пустой результат — 200 с пустым телом.
+Два режима выгрузки (KI-050):
 
-Аудит (KI-050, итерация 29): после завершения генератора пишется запись
-`audit_logs.action="dataset.export"` с фильтрами, числом фактически
-выгруженных строк и trace_id. Запись — best-effort в отдельной сессии:
-сбой аудита не ломает уже отданный стрим (только warning в лог).
+* ``GET /edits.jsonl`` — streaming для небольших объёмов (keyset-пагинация
+  по `edits.id`, без загрузки всей таблицы в память);
+* ``POST /jobs`` → ``GET /jobs/{id}`` → ``GET /jobs/{id}/download`` —
+  фоновая джоба для больших объёмов: браузер не ждёт стрим, файл лежит в
+  `EXPORT_DIR` (вне web-root), статусы — в `export_jobs`. Создавать джобы
+  может только роль ``admin``/legacy-сессия; ``auditor`` читает список и
+  скачивает готовые файлы (RBAC, KI-045).
+
+Аудит: и стрим, и джоба пишут `audit_logs.action="dataset.export"` с
+фильтрами, числом строк и trace_id (best-effort, `app.dataset.jobs`).
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, timedelta
-from typing import Annotated, Any, Literal
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from fastapi import APIRouter, BackgroundTasks, Depends, Path, Query, Request
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin import ADMIN_SESSION_COOKIE, decode_admin_session
-from app.audit import append_audit
 from app.auth.tokens import decode_token
-from app.commentary.service import load_analyses
 from app.config import Settings, get_settings
-from app.dataset.export import (
-    DEFAULT_BATCH_SIZE,
-    LEGACY_SCHEMA_VERSION,
-    SCHEMA_VERSION,
-    build_fact_sheet,
-    record_from_edit,
+from app.dataset.export import SCHEMA_VERSION
+from app.dataset.jobs import (
+    audit_dataset_export,
+    create_export_job,
+    get_export_job,
+    list_export_jobs,
+    resolve_export_path,
+    run_export_job,
 )
-from app.db.models import AdminRole, Commentary, Edit, Game, Level, User
+from app.dataset.records import ExportFilters, ExportLevel, iter_export_records
+from app.db.models import AdminRole, ExportJob, ExportJobStatus, User
 from app.db.session import SessionLocal, get_session
 from app.errors import (
     AuthError,
+    ExportJobFileMissingError,
+    ExportJobNotReadyError,
     ForbiddenError,
-    InvalidLevelError,
-    InvalidPgnError,
+    NotFoundError,
 )
-from app.ingestion import parse_pgn
-from app.tracing import current_trace_id
 
 __all__ = ["router"]
 
@@ -74,24 +80,29 @@ _EXPORT_ROLES: frozenset[AdminRole] = frozenset(
     {AdminRole.admin, AdminRole.auditor}
 )
 
-#: Уровни, которые принимает фильтр `level`.
-ExportLevel = Literal["beginner", "club", "gm"]
-#: Версии схемы JSONL: 1 — legacy rewrite, 2 — пакет фактов.
-ExportSchemaVersion = Literal[1, 2]
-
 #: `schema_version` по умолчанию (совпадает с `scripts.export_dataset`).
-_DEFAULT_SCHEMA_VERSION: ExportSchemaVersion = 2
+_DEFAULT_SCHEMA_VERSION = SCHEMA_VERSION
 
 
-async def _require_export_actor(
+@dataclass(frozen=True, slots=True)
+class ExportActor:
+    """Кто выполняет выгрузку: имя для логов + роль для RBAC."""
+
+    name: str
+    role: str
+
+    @property
+    def can_write(self) -> bool:
+        """Создавать фоновые джобы может admin/legacy, но не auditor."""
+        return self.role != AdminRole.auditor.value
+
+
+async def _authorize_export(
     request: Request,
-    session: Annotated[AsyncSession, Depends(get_session)],
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> str:
+    session: AsyncSession,
+    settings: Settings,
+) -> ExportActor:
     """JWT admin/auditor или подписанная cookie-сессия админки.
-
-    Returns:
-        Строка-актор для логов (``jwt:<email>`` / ``session:<username>``).
 
     Raises:
         AuthError: нет/битые креденшелы (→ 401).
@@ -113,7 +124,7 @@ async def _require_export_actor(
             raise ForbiddenError(
                 "Экспорт датасета доступен только admin и auditor"
             )
-        return f"jwt:{user.email}"
+        return ExportActor(name=f"jwt:{user.email}", role=user.role.value)
 
     cookie = request.cookies.get(ADMIN_SESSION_COOKIE)
     if cookie:
@@ -124,187 +135,114 @@ async def _require_export_actor(
                 isinstance(admin_user, str)
                 and admin_user == settings.admin_username
             ):
-                return f"session:{admin_user}"
+                return ExportActor(
+                    name=f"session:{admin_user}", role="legacy"
+                )
 
     raise AuthError("Требуется авторизация администратора")
 
 
-def _day_start(day: date) -> datetime:
-    """Начало суток (UTC) для фильтра по `edits.created_at`."""
-    return datetime(day.year, day.month, day.day, tzinfo=UTC)
+async def _require_export_actor(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> str:
+    """Актор с правом чтения выгрузки (admin/auditor/legacy)."""
+    actor = await _authorize_export(request, session, settings)
+    return actor.name
 
 
-def _apply_filters(
-    statement: Any,
-    *,
-    date_from: date | None,
-    date_to: date | None,
-    level: ExportLevel | None,
-    human_edited: bool | None,
-) -> Any:
-    """Наложить фильтры query на выборку `edits` (join commentaries)."""
-    if date_from is not None:
-        statement = statement.where(Edit.created_at >= _day_start(date_from))
-    if date_to is not None:
-        # `date_to` включительно: `< начало следующих суток`.
-        statement = statement.where(
-            Edit.created_at < _day_start(date_to) + timedelta(days=1)
+async def _require_export_writer(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> str:
+    """Актор с правом создания джобы; auditor — read-only (403)."""
+    actor = await _authorize_export(request, session, settings)
+    if not actor.can_write:
+        raise ForbiddenError(
+            "Создавать фоновые экспорты может только роль admin"
         )
-    if level is not None:
-        statement = statement.where(Commentary.level == Level(level))
-    if human_edited is not None:
-        statement = statement.where(
-            Commentary.human_edited.is_(human_edited)
-        )
-    return statement
+    return actor.name
 
 
-async def _record_for_edit(
-    session: AsyncSession,
-    edit: Edit,
-    commentary: Commentary,
-    game: Game | None,
-    *,
-    schema_version: int,
-) -> dict[str, Any] | None:
-    """Собрать JSONL-запись или вернуть ``None`` (пропуск проблемной записи)."""
-    if schema_version == LEGACY_SCHEMA_VERSION:
-        return record_from_edit(
-            edit, commentary, schema_version=LEGACY_SCHEMA_VERSION
-        )
-    if game is None:
-        return None
-    try:
-        parsed = parse_pgn(game.pgn)
-    except InvalidPgnError:
-        return None
-    analyses = await load_analyses(session, game, parsed)
-    if not analyses:
-        return None
-    try:
-        fact_sheet = build_fact_sheet(
-            parsed, analyses, commentary.level.value
-        )
-    except (InvalidLevelError, ValueError):
-        return None
-    return record_from_edit(
-        edit,
-        commentary,
-        schema_version=SCHEMA_VERSION,
-        fact_package=fact_sheet,
+class ExportJobCreateRequest(BaseModel):
+    """Тело `POST /v1/admin/exports/jobs` — те же фильтры, что у стрима."""
+
+    date_from: date | None = None
+    date_to: date | None = None
+    level: ExportLevel | None = None
+    human_edited: bool | None = None
+    schema_version: int = Field(
+        default=_DEFAULT_SCHEMA_VERSION,
+        ge=1,
+        le=2,
+        description="1 — legacy rewrite, 2 — пакет фактов",
     )
 
 
-async def _audit_dataset_export(
-    *,
-    actor: str,
-    date_from: date | None,
-    date_to: date | None,
-    level: ExportLevel | None,
-    human_edited: bool | None,
-    schema_version: int,
-    rows: int,
-    completed: bool,
-) -> None:
-    """Записать факт выгрузки датасета в `audit_logs` (KI-050).
+class ExportJobResponse(BaseModel):
+    """Состояние фоновой выгрузки + ссылка на скачивание."""
 
-    Вызывается после завершения (или обрыва) стрима, в отдельной сессии:
-    основная транзакция запроса уже не нужна, а аудит не должен ломать
-    скачивание. Фильтры пишутся как есть (без PII), ``rows`` — число
-    фактически отданных строк (v2 может пропускать проблемные записи).
-    """
-    try:
-        async with SessionLocal() as session:
-            await append_audit(
-                session,
-                actor=actor,
-                action="dataset.export",
-                target_id="edits.jsonl",
-                details={
-                    "date_from": date_from.isoformat() if date_from else None,
-                    "date_to": date_to.isoformat() if date_to else None,
-                    "level": level,
-                    "human_edited": human_edited,
-                    "schema_version": schema_version,
-                    "rows": rows,
-                    "completed": completed,
-                    "trace_id": current_trace_id(),
-                },
-            )
-            await session.commit()
-        logger.info(
-            "dataset_export_audited",
-            actor=actor,
-            rows=rows,
-            completed=completed,
-        )
-    except Exception as exc:  # best-effort: не ломаем уже отданный стрим
-        logger.warning("dataset_export_audit_failed", error=str(exc))
+    id: int
+    status: ExportJobStatus
+    actor: str
+    filters: dict[str, Any]
+    rows_exported: int
+    file_size: int | None = None
+    sha256: str | None = None
+    error: str | None = None
+    download_url: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+def _job_response(job: ExportJob, settings: Settings) -> ExportJobResponse:
+    """ORM → ответ API (download_url только для готовой джобы)."""
+    done = job.status == ExportJobStatus.done.value
+    return ExportJobResponse(
+        id=job.id,
+        status=ExportJobStatus(job.status),
+        actor=job.actor,
+        filters=dict(job.filters or {}),
+        rows_exported=job.rows_exported,
+        file_size=job.file_size,
+        sha256=job.sha256,
+        error=job.error,
+        download_url=(
+            f"{settings.api_prefix}/admin/exports/jobs/{job.id}/download"
+            if done
+            else None
+        ),
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+    )
 
 
 async def _iter_edits_jsonl(
     *,
-    date_from: date | None,
-    date_to: date | None,
-    level: ExportLevel | None,
-    human_edited: bool | None,
-    schema_version: int,
+    filters: ExportFilters,
     actor: str,
 ) -> AsyncIterator[bytes]:
-    """Стримить NDJSON батчами (keyset по `edits.id`) и аудировать выгрузку."""
-    last_id = 0
+    """Стримить NDJSON батчами и аудировать выгрузку после завершения."""
     exported = 0
     completed = False
     try:
         async with SessionLocal() as session:
-            while True:
-                statement = (
-                    select(Edit, Commentary, Game)
-                    .join(Commentary, Edit.commentary_id == Commentary.id)
-                    .outerjoin(Game, Commentary.game_id == Game.id)
-                    .where(Edit.id > last_id)
-                    .order_by(Edit.id)
-                    .limit(DEFAULT_BATCH_SIZE)
-                )
-                statement = _apply_filters(
-                    statement,
-                    date_from=date_from,
-                    date_to=date_to,
-                    level=level,
-                    human_edited=human_edited,
-                )
-                rows = (await session.execute(statement)).all()
-                if not rows:
-                    completed = True
-                    return
-                for row in rows:
-                    edit: Edit = row[0]
-                    commentary: Commentary = row[1]
-                    game: Game | None = row[2]
-                    last_id = edit.id
-                    record = await _record_for_edit(
-                        session,
-                        edit,
-                        commentary,
-                        game,
-                        schema_version=schema_version,
-                    )
-                    if record is None:
-                        continue
-                    exported += 1
-                    yield (
-                        json.dumps(record, ensure_ascii=False) + "\n"
-                    ).encode("utf-8")
+            async for record in iter_export_records(session, filters):
+                exported += 1
+                yield (
+                    json.dumps(record, ensure_ascii=False) + "\n"
+                ).encode("utf-8")
+        completed = True
     finally:
         # completed=False — клиент оборвал соединение/ошибка: фиксируем
         # факт частичной выгрузки, а не теряем его.
-        await _audit_dataset_export(
+        await audit_dataset_export(
             actor=actor,
-            date_from=date_from,
-            date_to=date_to,
-            level=level,
-            human_edited=human_edited,
-            schema_version=schema_version,
+            filters=filters,
             rows=exported,
             completed=completed,
         )
@@ -312,7 +250,6 @@ async def _iter_edits_jsonl(
 
 @router.get("/edits.jsonl")
 async def export_edits_jsonl(
-    request: Request,
     _actor: Annotated[str, Depends(_require_export_actor)],
     date_from: Annotated[
         date | None, Query(description="Нижняя граница edits.created_at")
@@ -336,6 +273,13 @@ async def export_edits_jsonl(
     ] = _DEFAULT_SCHEMA_VERSION,
 ) -> StreamingResponse:
     """Скачать датасет правок в NDJSON (`edits.jsonl`)."""
+    filters = ExportFilters(
+        date_from=date_from,
+        date_to=date_to,
+        level=level,
+        human_edited=human_edited,
+        schema_version=schema_version,
+    )
     logger.info(
         "dataset_export_stream",
         date_from=str(date_from) if date_from else None,
@@ -345,17 +289,114 @@ async def export_edits_jsonl(
         schema_version=schema_version,
     )
     return StreamingResponse(
-        _iter_edits_jsonl(
-            date_from=date_from,
-            date_to=date_to,
-            level=level,
-            human_edited=human_edited,
-            schema_version=schema_version,
-            actor=_actor,
-        ),
+        _iter_edits_jsonl(filters=filters, actor=_actor),
         media_type="application/x-ndjson",
         headers={
             "Content-Disposition": 'attachment; filename="edits.jsonl"',
             "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post(
+    "/jobs", status_code=202, response_model=ExportJobResponse
+)
+async def create_export_job_endpoint(
+    payload: ExportJobCreateRequest,
+    background_tasks: BackgroundTasks,
+    _actor: Annotated[str, Depends(_require_export_writer)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ExportJobResponse:
+    """Создать фоновую выгрузку; файл появится в `EXPORT_DIR` (202)."""
+    filters = ExportFilters(
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        level=payload.level,
+        human_edited=payload.human_edited,
+        schema_version=payload.schema_version,
+    )
+    job = await create_export_job(session, actor=_actor, filters=filters)
+    background_tasks.add_task(run_export_job, job.id, settings)
+    logger.info(
+        "dataset_export_job_created",
+        job_id=job.id,
+        actor=_actor,
+        **filters.to_dict(),
+    )
+    return _job_response(job, settings)
+
+
+@router.get("/jobs", response_model=list[ExportJobResponse])
+async def list_export_jobs_endpoint(
+    _actor: Annotated[str, Depends(_require_export_actor)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> list[ExportJobResponse]:
+    """Последние фоновые выгрузки (новые первыми)."""
+    jobs = await list_export_jobs(
+        session, limit=settings.export_jobs_page_size
+    )
+    return [_job_response(job, settings) for job in jobs]
+
+
+@router.get("/jobs/{job_id}", response_model=ExportJobResponse)
+async def get_export_job_endpoint(
+    job_id: Annotated[int, Path(gt=0, description="ID джобы экспорта")],
+    _actor: Annotated[str, Depends(_require_export_actor)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ExportJobResponse:
+    """Статус фоновой выгрузки (поллинг из админки)."""
+    job = await get_export_job(session, job_id)
+    if job is None:
+        raise NotFoundError(f"Джоба экспорта {job_id} не найдена")
+    return _job_response(job, settings)
+
+
+@router.get("/jobs/{job_id}/download")
+async def download_export_job(
+    job_id: Annotated[int, Path(gt=0, description="ID джобы экспорта")],
+    _actor: Annotated[str, Depends(_require_export_actor)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> FileResponse:
+    """Скачать готовый JSONL джобы.
+
+    Raises:
+        NotFoundError: джобы нет (→ 404).
+        ExportJobNotReadyError: статус queued/running/failed (→ 409).
+        ExportJobFileMissingError: файл удалён/путь вне `EXPORT_DIR` (→ 410).
+    """
+    job = await get_export_job(session, job_id)
+    if job is None:
+        raise NotFoundError(f"Джоба экспорта {job_id} не найдена")
+    if job.status == ExportJobStatus.failed.value:
+        raise ExportJobNotReadyError(
+            f"Джоба завершилась ошибкой: {job.error or 'неизвестно'}"
+        )
+    if job.status != ExportJobStatus.done.value:
+        raise ExportJobNotReadyError(
+            f"Экспорт ещё не готов (status={job.status})"
+        )
+    path = resolve_export_path(job, settings)
+    if path is None or not path.is_file():
+        raise ExportJobFileMissingError(
+            f"Файл джобы {job_id} не найден в EXPORT_DIR"
+        )
+    logger.info(
+        "dataset_export_job_download",
+        job_id=job.id,
+        rows=job.rows_exported,
+        size=job.file_size,
+    )
+    return FileResponse(
+        path,
+        media_type="application/x-ndjson",
+        filename=f"edits-{job.id}.jsonl",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Export-Sha256": job.sha256 or "",
+            "X-Export-Rows": str(job.rows_exported),
         },
     )
