@@ -1,24 +1,36 @@
-"""Админ-панель на `starlette-admin` (T-028, частично).
+"""Админ-панель на `starlette-admin` (T-028).
 
-Итерация 16 разворачивает **базовый** control plane:
+Control plane монтируется в `create_app()` и работает с тем же
+`AsyncEngine`, что и API (через `SessionLocal`).
 
-* `/admin` монтируется в `create_app()` и работает с тем же `AsyncEngine`,
-  что и API (через `SessionLocal`);
-* доступ защищён: заголовок ``X-Admin-Token`` (тот же `ADMIN_API_KEY`, что
-  у `/v1/ingest`) **или** cookie-сессия после формы входа
-  (`ADMIN_USERNAME` / `ADMIN_PASSWORD`, паролем также принимается токен);
-* подключены read-only views для `annotated_games`, `commentaries` и
-  `edits`.
+Способы аутентификации (T-028 финал):
 
-Чего пока нет (следующие шаги T-028/T-035): ролей `user/admin/auditor`,
-мягкого удаления RAG, серверных сессий в Redis, аудита мутаций и
-RBAC-фильтров. Поэтому все views намеренно read-only: любая запись должна
-появиться вместе с аудитом, а не до него.
+* **JWT (основной путь)** — access-токен из `Authorization: Bearer <jwt>`
+  или из cookie ``access_token``; пользователь загружается из БД, роль
+  ``admin``/``auditor`` даёт доступ, ``user`` — нет; ``is_active=False`` —
+  нет. JWT проверяется и в guard (статус-коды), и в провайдере
+  (starlette-admin), причём guard кэширует результат в `request.state`,
+  чтобы не делать второй запрос в БД.
+* **``X-Admin-Token``** — legacy service-token (тот же `ADMIN_API_KEY`, что
+  у `/v1/ingest`) для автоматизации/smoke-проверок.
+* **Парольная форма** ``/admin/login`` (`ADMIN_USERNAME`/`ADMIN_PASSWORD`,
+  паролем также принимается токен) — legacy fallback: cookie-сессия
+  `admin_session` живёт `ADMIN_SESSION_TTL_MIN` минут.
+
+Guard отдаёт JSON вместо редиректа: нет креденшелов — 401
+``admin_unauthorized``, неверные/просроченные креды или роль ``user`` —
+403 ``admin_forbidden``. Публичны только `/admin/login`, `/admin/logout`
+и `/admin/static/*`.
+
+RBAC-фильтров и аудита мутаций пока нет, поэтому все views read-only
+(кроме редактора промптов): любая запись должна появиться вместе с
+аудитом, а не до него.
 """
 
 from __future__ import annotations
 
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -41,16 +53,20 @@ from app.audit import (
     hash_text,
     verify_audit_chain,
 )
+from app.auth.tokens import decode_token
 from app.config import Settings
 from app.db.models import (
+    AdminRole,
     AnnotatedGame,
     AuditLog,
     Commentary,
     Edit,
     LlmEvaluation,
     Prompt,
+    User,
 )
 from app.db.session import SessionLocal
+from app.errors import AuthError
 from app.prompts import reset_prompt_cache
 from app.prompts.pubsub import publish_prompt_update
 
@@ -73,8 +89,86 @@ def _same_secret(left: str, right: str) -> bool:
     return secrets.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
 
 
+#: Роли, которым разрешён вход в админ-панель (T-028).
+_ADMIN_ROLES: frozenset[AdminRole] = frozenset(
+    {AdminRole.admin, AdminRole.auditor}
+)
+
+#: Атрибут `request.state`: guard кладёт сюда проверенную JWT-идентичность,
+#: чтобы `AdminAuthProvider` не делал повторный запрос в БД.
+_JWT_IDENTITY_STATE = "admin_jwt_identity"
+
+
+@dataclass(frozen=True, slots=True)
+class _JwtIdentity:
+    """Пользователь, подтверждённый access-токеном."""
+
+    email: str
+    #: ``False`` — токен валиден, но роль (``user``) не даёт доступа в админку.
+    allowed: bool
+
+
+def _authorization_token(request: Request) -> str | None:
+    """Bearer-токен из ``Authorization``.
+
+    ``None`` — заголовка нет (дальше смотрим cookie/сессию); пустая
+    строка — заголовок есть, но это не ``Bearer <token>`` (битые креды).
+    """
+    header = request.headers.get("authorization")
+    if header is None:
+        return None
+    scheme, _, credentials = header.partition(" ")
+    if scheme.lower() != "bearer" or not credentials.strip():
+        return ""
+    return credentials.strip()
+
+
+async def _jwt_identity(settings: Settings, token: str) -> _JwtIdentity | None:
+    """Проверить access-токен и загрузить пользователя из БД.
+
+    Общий код guard и провайдера, чтобы их решения не расходились.
+
+    Возвращает ``None``, если токен битый/просрочен/не ``access``, а также
+    если пользователя нет или он деактивирован (``is_active=False``). Роль
+    проверяется здесь же, но результат отдаётся флагом ``allowed``: guard
+    должен отличить «нет прав» (403) от «нет креденшелов» (401).
+    """
+    if not token:
+        return None
+    try:
+        payload = decode_token(token, settings, expected_type="access")
+    except AuthError:
+        return None
+    async with SessionLocal() as session:
+        user = await session.get(User, payload.user_id)
+        if user is None or not user.is_active:
+            return None
+        return _JwtIdentity(
+            email=user.email, allowed=user.role in _ADMIN_ROLES
+        )
+
+
+async def _jwt_identity_from_request(
+    settings: Settings, request: Request
+) -> _JwtIdentity | None:
+    """Идентичность из Bearer-заголовка или cookie ``access_token``."""
+    token = _authorization_token(request)
+    if token is None:
+        token = request.cookies.get("access_token")
+    if not token:
+        return None
+    return await _jwt_identity(settings, token)
+
+
+def _admin_forbidden(detail: str) -> JSONResponse:
+    """403 для неверных кредов/недостаточной роли (не редирект на логин)."""
+    return JSONResponse(
+        {"detail": detail, "code": "admin_forbidden"}, status_code=403
+    )
+
+
 class AdminAuthProvider(AuthProvider):
-    """Токен в заголовке + простая форма логина/пароля.
+    """JWT (admin/auditor) + legacy service-token и форма логина/пароля.
 
     `starlette-admin` сам рисует страницу `/admin/login` и обрабатывает
     cookie-сессию; здесь только проверка учётных данных.
@@ -89,15 +183,43 @@ class AdminAuthProvider(AuthProvider):
         self._settings = settings
 
     async def authenticate(self, request: Request) -> AdminUser | None:
-        """Принять `X-Admin-Token` или активную cookie-сессию."""
-        token = request.headers.get("x-admin-token")
-        expected = self._settings.admin_api_key
-        if token is not None and expected and _same_secret(token, expected):
-            return AdminUser(username=self._settings.admin_username)
+        """Принять JWT, `X-Admin-Token` или активную cookie-сессию.
 
+        Порядок: JWT (Bearer/cookie) → legacy service-token → legacy
+        парольная сессия. Guard уже отклонил негодные JWT на защищённых
+        путях, поэтому здесь достаточно вернуть ``AdminUser`` без
+        повторного объяснения статуса.
+        """
+        settings = self._settings
+
+        # Guard проверяет JWT первым и кладёт результат в request.state —
+        # второй запрос в БД на том же запросе не нужен.
+        cached = getattr(request.state, _JWT_IDENTITY_STATE, None)
+        identity: _JwtIdentity | None
+        if isinstance(cached, _JwtIdentity):
+            identity = cached
+        else:
+            identity = await _jwt_identity_from_request(settings, request)
+        if identity is not None:
+            if identity.allowed:
+                return AdminUser(username=identity.email)
+            logger.warning(
+                "admin_jwt_role_denied",
+                username=identity.email,
+                path=request.url.path,
+            )
+            return None
+
+        # Legacy service-token: автоматизация/smoke (X-Admin-Token).
+        token = request.headers.get("x-admin-token")
+        expected = settings.admin_api_key
+        if token is not None and expected and _same_secret(token, expected):
+            return AdminUser(username=settings.admin_username)
+
+        # Legacy fallback: cookie-сессия после парольной формы /admin/login.
         session_user = request.session.get("admin_user")
-        if session_user == self._settings.admin_username:
-            return AdminUser(username=self._settings.admin_username)
+        if session_user == settings.admin_username:
+            return AdminUser(username=settings.admin_username)
         return None
 
     async def login(
@@ -160,8 +282,13 @@ class AdminAuthGuard(BaseHTTPMiddleware):
     """Вернуть 401/403 вместо редиректа на логин для API-клиентов.
 
     `starlette-admin` по умолчанию отвечает 303 на `/admin/login`. Для
-    smoke/тестов и для защиты от перебора нужен явный статус: без
-    учётных данных — 401, с неверным `X-Admin-Token` — 403.
+    smoke/тестов и для защиты от перебора нужен явный статус:
+
+    * нет креденшелов — 401 ``admin_unauthorized``;
+    * неверный `X-Admin-Token`, битый/просроченный JWT или роль ``user`` —
+      403 ``admin_forbidden``;
+    * валидный JWT роли ``admin``/``auditor``, legacy service-token или
+      legacy сессия — доступ.
     """
 
     def __init__(self, app: ASGIApp, *, settings: Settings) -> None:
@@ -181,16 +308,34 @@ class AdminAuthGuard(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
+        # 1. Legacy service-token (X-Admin-Token): неверный — сразу 403.
         token = request.headers.get("x-admin-token")
         if token is not None:
             expected = self._settings.admin_api_key
             if expected and _same_secret(token, expected):
                 return await call_next(request)
-            return JSONResponse(
-                {"detail": "Invalid admin token", "code": "admin_forbidden"},
-                status_code=403,
-            )
+            return _admin_forbidden("Invalid admin token")
 
+        # 2. JWT в Authorization: Bearer. Заголовок есть, но токен не
+        #    принят — 403 (не путать с отсутствием креденшелов → 401).
+        auth_token = _authorization_token(request)
+        if auth_token is not None:
+            identity = await _jwt_identity(self._settings, auth_token)
+            if identity is not None and identity.allowed:
+                setattr(request.state, _JWT_IDENTITY_STATE, identity)
+                return await call_next(request)
+            return _admin_forbidden(self._jwt_denied_detail(identity))
+
+        # 3. JWT в cookie access_token — та же логика, что и для заголовка.
+        cookie_token = request.cookies.get("access_token")
+        if cookie_token:
+            identity = await _jwt_identity(self._settings, cookie_token)
+            if identity is not None and identity.allowed:
+                setattr(request.state, _JWT_IDENTITY_STATE, identity)
+                return await call_next(request)
+            return _admin_forbidden(self._jwt_denied_detail(identity))
+
+        # 4. Legacy fallback: cookie-сессия после парольной формы.
         session = request.scope.get("session")
         if isinstance(session, dict) and session.get("admin_user") == (
             self._settings.admin_username
@@ -202,6 +347,13 @@ class AdminAuthGuard(BaseHTTPMiddleware):
             status_code=401,
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    @staticmethod
+    def _jwt_denied_detail(identity: _JwtIdentity | None) -> str:
+        """Разные детали для «битый токен» и «недостаточная роль»."""
+        if identity is None:
+            return "Invalid or expired access token"
+        return "Admin role required"
 
 
 class _ReadOnlyModelView(ModelView):
