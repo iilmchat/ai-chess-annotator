@@ -39,6 +39,13 @@ from app.admin import ADMIN_SESSION_COOKIE, decode_admin_session
 from app.auth.tokens import decode_token
 from app.commentary.service import load_analyses
 from app.config import Settings, get_settings
+from app.dataset.export import (
+    DEFAULT_BATCH_SIZE,
+    LEGACY_SCHEMA_VERSION,
+    SCHEMA_VERSION,
+    build_fact_sheet,
+    record_from_edit,
+)
 from app.db.models import AdminRole, Commentary, Edit, Game, Level, User
 from app.db.session import SessionLocal, get_session
 from app.errors import (
@@ -48,13 +55,6 @@ from app.errors import (
     InvalidPgnError,
 )
 from app.ingestion import parse_pgn
-from scripts.export_dataset import (
-    DEFAULT_BATCH_SIZE,
-    LEGACY_SCHEMA_VERSION,
-    SCHEMA_VERSION,
-    build_fact_sheet,
-    record_from_edit,
-)
 
 __all__ = ["router"]
 

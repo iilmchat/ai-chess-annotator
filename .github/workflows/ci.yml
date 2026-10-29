@@ -143,3 +143,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build production image
         run: docker build -t chessannotator:ci .
+      - name: Smoke import production image
+        # KI-051: wheel содержит только app; любой import app -> scripts
+        # уронит uvicorn. Проверяем импорт без инфраструктуры.
+        run: docker run --rm chessannotator:ci python -c "import app.main"
