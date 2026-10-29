@@ -389,7 +389,8 @@
   fire-and-forget (best-effort, без PII); контекст operation/actor_id/
   game_id в commentary/chat (sync+SSE); read-only view `LlmCallAdmin`.
   Остаток: warmup и commentary_id/cache_hit — KI-046, необработанные 500
-  без `X-Trace-Id` — KI-047, retention/партиционирование — KI-048.
+  без `X-Trace-Id` — KI-047, retention `llm_calls` — KI-048 (закрыт в
+  итерации 29; партиционирование — KI-052), дашборд — T-109 (итерация 29).
 - **Что:** сквозной `trace_id` (W3C Trace Context) от HTTP-запроса до
   вызова LLM и валидатора; OTel-спаны `http_request`, `llm.complete`,
   `validator`, `rag.retrieve`; экспорт OTLP в коллектор (Jaeger/Tempo),
@@ -399,8 +400,8 @@
 - **DoD:** 100% вызовов LLM имеют `trace_id` и запись в `llm_calls`;
   трейс виден в OTel-бэкенде; дашборд p95 и стоимости; sampling
   настраивается; тесты propagation и записи usage; PII в спаны не
-  попадает. **Выполнено в объёме MVP** (дашборды — T-109, sampling —
-  отдельный шаг).
+  попадает. **Выполнено в объёме MVP** (дашборд — T-109, закрыт в
+  итерации 29; sampling — отдельный шаг).
 - **Оценка:** 4
 
 ### [x] T-030b. OTel-спаны validator/RAG (итерация 27)
@@ -450,7 +451,8 @@
   `test_finops_durable.py` (20), `test_usage_daily.py` (5).
   Остаток: месячные лимиты/алерты 80/100%, reserve/reconcile,
   настройка лимитов в админке, дашборд расходов, планировщик агрегации
-  (KI-049), партиционирование/retention `llm_calls` (KI-048).
+  (KI-049), партиционирование `llm_calls` (retention закрыт в итерации 29,
+  партиционирование — KI-052).
 - **Что (полная постановка):** `usage_daily` (upsert из Redis), лимиты на
   пользователя/IP/глобально и на месяц, reserve/reconcile по фактическим
   токенам, настройка лимитов в `system_settings`/админке, алерты 80/100%,
@@ -543,8 +545,9 @@
   original→edited. Страница `/admin/exports/dataset`
   (`DatasetExportView`, меню «Экспорт датасета») с формой фильтров и
   кнопкой скачивания; доступна admin/auditor. Тесты:
-  `test_admin_exports.py` (11). Остаток: `audit_logs` факта выгрузки,
-  checksum/размер, фоновая задача «>5 с»/подписанные ссылки — KI-050.
+  `test_admin_exports.py` (11). Остаток: checksum/размер, фоновая задача
+  «>5 с»/подписанные ссылки — KI-050 (аудит `dataset.export` закрыт в
+  итерации 29).
 - **Что (полная постановка):** страница Export в админке и `GET
   /v1/admin/exports/edits.jsonl` (streaming): фильтры по дате, уровню,
   модели, `human_edited`; схема JSONL; опциональное вырезание PII;
@@ -737,7 +740,23 @@
 - **T-106.** Английская локализация комментариев.
 - **T-107.** Экспорт комментария в PDF / DOCX.
 - **T-108.** Кэш retrieval по `fen_hash` (уже в схеме — включить).
-- **T-109.** OpenTelemetry-дашборды в Grafana.
+### [x] T-109. LLMOps-дашборд в админке (итерация 29)
+- **Зависит от:** T-030, T-031b, T-028
+- **Статус итерации 29:** `/admin/llmops` (`LlmOpsDashboardView`,
+  `app/llmops_dashboard.py`, Jinja2 + Bootstrap) — сводка за 24 часа, 7 и
+  30 дней: latency p50/p95/p99 (без cache-hit), error rate
+  (`error`/`timeout`), tokens/cost с разбивкой по `model`/`level`,
+  cache-hit rate; виджет «Топ-5 пользователей по токенам» из
+  `usage_daily`. Read-only, admin/auditor; тесты
+  `tests/integration/test_admin_llmops_dashboard.py`,
+  `tests/unit/test_llmops_dashboard_unit.py`. Retention `llm_calls` —
+  `scripts/prune_llm_calls.py` (KI-048 закрыт); партиционирование —
+  KI-052.
+- **Что (исходная постановка):** OpenTelemetry-дашборды p50/p95 latency,
+  error rate, tokens/cost в Grafana/Tempo по `llm_calls`/спанам.
+  Grafana/Tempo-дашборды и алерты аномалий остаются отдельным шагом
+  (T-113); в итерации 29 визуализация сделана внутри админки без
+  внешнего OTel-бэкенда.
 - **T-110.** Pen-test и security review.
 - **T-111.** Multi-tenant организации и RBAC (роли `owner/admin/editor/
   viewer`, изоляция данных по `org_id`).

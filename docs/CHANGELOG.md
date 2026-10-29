@@ -8,6 +8,31 @@
 
 ### Added
 
+- **Retention `llm_calls` (KI-048, итерация 29):**
+  `scripts/prune_llm_calls.py` — батчевый `DELETE` вызовов LLM старше
+  `LLM_CALLS_RETENTION_DAYS` (по умолчанию 90 дней): `DELETE ... WHERE id
+  IN (SELECT id ... ORDER BY id LIMIT N)` в цикле, commit на батч, пауза
+  между батчами. Флаги `--retention-days`, `--batch-size`,
+  `--max-batches`, `--sleep-ms`, `--dry-run`, `--json`; exit code 0/2.
+  Запуск по cron/планировщику описан в `GETTING_STARTED.md` §9.1;
+  партиционирование вынесено в KI-052. Тесты:
+  `tests/unit/test_prune_llm_calls.py`,
+  `tests/integration/test_prune_llm_calls.py`.
+- **LLMOps-дашборд в админке (T-109, итерация 29):** страница
+  `/admin/llmops` (`LlmOpsDashboardView`, `app/llmops_dashboard.py`,
+  Jinja2 + Bootstrap, read-only) — агрегаты за 24 часа, 7 и 30 дней:
+  latency p50/p95/p99 и avg по реальным вызовам (`cache_hit=false`),
+  error rate (`error`/`timeout`), cache-hit rate, суммы токенов и
+  стоимости с разбивкой по `model`/`level`, виджет «Топ-5 пользователей
+  по расходу токенов» из `usage_daily`. Доступна admin/auditor. Тесты:
+  `tests/integration/test_admin_llmops_dashboard.py`,
+  `tests/unit/test_llmops_dashboard_unit.py`.
+- **Аудит экспорта датасета (KI-050, итерация 29):** после завершения
+  NDJSON-стрима `GET /v1/admin/exports/edits.jsonl` в `audit_logs`
+  пишется `dataset.export` с актором (`jwt:`/`session:`), фильтрами,
+  числом фактически выгруженных строк, `trace_id` и флагом `completed`
+  (best-effort, сбой не ломает ответ). Тесты — в
+  `tests/integration/test_admin_exports.py`.
 - **FinOps durable-агрегаты `usage_daily` (T-031b, итерация 28):**
   миграция `e9f0a1b2c3d4` — таблица `usage_daily` (subject_type/
   subject_key/day, tokens_in/out, cost_usd, requests,

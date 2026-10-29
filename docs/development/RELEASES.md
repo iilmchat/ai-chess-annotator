@@ -1620,3 +1620,81 @@ T-031b/T-034b закрыты в объёме MVP; заведены KI-049/KI-050
 - **T-109:** OTel-дашборды (p95 latency, error rate, tokens/cost) в
   Grafana/Tempo по `llm_calls`/спанам.
 - **KI-030/T-104b:** LoRA на GPU (`schema_version=2`) + eval.
+
+## Итерация 29 — LLMOps Dashboard и Retention (T-109, KI-048, KI-050)
+
+**Дата:** 2026-10-29. **Статус:** ✅ завершена. **KI-048 закрыт**
+(retention `llm_calls`); **T-109 закрыт** (визуальный LLMOps-дашборд в
+админке); **KI-050 частично** (аудит выгрузки датасета). Заведён KI-052
+(партиционирование `llm_calls`).
+
+### Задачи
+
+- [x] **KI-048, retention `llm_calls`.** `scripts/prune_llm_calls.py`:
+  батчевый `DELETE ... WHERE id IN (SELECT id ... ORDER BY id LIMIT N)` в
+  цикле (commit на батч, пауза `--sleep-ms`), настройка
+  `LLM_CALLS_RETENTION_DAYS` (90 по умолчанию); флаги `--retention-days`,
+  `--batch-size`, `--max-batches`, `--sleep-ms`, `--dry-run`, `--json`,
+  exit code 0/2. Cron/systemd/Task Scheduler — в `GETTING_STARTED.md` §9.1.
+  Партиционирование не делалось (опционально в постановке) — KI-052.
+- [x] **T-109, LLMOps-дашборд.** `/admin/llmops`
+  (`LlmOpsDashboardView`, `app/llmops_dashboard.py`, Jinja2 + Bootstrap):
+  сводка за 24 часа / 7 / 30 дней — latency p50/p95/p99 и avg (только
+  реальные вызовы, `cache_hit=false`), error rate (`error`/`timeout`),
+  cache-hit rate, токены/стоимость с разбивкой по `model`/`level`;
+  виджет «Топ-5 пользователей по токенам» из `usage_daily`. Read-only,
+  admin/auditor.
+- [x] **KI-050, аудит экспорта.** После завершения NDJSON-стрима
+  `GET /v1/admin/exports/edits.jsonl` пишет в `audit_logs`
+  `action="dataset.export"`: актор (`jwt:`/`session:`), фильтры
+  (date/level/human_edited/schema_version), фактическое число строк,
+  `completed` (false при обрыве). Best-effort в отдельной сессии.
+- [x] **Документация:** `GETTING_STARTED` §9 (cron/retention),
+  `DESIGN_ADMIN_AND_OPS` §4.4/§7.4, `ARCHITECTURE` §2, `README`
+  (671 тест, дашборд, KI 52/25/27), `KNOWN_ISSUES` (KI-048 → Closed,
+  KI-050 обновлён, +KI-052), `TODO` (T-109 → `[x]`), `CHANGELOG`,
+  `RELEASES`, `ITERATION-29.md`.
+
+### Метрики
+
+- **Backend-тесты:** **671 passed, 1 skipped, 1 xfailed** (60 файлов;
+  +30 к итерации 28), **331.60 с**, exit 0. Skip — нет
+  `DEEPSEEK_API_KEY`, xfail — маркер KI-012.
+- **Новые тесты:** retention — 9 unit + 4 integration; дашборд — 6 unit +
+  7 integration; аудит экспорта — +4 (файл 15).
+- **Frontend-тесты:** **42 passed** (6 файлов); typecheck 0; build 4.77 с
+  (JS 464.31 КБ / gzip 146.15, CSS 14.29 КБ / gzip 3.77).
+- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 75 файлов.
+- **Alembic:** новых миграций нет, head `e9f0a1b2c3d4` (14 таблиц,
+  10 ревизий); партиционирование — KI-052.
+- **Retention smoke (живая БД):** `--dry-run` → `deleted: 3`; реальный
+  запуск `--batch-size 2` → `deleted: 3, batches: 2, capped: false`;
+  повторный `--dry-run` → `0`; старых smoke-строк 0, свежих 2.
+- **Дашборд smoke (uvicorn :8017, X-Admin-Token):** `/admin/llmops` —
+  200, 54 352 байта; в HTML есть `LLMOps-дашборд`, `smoke-model`, p95,
+  «Топ-5 пользователей».
+- **Аудит экспорта smoke (JWT admin):** экспорт `edits.jsonl?level=club&
+  schema_version=1` → 200 `application/x-ndjson`, 1 строка; в
+  `audit_logs`: `jwt:smoke-admin-iter29@example.com | dataset.export |
+  edits.jsonl | {"rows":1,"level":"club","schema_version":1,
+  "completed":true,...}`.
+- **KI:** 52 записи, 25 Open, 27 Closed.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Партиционирование `llm_calls` по месяцам | Требует смены `UNIQUE(trace_id, span_id)` на `(trace_id, span_id, created_at)` и пересоздания таблицы; в постановке итерации — опционально | KI-052 |
+| Grafana/Tempo-дашборды и алерты аномалий стоимости | Нужен внешний OTel-бэкенд; в итерации 29 визуализация сделана внутри админки | T-113 |
+| Фоновая выгрузка датасета >5 с, checksum/размер | Аудит выгрузки закрыт; остальные пункты KI-050 — отдельный шаг | KI-050 |
+| Планировщик retention из коробки | Скрипт готов, cron/systemd/Task Scheduler описаны; в docker-compose сервиса-планировщика нет | GETTING_STARTED §9 |
+| Реальный LoRA-прогон (KI-030) | Нет GPU | KI-030 |
+
+### Что дальше
+
+- **KI-052:** партиционированная `llm_calls` (RANGE по `created_at`,
+  уникальный ключ с `created_at`) + pg_partman/cron-партиции.
+- **KI-050:** инкрементальный v2-датасет/фоновая выгрузка, checksum.
+- **T-113/T-109 (остаток):** Grafana/Tempo-дашборды и алерты аномалий.
+- **KI-049:** outbox/ARQ для durable-upsert, cron-агрегация и алерты
+  80/100%.
