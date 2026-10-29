@@ -46,6 +46,7 @@ SPEC_TABLES = {
     "prompts",
     "retrieval_cache",
     "semantic_cache",
+    "usage_daily",
     "users",
 }
 
@@ -72,6 +73,24 @@ def test_llm_calls_table_has_trace_and_indexes() -> None:
         "ix_llm_calls_created_brin",
         "ix_llm_calls_model_created",
         "ix_llm_calls_level_created",
+    } <= indexes
+
+
+def test_usage_daily_table_has_unique_and_indexes() -> None:
+    """T-031b: durable-агрегат — уникальность субъекта/дня и индексы."""
+    table = Base.metadata.tables["usage_daily"]
+    assert table.c.subject_type.nullable is False
+    assert table.c.subject_key.nullable is False
+    assert table.c.day.nullable is False
+    assert table.c.tokens_in.nullable is False
+    unique = {
+        constraint.name for constraint in table.constraints if constraint.name
+    }
+    assert "uq_usage_daily_subject_day" in unique
+    indexes = {index.name for index in table.indexes}
+    assert {
+        "ix_usage_daily_day_subject",
+        "ix_usage_daily_subject_day",
     } <= indexes
 
 

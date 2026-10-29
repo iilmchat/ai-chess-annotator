@@ -1,4 +1,4 @@
-"""FinOps: дневные бюджеты токенов и учёт расхода (T-031, KI-038).
+"""FinOps: дневные бюджеты токенов и учёт расхода (T-031, T-031b, KI-038).
 
 Счётчик — Redis `usage:{day}:{subject}` с `INCRBY`; TTL — до ближайшей
 UTC-полуночи плюс минута. Проверка выполняется **до** вызова LLM, поэтому
@@ -11,26 +11,40 @@ UTC-полуночи плюс минута. Проверка выполняет�
 а FinOps не должен зависеть от доступности PostgreSQL. Битый, просроченный
 или refresh-токен не даёт 401 — запрос считается анонимным (KI-038).
 
-Почему Redis, а не БД: проверка должна быть дешёвой и атомарной на каждом
-запросе. Durable-агрегаты (`usage_daily`) и точный reserve/reconcile —
-следующий шаг T-031; здесь — горячий счётчик и жёсткий дневной потолок.
+Durable-агрегат — `usage_daily` (T-031b): `record_token_usage` после
+Redis-инкремента best-effort upsert-ит дельту в PostgreSQL
+(`ON CONFLICT DO UPDATE`). Redis остаётся горячим счётчиком для 429;
+`usage_daily` — durable-история для отчётов и fallback в
+`/v1/users/me/usage`, когда Redis недоступен или пуст.
+
+Почему Redis остаётся горячим слоем: проверка должна быть дешёвой и
+атомарной на каждом запросе, а PostgreSQL — durable-источником истины для
+отчётов. Счётчик может отставать от БД на время фоновой записи — это
+осознанный компромисс; 429 считается по Redis, а `usage_daily` даёт
+fallback, если Redis пуст/недоступен.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 import redis.asyncio as aioredis
 import structlog
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.auth.tokens import decode_token
 from app.config import Settings
+from app.db.models import UsageDaily
+from app.db.session import SessionLocal
 from app.errors import AuthError
 
 __all__ = [
@@ -40,12 +54,16 @@ __all__ = [
     "TokenUsageTracker",
     "compute_cost_usd",
     "next_utc_midnight",
+    "parse_subject",
     "prices_for_level",
     "record_token_usage",
     "request_subject",
     "request_tier",
     "seconds_until_reset",
+    "usage_daily_tokens",
+    "utc_date",
     "utc_day",
+    "wait_for_pending_usage_upserts",
 ]
 
 logger = structlog.get_logger(__name__)
@@ -53,6 +71,9 @@ logger = structlog.get_logger(__name__)
 #: Роли из claim `role`, которым положен «профессиональный» дневной лимит.
 #: Строки, а не `AdminRole`, чтобы FinOps-слой не зависел от моделей БД.
 PRO_ROLES = frozenset({"admin", "auditor"})
+
+#: Допустимые типы субъекта в `usage_daily.subject_type`.
+_SUBJECT_TYPES = frozenset({"user", "ip"})
 
 #: Текущий трекер и субъект запроса; выставляются middleware и читаются
 #: LLM-клиентом после ответа (без протаскивания Redis через все слои).
@@ -63,10 +84,32 @@ _current_subject: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "token_subject", default=None
 )
 
+#: Ссылки на фоновые задачи durable-upsert: без них GC может отменить запись.
+_pending_usage_upserts: set[asyncio.Task[None]] = set()
+
 
 def utc_day(now: datetime | None = None) -> str:
     """Дата в UTC в формате ``YYYY-MM-DD`` (ключ счётчика)."""
     return (now or datetime.now(UTC)).strftime("%Y-%m-%d")
+
+
+def utc_date(now: datetime | None = None) -> date:
+    """UTC-дата дня (колонка `usage_daily.day`)."""
+    return (now or datetime.now(UTC)).date()
+
+
+def parse_subject(subject: str) -> tuple[str, str]:
+    """Разложить subject счётчика на ``(subject_type, subject_key)``.
+
+    ``user:42`` → ``("user", "42")``, ``ip:1.2.3.4`` → ``("ip", "1.2.3.4")``.
+
+    Raises:
+        ValueError: неизвестный префикс или пустой ключ.
+    """
+    subject_type, separator, subject_key = subject.partition(":")
+    if not separator or subject_type not in _SUBJECT_TYPES or not subject_key:
+        raise ValueError(f"неизвестный субъект счётчика: {subject!r}")
+    return subject_type, subject_key
 
 
 def next_utc_midnight(now: datetime | None = None) -> datetime:
@@ -188,20 +231,162 @@ class TokenUsageTracker:
         )
 
 
-async def record_token_usage(tokens_in: int, tokens_out: int) -> None:
-    """Записать расход токенов в текущий дневной счётчик.
+async def record_token_usage(
+    tokens_in: int, tokens_out: int, cost_usd: float = 0.0
+) -> None:
+    """Записать расход токенов в Redis-счётчик и durable `usage_daily`.
 
-    No-op вне HTTP-запроса (скрипты/eval) и при недоступном Redis:
-    observability/FinOps не должна ломать генерацию.
+    Redis — горячий путь (429), `usage_daily` — durable-агрегат для отчётов
+    и fallback в `/v1/users/me/usage`. Обе записи best-effort и не ломают
+    генерацию: ошибка Redis логируется, durable-upsert уходит в фон
+    отдельной задачей (см. `wait_for_pending_usage_upserts` для тестов).
+
+    No-op вне HTTP-запроса (скрипты/eval): субъект счётчика выставляет
+    `TokenBudgetMiddleware` в contextvar.
+
+    Args:
+        tokens_in: входные токены вызова.
+        tokens_out: выходные токены вызова.
+        cost_usd: стоимость вызова по прайсу на момент вызова.
     """
-    tracker = _current_tracker.get()
     subject = _current_subject.get()
-    if tracker is None or subject is None:
+    if subject is None:
         return
+    tracker = _current_tracker.get()
+    if tracker is not None:
+        try:
+            await tracker.add(subject, tokens_in + tokens_out)
+        except Exception as exc:  # fail-open, как у rate limiting
+            logger.warning("token_usage_record_failed", error=str(exc))
+    # Durable-агрегат не зависит от Redis: пишем даже если инкремент упал.
+    _schedule_usage_upsert(
+        subject=subject,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        cost_usd=cost_usd,
+    )
+
+
+def _schedule_usage_upsert(
+    *,
+    subject: str,
+    tokens_in: int,
+    tokens_out: int,
+    cost_usd: float,
+    requests: int = 1,
+    day: date | None = None,
+) -> None:
+    """Поставить durable-upsert дельты в фон (fire-and-forget, best-effort)."""
     try:
-        await tracker.add(subject, tokens_in + tokens_out)
-    except Exception as exc:  # fail-open, как у rate limiting
-        logger.warning("token_usage_record_failed", error=str(exc))
+        task = asyncio.create_task(
+            _upsert_usage_daily(
+                subject=subject,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cost_usd=cost_usd,
+                requests=requests,
+                day=day,
+            ),
+            name="usage-daily-upsert",
+        )
+        _pending_usage_upserts.add(task)
+        task.add_done_callback(_pending_usage_upserts.discard)
+    except Exception as exc:  # например, event loop уже закрыт
+        logger.warning(
+            "usage_daily_schedule_failed", error=str(exc), subject=subject
+        )
+
+
+async def _upsert_usage_daily(
+    *,
+    subject: str,
+    tokens_in: int,
+    tokens_out: int,
+    cost_usd: float,
+    requests: int = 1,
+    day: date | None = None,
+) -> None:
+    """Прибавить дельту к `usage_daily` одним `INSERT ... ON CONFLICT`.
+
+    `ON CONFLICT (subject_type, subject_key, day) DO UPDATE` атомарно
+    прибавляет токены/стоимость и инкрементирует `requests`; отдельная
+    сессия и фоновая задача — чтобы не блокировать ответ LLM.
+    """
+    try:
+        subject_type, subject_key = parse_subject(subject)
+        table = UsageDaily.__table__
+        statement = pg_insert(UsageDaily).values(
+            subject_type=subject_type,
+            subject_key=subject_key,
+            day=day or utc_date(),
+            tokens_in=max(0, int(tokens_in)),
+            tokens_out=max(0, int(tokens_out)),
+            cost_usd=Decimal(str(max(0.0, float(cost_usd)))),
+            requests=max(0, int(requests)),
+        )
+        statement = statement.on_conflict_do_update(
+            constraint="uq_usage_daily_subject_day",
+            set_={
+                "tokens_in": table.c.tokens_in + statement.excluded.tokens_in,
+                "tokens_out": (
+                    table.c.tokens_out + statement.excluded.tokens_out
+                ),
+                "cost_usd": table.c.cost_usd + statement.excluded.cost_usd,
+                "requests": table.c.requests + statement.excluded.requests,
+                "updated_at": func.now(),
+            },
+        )
+        async with SessionLocal() as session:
+            await session.execute(statement)
+            await session.commit()
+    except Exception as exc:  # LLMOps/FinOps не должны ломать запрос
+        logger.warning(
+            "usage_daily_upsert_failed", error=str(exc), subject=subject
+        )
+
+
+async def wait_for_pending_usage_upserts(timeout_s: float = 2.0) -> None:
+    """Дождаться фоновых durable-upsert-ов (тесты/корректное завершение).
+
+    Без этого фоновые задачи могут быть отменены при закрытии event loop
+    (TestClient), и тест не увидит строку в `usage_daily`.
+    """
+    tasks = [task for task in list(_pending_usage_upserts) if not task.done()]
+    if tasks:
+        await asyncio.wait(tasks, timeout=timeout_s)
+
+
+async def usage_daily_tokens(
+    subject: str, *, day: date | None = None
+) -> int | None:
+    """Токены субъекта за день из `usage_daily` (fallback для usage endpoint).
+
+    Returns:
+        ``tokens_in + tokens_out`` или ``None``, если строки нет (или БД
+        недоступна): вызывающий отличает «данных нет» от нулевого расхода.
+
+    Ошибки БД логируются и не пробрасываются: FinOps best-effort.
+    """
+    try:
+        subject_type, subject_key = parse_subject(subject)
+    except ValueError as exc:
+        logger.warning("usage_daily_subject_invalid", error=str(exc))
+        return None
+    try:
+        async with SessionLocal() as session:
+            total = await session.scalar(
+                select(UsageDaily.tokens_in + UsageDaily.tokens_out).where(
+                    UsageDaily.subject_type == subject_type,
+                    UsageDaily.subject_key == subject_key,
+                    UsageDaily.day == (day or utc_date()),
+                )
+            )
+    except Exception as exc:  # БД недоступна — endpoint отдаст Redis-путь
+        logger.warning(
+            "usage_daily_read_failed", error=str(exc), subject=subject
+        )
+        return None
+    return int(total) if total is not None else None
 
 
 class TokenBudgetMiddleware:

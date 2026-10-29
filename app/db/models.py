@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -25,6 +25,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     ForeignKey,
@@ -60,6 +61,7 @@ __all__ = [
     "Prompt",
     "RetrievalCache",
     "SemanticCache",
+    "UsageDaily",
     "User",
     "admin_role_enum",
     "level_enum",
@@ -545,4 +547,81 @@ class LlmCall(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = _created_at()
+
+
+class UsageDaily(Base):
+    """Durable-агрегат расхода токенов за день (T-031b, DESIGN §4.5).
+
+    Субъект — `user:<id>` или `ip:<ip>` (та же схема, что у Redis-счётчика
+    `usage:{day}:{subject}`): `subject_type`/`subject_key` разложены на две
+    колонки, чтобы агрегировать и индексировать без разбора строк.
+
+    Пишется best-effort из `app.finops.record_token_usage` (upsert
+    `ON CONFLICT DO UPDATE`: токены/стоимость прибавляются, `requests + 1`).
+    Redis остаётся горячим счётчиком для 429; `usage_daily` — durable-история
+    для FinOps-отчётов и fallback в `/v1/users/me/usage`, когда Redis
+    недоступен или пуст.
+    """
+
+    __tablename__ = "usage_daily"
+    __table_args__ = (
+        UniqueConstraint(
+            "subject_type",
+            "subject_key",
+            "day",
+            name="uq_usage_daily_subject_day",
+        ),
+        # Оба порядка нужны: fallback-чтение — по субъекту и дню, отчёты
+        # и retention — по дню и типу субъекта.
+        Index(
+            "ix_usage_daily_day_subject",
+            "day",
+            "subject_type",
+        ),
+        Index(
+            "ix_usage_daily_subject_day",
+            "subject_type",
+            "subject_key",
+            "day",
+        ),
+        CheckConstraint(
+            "tokens_in >= 0", name="ck_usage_daily_tokens_in_nonnegative"
+        ),
+        CheckConstraint(
+            "tokens_out >= 0", name="ck_usage_daily_tokens_out_nonnegative"
+        ),
+        CheckConstraint(
+            "cost_usd >= 0", name="ck_usage_daily_cost_usd_nonnegative"
+        ),
+        CheckConstraint(
+            "requests >= 0", name="ck_usage_daily_requests_nonnegative"
+        ),
+    )
+
+    id: Mapped[int] = _pk()
+    #: `user` | `ip` (varchar(8) по DESIGN).
+    subject_type: Mapped[str] = mapped_column(String(8), nullable=False)
+    #: id пользователя или IP (до 64 символов).
+    subject_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    tokens_in: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=sql_text("0")
+    )
+    tokens_out: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=sql_text("0")
+    )
+    cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, server_default=sql_text("0")
+    )
+    requests: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sql_text("0")
+    )
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
 

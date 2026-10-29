@@ -179,7 +179,9 @@ class OpenAICompatibleClient(BaseLLMClient):
                     cost_usd=cost_usd,
                     elapsed_ms=self._elapsed_ms(started),
                 )
-                await record_token_usage(tokens_in, tokens_out)
+                await record_token_usage(
+                    tokens_in, tokens_out, cost_usd=cost_usd
+                )
                 return result
         except asyncio.CancelledError:
             status, error_code = "error", "cancelled"
@@ -326,7 +328,9 @@ class OpenAICompatibleClient(BaseLLMClient):
                 cache_hit=False,
             )
         if not failed:
-            await record_token_usage(tokens_in_est, tokens_out_est)
+            await record_token_usage(
+                tokens_in_est, tokens_out_est, cost_usd=cost_est
+            )
 
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:
