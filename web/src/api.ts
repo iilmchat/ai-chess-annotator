@@ -233,6 +233,53 @@ export function updateCommentary(
   });
 }
 
+/**
+ * `GET /v1/commentaries/{id}/export/pdf` — PDF-файл комментария (T-107).
+ *
+ * Запрос защищён JWT, поэтому берём blob вручную (общий `request()`
+ * парсит JSON). При 401 — тот же single-flight refresh, что и у JSON-
+ * запросов; ошибки сервера превращаются в `ApiError`.
+ */
+export async function fetchCommentaryPdf(
+  commentaryId: number,
+): Promise<Blob> {
+  const path = `/v1/commentaries/${commentaryId}/export/pdf`;
+  const token = getAuthState().accessToken;
+  let response = await send(path, undefined, token);
+
+  if (response.status === 401) {
+    const latest = getAuthState().accessToken;
+    const retryToken =
+      latest && latest !== token
+        ? latest
+        : (await refreshSession()).access_token;
+    response = await send(path, undefined, retryToken);
+  }
+
+  if (!response.ok) {
+    return throwForResponse(response);
+  }
+  return response.blob();
+}
+
+/** Скачать PDF комментария в браузере (создаёт временную ссылку). */
+export async function downloadCommentaryPdf(
+  commentaryId: number,
+): Promise<void> {
+  const blob = await fetchCommentaryPdf(commentaryId);
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `commentary-${commentaryId}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export function askChat(
   analysisId: string,
   level: Level,

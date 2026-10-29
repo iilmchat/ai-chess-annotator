@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { ApiError, streamCommentary, updateCommentary } from "../api";
+import { ApiError, downloadCommentaryPdf, streamCommentary, updateCommentary } from "../api";
 import { useTypewriter } from "../hooks/useTypewriter";
 import type { CommentaryResponse, Level } from "../types";
 
@@ -17,6 +17,7 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedEdit, setSavedEdit] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -96,6 +97,21 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
       setError(errorMessage(cause, t("common.unknown")));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleDownloadPdf() {
+    if (!commentary) {
+      return;
+    }
+    setPdfBusy(true);
+    setError(null);
+    try {
+      await downloadCommentaryPdf(commentary.commentary_id);
+    } catch (cause) {
+      setError(errorMessage(cause, t("common.unknown")));
+    } finally {
+      setPdfBusy(false);
     }
   }
 
@@ -196,6 +212,17 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
                   }}
                 >
                   {t("commentary.edit")}
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handleDownloadPdf}
+                  disabled={pdfBusy}
+                  aria-busy={pdfBusy}
+                >
+                  {pdfBusy
+                    ? t("commentary.pdfPreparing")
+                    : t("commentary.downloadPdf")}
                 </button>
               </div>
             </>

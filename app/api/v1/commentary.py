@@ -12,11 +12,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Annotated, Literal
 
+import structlog
 from fastapi import APIRouter, Depends, Path, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -25,9 +29,20 @@ from app.auth.access import get_accessible_commentary, get_accessible_game
 from app.auth.deps import get_current_user
 from app.commentary import RagContextBuilder, edit_commentary, generate_commentary
 from app.commentary.streaming import stream_commentary
-from app.db.models import Commentary, Level, User
+from app.config import Settings, get_settings
+from app.db.models import Commentary, Game, Level, Move, User
 from app.db.session import get_session
+from app.errors import (
+    InvalidPgnError,
+    NotFoundError,
+    PdfExportError,
+    PdfFontUnavailableError,
+)
+from app.export.pdf import CommentaryPdfData, build_commentary_pdf
+from app.ingestion import parse_pgn
 from app.llm.calls import attach_commentary_id, llm_call_context, stream_in_call_context
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["commentary"])
 
@@ -246,6 +261,96 @@ async def patch_commentary(
         model=row.model,
         edit_id=result.edit_id,
         created_at=row.created_at,
+    )
+
+
+@router.get("/commentaries/{commentary_id}/export/pdf")
+async def export_commentary_pdf(
+    commentary_id: Annotated[
+        int, Path(gt=0, description="ID комментария из /v1/commentary")
+    ],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> StreamingResponse:
+    """Скачать комментарий в PDF (T-107).
+
+    PDF собирается серверно (`app.export.pdf`, fpdf2 + TTF-шрифт):
+    шапка с игроками/турниром, PGN-ходы, текст комментария и метаданные.
+    Генерация CPU-bound и выполняется в `asyncio.to_thread`, чтобы не
+    блокировать event loop.
+
+    Доступ — как к комментарию: владелец партии или администратор;
+    чужая запись → 404 (KI-035).
+
+    Raises:
+        NotFoundError: комментария/партии нет или нет доступа (→ 404).
+        PdfFontUnavailableError: в окружении нет TTF-шрифта (→ 503).
+        PdfExportError: не удалось сформировать PDF (→ 500).
+    """
+    commentary = await get_accessible_commentary(session, commentary_id, user)
+    game = await session.get(Game, commentary.game_id)
+    if game is None:  # pragma: no cover - FK commentary.game_id гарантирует
+        raise NotFoundError(f"Партия комментария {commentary_id} не найдена")
+
+    move_rows = list(
+        await session.scalars(
+            select(Move)
+            .where(Move.game_id == game.id)
+            .order_by(Move.ply)
+        )
+    )
+    # Метаданные игроков/турнира — из PGN; битый legacy-PGN не должен
+    # ломать экспорт: шапка просто останется с прочерками.
+    metadata = None
+    try:
+        metadata = parse_pgn(game.pgn).metadata
+    except InvalidPgnError:
+        logger.warning("pdf_export_invalid_pgn", game_id=game.id)
+
+    data = CommentaryPdfData(
+        commentary_id=commentary.id,
+        white=metadata.white if metadata else None,
+        black=metadata.black if metadata else None,
+        event=metadata.event if metadata else None,
+        date=metadata.date if metadata else None,
+        result=metadata.result if metadata else None,
+        level=commentary.level.value,
+        model=commentary.model,
+        moves=tuple(move.san for move in move_rows),
+        commentary_text=commentary.text,
+        validated=commentary.validated,
+        human_edited=commentary.human_edited,
+        generated_at=commentary.created_at,
+    )
+    try:
+        pdf_bytes = await asyncio.to_thread(
+            build_commentary_pdf, data, settings
+        )
+    except PdfFontUnavailableError:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "commentary_pdf_failed", commentary_id=commentary_id
+        )
+        raise PdfExportError(
+            "Не удалось сформировать PDF комментария"
+        ) from exc
+
+    logger.info(
+        "commentary_pdf_exported",
+        commentary_id=commentary.id,
+        bytes=len(pdf_bytes),
+    )
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="commentary-{commentary.id}.pdf"'
+            ),
+            "Cache-Control": "no-store",
+        },
     )
 
 

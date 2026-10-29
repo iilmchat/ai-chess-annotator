@@ -29,6 +29,8 @@ __all__ = [
     "LLMTimeoutError",
     "LLMValidationError",
     "NotFoundError",
+    "PdfExportError",
+    "PdfFontUnavailableError",
     "PromptInjectionError",
     "UserExistsError",
 ]
@@ -167,3 +169,17 @@ class PromptInjectionError(AppError):
     def __init__(self, message: str, *, rule_ids: tuple[str, ...] = ()) -> None:
         super().__init__(message)
         self.rule_ids = rule_ids
+
+
+class PdfExportError(AppError):
+    """Не удалось сформировать PDF комментария (T-107)."""
+
+    code = "pdf_export_failed"
+    http_status = 500
+
+
+class PdfFontUnavailableError(PdfExportError):
+    """Не найден TrueType-шрифт с кириллицей для PDF (окружение/конфиг)."""
+
+    code = "pdf_font_unavailable"
+    http_status = 503

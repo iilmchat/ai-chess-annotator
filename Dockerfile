@@ -23,8 +23,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Stockfish — нужен для Engine Service (T-008).
 # Debian кладёт бинарник в /usr/games, а конфиг по умолчанию ждёт
 # /usr/bin/stockfish — делаем стабильную ссылку.
+# fonts-dejavu-core — TTF с кириллицей для PDF-экспорта комментария (T-107):
+# fpdf2 встраивает шрифт, системные пакеты в slim-образе отсутствуют.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends stockfish curl ca-certificates \
+ && apt-get install -y --no-install-recommends \
+      stockfish curl ca-certificates fonts-dejavu-core \
  && if [ -x /usr/games/stockfish ]; then ln -sf /usr/games/stockfish /usr/bin/stockfish; fi \
  && rm -rf /var/lib/apt/lists/*
 
