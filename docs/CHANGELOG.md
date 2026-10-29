@@ -8,6 +8,37 @@
 
 ### Added
 
+- **Auth tech debt (KI-036/KI-037, итерация 26):** пароли — **Argon2id**
+  (`argon2-cffi`, `$argon2id$`), legacy bcrypt-хеши перехешируются при
+  успешном входе (`verify_and_update`, лог `password_rehashed`). Refresh-токен
+  больше не возвращается в JSON: `/auth/login` и `/auth/refresh` кладут его
+  в HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`, `Max-Age` = TTL, `Secure`
+  при `AUTH_COOKIE_SECURE=true`), добавлены настройки `AUTH_COOKIE_*`.
+  Новый `POST /auth/logout` отзывает `jti` в Redis
+  (`refresh_denylist:<jti>`, TTL до `exp`) и очищает cookie; повторное
+  использование отозванного токена → 401; ротация refresh инвалидирует
+  прежний `jti` (защита от replay). Access-токен на фронтенде — только в
+  памяти, `credentials: "include"`, single-flight refresh и bootstrap через
+  `/auth/refresh`, `localStorage` для токенов не используется.
+- **Admin JWT (T-028 финал, итерация 26):** `/admin` принимает access JWT
+  (`Authorization: Bearer` или cookie `access_token`): `admin`/`auditor` →
+  200, `user` → 403 `admin_forbidden`, битый/просроченный → 403, без
+  кредов → 401. Legacy `X-Admin-Token` и парольная форма сохранены как
+  fallback.
+- **FinOps по JWT-пользователю (KI-038, итерация 26):**
+  `TokenBudgetMiddleware` и `/v1/users/me/usage` считают дневной бюджет по
+  `user:{id}` и tier из claim `role` (admin/auditor → pro, user → free);
+  анонимно/битый токен — прежний IP + `PRO_IPS`. Ключ Redis —
+  `usage:<date>:user:<id>`.
+- **Dataset schema v2 (KI-039, итерация 26):** `scripts/export_dataset.py`
+  по умолчанию пишет `schema_version=2`: `system` — промпт уровня,
+  `user` — `build_fact_package(...)` (пакет фактов из
+  `games/moves/motifs`), `assistant` — `edited_text`; вложенный `metadata`
+  (id, commentary_id, game_id, editor_id, level, model, created_at,
+  fact_sheet_chars). Проблемные записи пропускаются со статистикой;
+  `--schema-version 1` оставлен legacy. `scripts/train_lora.py`
+  поддерживает `{1,2}`, печатает распределение и предупреждает о
+  rewrite-семантике v1; `LORA_TRAINING.md` переписан под v2.
 - **RAG-коллекция и eval-фильтр (T-042, итерация 25).** В
   `annotated_games` загружены новые PGN: `sample3.pgn` (500),
   `sample4.pgn` (13), `sample5.pgn` (9) — **522 партии** с
@@ -76,6 +107,24 @@
 
 ### Changed
 
+- **Контракт `/auth` (итерация 26):** `/auth/login` и `/auth/refresh`
+  возвращают `{access_token, token_type, expires_in, user}` без
+  `refresh_token`; refresh читается из HttpOnly-cookie (fallback — JSON-тело
+  для curl/CLI), при успехе cookie ротируется; `POST /auth/logout` — 204.
+  Ограничение длины пароля — 8..256 символов (bcrypt-лимит 72 байта снят).
+- **Зависимости (KI-036):** удалены `passlib` и `types-passlib`; добавлен
+  `argon2-cffi>=23.1`; `bcrypt>=4.1` оставлен только для проверки legacy
+  хешей (без пина `<4.1`).
+- **Фронтенд auth (KI-037):** `authStore` — memory-only access/user,
+  `bootstrapAuth()` вместо `hydrateAuth()`, `AuthGate` ждёт bootstrap,
+  logout вызывает API; `web/e2e`-моки переведены на новый контракт.
+- **FinOps (KI-038):** `TokenBudgetMiddleware` принимает `Settings` вместо
+  `pro_ips`/`trust_forwarded_for`; `request_subject`/`request_tier` стали
+  JWT-aware; `/v1/users/me/usage` не требует БД.
+- **Документация (итерация 26):** README (auth), `SPEC.md` (Argon2id,
+  cookie/denylist, per-user FinOps), `KNOWN_ISSUES` (KI-036/037/038/039 →
+  Closed, +KI-041…045), `TODO` (T-028 финал, T-043/T-044), `RELEASES`,
+  `ITERATION-26.md`.
 - **LoRA-экспорт (итерация 25):** JSONL из `edits` теперь строго
   `system → user → assistant` (`system` — промпт уровня из
   `app/prompts/*.txt`); старые выгрузки без `system` требуют

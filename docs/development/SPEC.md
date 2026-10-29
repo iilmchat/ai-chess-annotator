@@ -235,14 +235,20 @@ llm_evaluations(id, model, level, accuracy_score, usefulness_score,
 | `POST` | `/v1/ingest` | Загрузка аннотированных партий в RAG (админ). |
 | `GET` | `/v1/health` | Healthcheck движка, БД, LLM. |
 
-**Аутентификация:** JWT (`POST /auth/register|login`, `GET /auth/me`,
-`POST /auth/refresh`; access 15 мин + refresh 7 дней; заголовок
-`Authorization: Bearer <access>`). Пароли — bcrypt (passlib), роли
-`user/admin/auditor` (enum `admin_role`). Чтение/запись партий, ходов,
+**Аутентификация:** JWT (`POST /auth/register|login|refresh|logout`,
+`GET /auth/me`; access 15 мин + refresh 7 дней; заголовок
+`Authorization: Bearer <access>`). Refresh-токен передаётся в
+HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`, `Secure` в prod), при logout
+его `jti` уходит в Redis-denylist, а ротация инвалидирует прежний refresh;
+не-браузерные клиенты могут передать refresh в теле. Пароли —
+**Argon2id** (`argon2-cffi`), legacy bcrypt-хеши перехешируются при входе.
+Роли `user/admin/auditor` (enum `admin_role`); `/admin` принимает access JWT
+admin/auditor. Чтение/запись партий, ходов,
 комментариев и чата — с изоляцией по владельцу: обычный пользователь
 видит только свои `games`, администратор — все; чужой id неотличим от
 несуществующего (404). **Rate limiting:** через Redis (в т.ч.
-`/auth/login|register`).
+`/auth/login|register`). **FinOps:** дневной бюджет токенов считается по
+`user:{id}` из JWT, анонимно — по IP.
 
 ---
 

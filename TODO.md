@@ -311,23 +311,27 @@
 задач — сверху вниз: T-028 задаёт control plane, остальные на него
 опираются.
 
-### [~] T-028. Admin Control Plane (частично, итерации 16 и 24)
+### [x] T-028. Admin Control Plane (итерации 16, 24, 26)
 - **Зависит от:** T-004, T-025, T-027
 - **Статус итерации 16:** `/admin` смонтирован, защищён `X-Admin-Token`
   / cookie-сессией, подключены read-only views `annotated_games`,
   `commentaries`, `edits`; тесты `tests/integration/test_admin.py`.
 - **Статус итерации 24:** роли `user/admin/auditor`, `users.role`,
   `password_hash`, `is_active`, `last_login_at` добавлены миграцией
-  `c7d8e9f0a1b2`; JWT-аутентификация публичного API — T-041. Осталось:
-  серверные сессии в Redis, RBAC внутри `/admin` (admin vs auditor),
-  мягкое удаление RAG, аудит мутаций (T-035).
+  `c7d8e9f0a1b2`; JWT-аутентификация публичного API — T-041.
+- **Статус итерации 26 (финал JWT-интеграции):** `AuthProvider` и
+  `AdminAuthGuard` принимают access JWT (`Authorization: Bearer` или
+  cookie `access_token`): `admin`/`auditor` → 200, `user` → 403
+  `admin_forbidden`, битый/просроченный → 403, без кредов → 401.
+  Legacy `X-Admin-Token` (service-token) и парольная форма (`ADMIN_PASSWORD`)
+  сохранены как fallback. RBAC внутри views (auditor ≠ admin) — KI-045.
 - **Что:** смонтировать `starlette-admin` на `/admin` (AsyncEngine из
   `app.db.session`), добавить роль `admin` в `users` (enum `user/admin/
   auditor`, `password_hash`, миграция), аутентификацию админки через
-  `AuthProvider` (серверная сессия: cookie + `sid` в Redis), views для
-  `annotated_games` (RAG) и `commentaries` (просмотр, фильтры, мягкое
-  удаление, восстановление), read-only views для `games`/`edits`. Все
-  мутации — через сервисный слой, чтобы их видел аудит (T-035).
+  `AuthProvider`, views для `annotated_games` (RAG) и `commentaries`
+  (просмотр, фильтры, мягкое удаление, восстановление), read-only views
+  для `games`/`edits`. Все мутации — через сервисный слой, чтобы их видел
+  аудит (T-035).
 - **DoD:** `/admin` недоступен без аутентификации; `user` получает 403,
   `admin` видит и редактирует RAG/комментарии; мягкое удаление RAG-партии
   исключает её из retrieval; интеграционные тесты входа/ролей/CRUD;
@@ -622,6 +626,31 @@
   данные загружены в temp Postgres 5435 (baseline воспроизведён
   рецептом итерации 12).
 
+### [x] T-043. Auth tech debt: Argon2id, HttpOnly cookie, per-user FinOps (итерация 26)
+- **Зависит от:** T-041
+- **Что:** KI-036 — убрать passlib, Argon2id + миграция legacy bcrypt при
+  логине; KI-037 — refresh в HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`),
+  `/auth/logout` + Redis-denylist, отзыв при ротации, фронтенд без
+  `localStorage` (`credentials: include`, single-flight refresh, bootstrap
+  через `/auth/refresh`); KI-038 — FinOps по `user:{id}`/tier из JWT.
+- **DoD:** login не отдаёт refresh в JSON; logout → reuse 401; bcrypt-хеш
+  при логине становится `$argon2id$`; лимиты по user_id; фронтенд-тесты и
+  E2E зелёные.
+- **Статус:** выполнено (итерация 26); остатки — KI-041, KI-042, KI-043.
+
+### [x] T-044. Dataset Schema v2: fact_sheet → commentary (KI-039, итерация 26)
+- **Зависит от:** T-104
+- **Что:** `export_dataset.py` по умолчанию `schema_version=2`:
+  `system` — промпт уровня, `user` — `build_fact_package(...)` из
+  `games/moves/motifs`, `assistant` — `edited_text`; `metadata`
+  (id/commentary_id/game_id/editor_id/level/model/created_at/
+  fact_sheet_chars); v1 сохранён флагом. `train_lora.py` поддерживает
+  `{1,2}`, печатает распределение и предупреждает про rewrite-v1.
+- **DoD:** v2 экспортируется и читается dry-run; интеграционный тест
+  seed→export→валидация; `LORA_TRAINING.md` обновлён.
+- **Статус:** выполнено (итерация 26); обучение на GPU по-прежнему не
+  выполнялось (KI-030 Open), N+1 экспорта — KI-044.
+
 ### [ ] T-039b. LLM evals: графики и фильтры
 - **Что:** фильтры по модели/уровню/дате, средние по шкалам, график
   динамики в админке; экспорт CSV.
@@ -633,17 +662,19 @@
   уровня.
 - **T-102.** Lichess Studies / открытые базы как источник RAG.
 - **T-103.** Лицензия ChessBase Mega Database 2026.
-- **[x] T-104.** LoRA-пайплайн на `edits` (итерация 25):
-  `scripts/export_dataset.py` (схема `system → user → assistant`),
+- **[x] T-104.** LoRA-пайплайн на `edits` (итерация 25, schema v2 —
+  итерация 26): `scripts/export_dataset.py` (схема `system → user →
+  assistant`; с итерации 26 по умолчанию `schema_version=2` —
+  `user` = пакет фактов `build_fact_package`, `assistant` = `edited_text`),
   `scripts/train_lora.py` (реальный SFT на peft/transformers: QLoRA 4-bit,
   r=16, alpha=32, q_proj/v_proj, 3 эпохи, lr=2e-4, маскирование лосса на
-  assistant; `--dry-run`, `--check-env`, понятные ошибки без GPU),
-  `LORA_ADAPTER_PATH` в конфиге/фабрике (адаптер учитывается только если
-  путь существует), `docs/development/reports/LORA_TRAINING.md` (GPU
-  RunPod/Colab, стоимость, vLLM `--lora-modules`, оценка).
+  assistant; `--dry-run`, `--check-env`, поддержка schema {1,2}, понятные
+  ошибки без GPU), `LORA_ADAPTER_PATH` в конфиге/фабрике (адаптер
+  учитывается только если путь существует),
+  `docs/development/reports/LORA_TRAINING.md` (GPU RunPod/Colab,
+  стоимость, vLLM `--lora-modules`, оценка).
   **Реальное обучение не выполнялось** — на машине нет GPU/CUDA
-  (KI-030 остаётся Open); дизайн SFT-пары требует решения до GPU-прогона
-  (KI-039, schema_version=2 `fact_sheet → commentary`).
+  (KI-030 остаётся Open).
 - **T-105.** On-prem профиль без облачных LLM (`LLM_PROVIDER=local`).
 - **T-106.** Английская локализация комментариев.
 - **T-107.** Экспорт комментария в PDF / DOCX.

@@ -1348,3 +1348,95 @@ RULES §2.18)
   stub-LLM) либо на self-hosted runner с GPU.
 - **T-039b:** графики/фильтры LLM-evals в админке.
 - **KI-037/KI-038:** отзыв refresh, httpOnly cookie, per-user бюджеты.
+
+---
+
+## Итерация 26 — Auth Tech Debt и Dataset Schema v2 (KI-036, KI-037, KI-038, KI-039, T-028 финал)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ завершена. KI-036, KI-037, KI-038, KI-039 закрыты;
+T-028 (JWT-интеграция в `/admin`) закрыт. Заведены KI-041…045.
+**Отчёт:** `docs/development/reports/v0.4.0/ITERATION-26.md` (7 разделов,
+RULES §2.18)
+
+### Что сделано
+
+- [x] **KI-036, Argon2id.** Убраны `passlib`/`types-passlib`; пароли —
+  `argon2-cffi` (`$argon2id$`), лимит 8..256 символов. `verify_and_update`:
+  нативный rehash при смене параметров; legacy `$2a$/$2b$/$2y$` —
+  `bcrypt.checkpw` → новый Argon2id-хеш, `/auth/login` перезаписывает
+  `users.password_hash` в той же транзакции (+`password_rehashed`).
+  `bcrypt>=4.1` оставлен только для legacy-verify (KI-042).
+- [x] **KI-037, HttpOnly refresh + denylist.** `/auth/login` и
+  `/auth/refresh` не возвращают refresh в JSON: HttpOnly-cookie
+  (`SameSite=Lax`, `Path=/auth`, `Max-Age`=TTL, `Secure` при
+  `AUTH_COOKIE_SECURE=true`). Новый `POST /auth/logout` кладёт `jti` в
+  Redis `refresh_denylist:<jti>` (TTL до `exp`) и очищает cookie;
+  ротация refresh также отзывает прежний jti. Refresh читается из cookie
+  (fallback — JSON-тело для curl/CLI), 401 для отозванного/битого.
+  Фронтенд: access и user — только в памяти Zustand, `localStorage` для
+  токенов удалён, все fetch — `credentials:"include"`, single-flight
+  refresh по cookie, `bootstrapAuth()` при старте, logout через API.
+  CORS `allow_credentials=True` подтверждён credentialed preflight-тестом.
+- [x] **KI-038, FinOps по пользователю.** `TokenBudgetMiddleware` и
+  `/v1/users/me/usage` используют общий резолвер: валидный access JWT →
+  `user:{id}` + tier из claim `role` (admin/auditor → pro, user → free);
+  аноним/битый токен → IP + `PRO_IPS`. Ключ Redis —
+  `usage:<date>:user:<id>`; middleware получает `Settings` в main.py.
+- [x] **KI-039, Dataset Schema v2.** `export_dataset.py` по умолчанию
+  `schema_version=2`: `system` — промпт уровня, `user` —
+  `build_fact_package(...)` (восстановлен из `games/moves/motifs`),
+  `assistant` — `edited_text`, `metadata` + `fact_sheet_chars`; пропуски
+  (no_game/invalid_pgn/no_analysis/invalid_level) со статистикой;
+  `--schema-version 1` — legacy. `train_lora.py` поддерживает `{1,2}`,
+  распределение по версиям и предупреждение о v1-rewrite;
+  `LORA_TRAINING.md` переписан под v2.
+- [x] **T-028 финал: JWT в `/admin`.** `AdminAuthProvider`/`AdminAuthGuard`
+  принимают access JWT (`Authorization: Bearer` или cookie
+  `access_token`): admin/auditor → 200, user → 403, битый/просроченный →
+  403, без кредов → 401; legacy `X-Admin-Token` и парольная форма
+  сохранены (RBAC внутри views — KI-045).
+- [x] **Документация:** README (auth, статус, тесты), `SPEC.md`,
+  `KNOWN_ISSUES` (4 KI → Closed, +KI-041…045), `TODO` (T-028 финал,
+  T-043/T-044, T-104 v2), `CHANGELOG`, `RELEASES`, `ITERATION-26.md`,
+  `.env.example`.
+
+### Метрики
+
+- **Backend-тесты:** **522 passed, 1 skipped, 1 xfailed** (48 файлов;
+  +86 к итерации 25), **218.74 с**, exit 0. Skip — нет
+  `DEEPSEEK_API_KEY`, xfail — KI-012. Новых тестовых функций **+81**.
+- **Frontend-тесты:** **42 passed** (6 файлов; +6).
+- **E2E:** mocked — **10 passed** (5 сценариев × chromium/mobile, 13.5 с);
+  real backend (chromium) — **5 passed** (1.3 мин), проверено независимо.
+- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 69 файлов.
+- **Сборка фронтенда:** 6.04 с; JS 464.31 КБ (gzip 146.15), CSS 14.29 КБ
+  (gzip 3.77), dist 479 350 B.
+- **Argon2id:** хеш `$argon2id$…`; живой bcrypt→argon2 login; cookie
+  `refresh_token=…; HttpOnly; Max-Age=604800; Path=/auth; SameSite=lax`;
+  logout → denylist → reuse 401; ротация отзывает прежний jti.
+- **Admin JWT:** Bearer admin/auditor → 200, user → 403, битый → 403,
+  без кредов → 401 (живой uvicorn-smoke).
+- **KI:** 45 записей, 24 Open, 21 Closed.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| 2FA, верификация email, сброс пароля, «выйти на всех устройствах», лимит попыток по email | Объём KI-037 закрыт в части cookie/denylist; email-flow/2FA — отдельный слой | KI-041 |
+| Удаление `bcrypt` из зависимостей | Нужен для проверки legacy-хешей, пока не замигрированы все пользователи (rehash только при логине) | KI-042 |
+| Защита от user-enumeration по таймингу логина | Не входило в DoD; план — dummy-Argon2 для несуществующего email | KI-043 |
+| Кэш `load_analyses` при экспорте v2 | N+1 приемлем для сотен правок; оптимизация отложена | KI-044 |
+| RBAC внутри `/admin` views (auditor ≠ admin) | Итерация закрывала JWT-вход; политика по views — отдельный шаг (T-028/T-035) | KI-045 |
+| Реальное LoRA-обучение на GPU | Нет GPU/CUDA (KI-030 Open); schema v2 подготовлена под первый прогон | KI-030 |
+
+### Что дальше
+
+- **KI-041:** 2FA/email-flow, отзыв всех сессий, пароли в админке вместо
+  `ADMIN_PASSWORD`.
+- **KI-042/KI-043:** завершить миграцию bcrypt-хешей и убрать зависимость;
+  выровнять тайминг логина.
+- **KI-044/KI-045:** кэш анализа при экспорте v2; RBAC в admin views.
+- **KI-030/T-104b:** обучить LoRA на `schema_version=2` (RunPod/Colab) и
+  сравнить с baseline `club` 4.40/10 через `evaluate_llm.py
+  --source new_samples`.
