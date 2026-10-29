@@ -120,6 +120,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--games", type=int, default=5, help="сколько партий взять (5–10)")
     parser.add_argument(
+        "--source",
+        default=None,
+        help=(
+            "фильтр по annotated_games.source (например, new_samples) — "
+            "фиксирует eval-набор для сравнения версий"
+        ),
+    )
+    parser.add_argument(
         "--levels",
         default="club,gm",
         help="уровни через запятую (по умолчанию club,gm)",
@@ -135,18 +143,33 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-async def _load_games(limit: int, settings: Settings) -> list[GameRow]:
-    """Взять самые короткие аннотированные партии (быстрее для eval)."""
+async def _load_games(
+    limit: int, settings: Settings, *, source: str | None = None
+) -> list[GameRow]:
+    """Взять самые короткие аннотированные партии (быстрее для eval).
+
+    Args:
+        limit: сколько партий вернуть.
+        settings: настройки (URL БД).
+        source: если задан — только партии из `annotated_games.source`.
+            Нужно для воспроизводимого eval-набора (T-042): без фильтра
+            «самые короткие» могут меняться после каждого ingest-а.
+    """
     engine = create_async_engine(settings.database_url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
+            statement = select(AnnotatedGame).where(
+                AnnotatedGame.pgn.is_not(None)
+            )
+            if source:
+                statement = statement.where(AnnotatedGame.source == source)
             rows = (
                 await session.scalars(
-                    select(AnnotatedGame)
-                    .where(AnnotatedGame.pgn.is_not(None))
-                    .order_by(func.length(AnnotatedGame.pgn).asc(), AnnotatedGame.id.asc())
-                    .limit(limit)
+                    statement.order_by(
+                        func.length(AnnotatedGame.pgn).asc(),
+                        AnnotatedGame.id.asc(),
+                    ).limit(limit)
                 )
             ).all()
     finally:
@@ -560,16 +583,21 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     settings = get_settings()
-    games = asyncio.run(_load_games(args.games, settings))
+    source = (args.source or "").strip() or None
+    games = asyncio.run(_load_games(args.games, settings, source=source))
     if not games:
+        filter_hint = f" (source={source})" if source else ""
         print(
-            "В annotated_games нет партий. Сначала выполните "
+            f"В annotated_games нет партий{filter_hint}. Сначала выполните "
             "scripts/ingest_pgn.py.",
             file=sys.stderr,
         )
         return 1
 
-    print(f"Партий: {len(games)}, уровни: {', '.join(levels)}")
+    print(
+        f"Партий: {len(games)}, уровни: {', '.join(levels)}"
+        + (f", источник: {source}" if source else "")
+    )
     rows = _judge_cli(games, levels, settings, args.timeout_s)
     overall = _averages(rows)
     average = sum(overall.values()) / len(overall) if overall else 0.0

@@ -261,7 +261,7 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Frontend | React 19 + Vite + React Router: главная, `/history`, `/analysis/:id`; `react-chessboard` 5.12.1, FEN из PGN через `chess.js`, RU/EN, Zustand + sessionStorage; история чата сохраняется и уходит в LLM; комментарий/чат стримятся постепенно |
 | UX | Skeleton-лоадеры, Error Boundary, mobile 1280/820/640/480, usage-badge `Free: 12k/50k` + модалка Pro, SPA-fallback в production |
 | LLM-evals | `llm_evaluations` (model, level, accuracy/usefulness/style), read-only view в админке; `scripts/evaluate_llm.py` пишет MD/JSON и БД |
-| RAG | `POST /v1/ingest` (PGN, до 5 МБ, `X-Admin-Token`) → `annotated_games` (LM Studio 768); `find_similar_positions` по FEN; контекст для `gm` |
+| RAG | `POST /v1/ingest` (PGN, до 5 МБ, `X-Admin-Token`) → `annotated_games` (LM Studio 768; **624** записи: 102 `my-collection` + 522 `new_samples`, итерация 25); `find_similar_positions` по FEN; контекст для `gm`; eval — `evaluate_llm.py --source new_samples` |
 | Motifs | Проходные пешки, слабые поля, открытые линии/диагонали, безопасность короля, вилки/связки, мат — в таблице `motifs` (до 6 на позицию) |
 | Policy | `choose_recommended_move`: gm — топ-1, club — альтернатива при разнице < 20 cp, beginner — фильтр раннего ферзя и зевков |
 | LLM-eval | 5 партий × club/gm, 3 шкалы; база **5.19/10** (9 из 10); после итерации 16 `club` — **4.40/10** (было 3.83), отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md); ниже 7/10 — KI-030 |

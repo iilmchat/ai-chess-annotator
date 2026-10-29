@@ -1,9 +1,9 @@
-# Итерация 25 — LoRA Fine-tuning и Playwright E2E (T-104, T-036b)
+# Итерация 25 — LoRA Fine-tuning, Playwright E2E и RAG-коллекция (T-104, T-036b, T-042)
 
 **Дата:** 2026-10-29
 **Статус:** ✅ завершена в объёме DoD. **KI-030 остаётся Open** (реальное
 обучение LoRA не выполнялось — на машине нет GPU/CUDA); заведены KI-039,
-KI-040. T-104 и T-036b закрыты.
+KI-040. T-104, T-036b и T-042 закрыты.
 **Формат:** RULES §2.18 (7 разделов).
 
 ---
@@ -22,6 +22,8 @@ KI-040. T-104 и T-036b закрыты.
 | Файл | Что изменилось |
 | :--- | :--- |
 | `scripts/train_lora.py` | Каркас → реальный SFT: peft/transformers, QLoRA 4-bit, r=16/alpha=32/`q_proj,v_proj`, 3 эпохи, lr=2e-4, gradient checkpointing, маскирование лосса только на assistant, right-padding-коллатор; `--dry-run` без torch, `--check-env`, `--system-prompt`, `--limit`, `--target-modules`; понятные `SystemExit` (нет зависимостей / нет CUDA / нет, пуст или невалиден датасет / CUDA OOM); статистика записей/уровней/токенов; `--output-dir` по умолчанию `models/lora-club-v1` |
+| `scripts/evaluate_llm.py` | T-042: `--source SOURCE` — фильтр по `annotated_games.source` в `_load_games()` (фиксирует eval-набор `new_samples`/`my-collection` для сравнения LoRA «до/после»); вывод источника в логе |
+| `tests/integration/test_llm_evaluations.py` | T-042: тест `test_load_games_filters_by_source` (фильтр по source, пустой результат для неизвестного source) |
 | `scripts/export_dataset.py` | Схема JSONL теперь строгая `system → user → assistant`; `system` — `app/prompts/<level>.txt` через `importlib.resources` (`load_system_prompt`, fallback club, override), метаданные/`schema_version=1` сохранены |
 | `app/config.py` | `lora_model` возвращает basename адаптера **только** для существующего пути (файл или каталог с `adapter_config.json`), иначе `vllm_model`; добавлены `lora_adapter_dir`, `lora_adapter_available` |
 | `app/llm/factory.py` | Локальные уровни используют `cfg.lora_model`; structlog `info llm_lora_adapter_enabled` / `warning llm_lora_adapter_unavailable`; маршрут `gm` (DeepSeek) не изменён |
@@ -59,7 +61,14 @@ KI-040. T-104 и T-036b закрыты.
 `docs/KNOWN_ISSUES.md` (KI-030 — прогресс без обучения, +KI-039/KI-040,
 сводка 40/23/17), `docs/CHANGELOG.md`, `docs/development/RELEASES.md`,
 `README.md` (статус, тесты 435/36, LoRA/E2E/KI/CI), `TODO.md` (T-104,
-T-036b), этот отчёт.
+T-036b, T-042), `docs/development/reports/LLM_EVAL.md` (T-042: состав
+RAG-коллекции 624, eval-команда `--source new_samples`), этот отчёт.
+
+### Данные (T-042)
+
+Новые PGN-файлы загружены в `annotated_games` (RAG) — таблица ниже;
+`data/` в git не коммитится, поэтому в репозитории меняются только
+скрипт/доки/тесты, а сами данные лежат в БД (temp Postgres 5435).
 
 ---
 
@@ -74,6 +83,7 @@ T-036b), этот отчёт.
 | E2E браузерные сценарии | `web/e2e/*.spec.ts` | **5 сценариев × 2 проекта = 10 прогонов** |
 | Регрессия backend | вся сюита | **435 passed, 1 skipped, 1 xfailed** |
 | Регрессия frontend | Vitest | **36 passed** (6 файлов) |
+| Eval source filter (T-042) | `tests/integration/test_llm_evaluations.py` | **+1** тест (файл: 2 passed) |
 
 Проверяемые сценарии T-104:
 
@@ -111,7 +121,9 @@ T-036b), этот отчёт.
 
 **Build:** **0 errors / 0 warnings** (backend + frontend). **Tests:**
 **435/437 passed** (backend, 1 skipped, 1 xfailed), **36/36** frontend,
-**10/10** E2E mocked, **5/5** E2E real-backend.
+**10/10** E2E mocked, **5/5** E2E real-backend. **RAG:** в
+`annotated_games` **624** записи (102 baseline `my-collection` + **522**
+новых `new_samples`).
 
 | Проверка | Команда | Результат |
 | :--- | :--- | :--- |
@@ -129,6 +141,12 @@ T-036b), этот отчёт.
 | Frontend build | `pnpm --dir web build` | exit 0: 99 модулей, 6.33 с; JS 465.15 КБ (gzip 146.41), CSS 14.29 КБ (gzip 3.77), dist 480 186 B |
 | CI YAML | `yaml.safe_load(.github/workflows/ci.yml)` | OK; jobs: `backend`, `frontend`, `e2e`, `docker`; артефакты e2e проверены на существование: `web/test-results/`, `web/playwright-report/index.html` |
 | Import-контракты | `pytest tests/unit/test_llm.py tests/unit/test_prompts.py tests/integration/test_generation.py -q` | **30 passed**, exit 0 |
+| RAG ingest `sample3.pgn` (T-042) | `python scripts/ingest_pgn.py --file data/sample3.pgn --limit 1000 --source new_samples` | exit 0: **500** партий, ID 103..602 |
+| RAG ingest `sample4.pgn` (T-042) | `... --file data/sample4.pgn --limit 1000 --source new_samples` | exit 0: **13** партий, ID 603..615 |
+| RAG ingest `sample5.pgn` (T-042) | `... --file data/sample5.pgn --limit 1000 --source new_samples` | exit 0: **9** партий, ID 616..624 |
+| Итог `annotated_games` (T-042) | `SELECT count(*), count(annotation_text), count(*) FILTER (WHERE embedding IS NULL)` | **624** / **621** с аннотациями / **0** NULL embedding; по source: `my-collection`=102, `new_samples`=522 |
+| Eval-фильтр (T-042) | `python scripts/evaluate_llm.py --help` + `_load_games(source=...)` | `--source` присутствует; `new_samples` → 3/3 партии, `my-collection` → 3/3, неизвестный source → 0; `pytest tests/integration/test_llm_evaluations.py -q` → **2 passed** |
+| Ruff/mypy после T-042 | `ruff check scripts/evaluate_llm.py tests/integration/test_llm_evaluations.py`; `mypy app` | All checks passed; no issues in 67 files |
 
 ---
 
@@ -192,6 +210,39 @@ VITE_API_PROXY=http://127.0.0.1:8011 pnpm --dir web run test:e2e --
 за 10.5 с при закрытом порту 8000: все запросы перехвачены
 `page.route`, backend/Postgres/Stockfish/LLM не нужны.
 
+**4.5. RAG ingest новых PGN (T-042).** Temp Postgres 5435
+(`chessannotator`), миграции `alembic upgrade head`, эмбеддинги — LM Studio
+8034 (`text-embedding-nomic-embed-text-v1.5`, 768). Сначала воспроизведён
+baseline итерации 12 (`my-collection`, `--limit 50`):
+
+```powershell
+python scripts/ingest_pgn.py --file data/sample.pgn  --limit 50 --source my-collection  # 10
+python scripts/ingest_pgn.py --file data/sample1.pgn --limit 50 --source my-collection  # 42
+python scripts/ingest_pgn.py --file data/sample2.pgn --limit 50 --source my-collection  # 50
+# COUNT(*) = 102, annotation_text = 99, NULL embedding = 0  ← совпало с историей
+
+python scripts/ingest_pgn.py --file data/sample3.pgn --limit 1000 --source new_samples  # 500, ID 103..602
+python scripts/ingest_pgn.py --file data/sample4.pgn --limit 1000 --source new_samples  # 13,  ID 603..615
+python scripts/ingest_pgn.py --file data/sample5.pgn --limit 1000 --source new_samples  # 9,   ID 616..624
+
+SELECT count(*), count(annotation_text), count(*) FILTER (WHERE embedding IS NULL)
+  FROM annotated_games;
+-- 624 | 621 | 0
+```
+
+Итог: **624 записи = 102 baseline + 522 новых**; `my-collection` — 1..102,
+`new_samples` — 103..624. Проверка eval-набора:
+
+```bash
+python scripts/evaluate_llm.py --help   # есть --source
+# _load_games(source="new_samples")   → 3 партии (ID 370, 241, 173 — самые короткие)
+# _load_games(source="my-collection") → 3 партии (ID 51, 16, 32)
+# _load_games(source="no-such")       → 0
+```
+
+`pytest tests/integration/test_llm_evaluations.py -q` → **2 passed**
+(включая новый тест фильтра по source).
+
 ---
 
 ## 5. Что не так
@@ -239,6 +290,23 @@ VITE_API_PROXY=http://127.0.0.1:8011 pnpm --dir web run test:e2e --
    `record_from_edit`/валидатора, а не живой выгрузкой.
 10. **`README`-бейджи тестов обновляются вручную** — возможен дрейф при
     следующей итерации (не автоматизировано).
+11. **T-042: рабочая БД с baseline 102 недоступна в текущем окружении.**
+    Порт Postgres 5434 занят чужим контейнером (`dzenwriter-postgres-1`),
+    `.env`/постоянного volume проекта нет (итерация 24 работала на temp
+    Postgres). Поэтому ingest выполнен в temp Postgres `chess-iter25-pg`
+    на `127.0.0.1:5435`, а baseline 102 **воспроизведён** историческим
+    рецептом итерации 12 (`sample.pgn --limit 50` → 10, `sample1.pgn`
+    `--limit 50` → 42, `sample2.pgn --limit 50` → 50). Итог 624 совпадает
+    с ожидаемым `102 + 522`. Для применения к рабочей БД нужно повторить
+    три команды ingest с её `POSTGRES_PORT`/кредами; контейнер с данными
+    оставлен запущенным (`chess-iter25-pg`, порт 5435), иначе 522 новых
+    записи существовали бы только в удалённой temp-БД.
+12. **T-042: eval-набор по умолчанию изменился.** `evaluate_llm.py` без
+    `--source` берёт «самые короткие партии из всей коллекции»; после
+    ingest-а 522 новых партий в набор попадут более короткие `new_samples`.
+    Для сравнения «до/после LoRA» обязательно фиксировать
+    `--source new_samples` и `--games` (добавлено в T-042, описано в
+    `LLM_EVAL.md`).
 
 ---
 
@@ -253,6 +321,10 @@ VITE_API_PROXY=http://127.0.0.1:8011 pnpm --dir web run test:e2e --
 обучения и замера качества не было (нет GPU); зафиксирован прогресс и
 план закрытия (GPU-прогон → `evaluate_llm.py` на 10–20 партиях).
 **KI-035** (итерация 24) остаётся Closed.
+
+**T-042:** новых KI нет. Ограничение «рабочая БД недоступна» — окружения,
+а не кода: ingest воспроизводим командами из `LLM_EVAL.md`, baseline 102
+восстановлен по историческому рецепту.
 
 Сводка реестра: **40** записей, 23 Open, 17 Closed.
 
@@ -312,3 +384,22 @@ VITE_API_PROXY=http://127.0.0.1:8011 pnpm --dir web run test:e2e --
   реализация, офлайн-проверка пайплайна (`--dry-run`), тесты чистой
   логики и инструкция для GPU — так обоснованнее, чем «зелёный»
   dry-run без доказательств.
+- **Почему ingest с `--limit 1000`.** Дефолт `--limit 10` (итерация 24) —
+  защита от случайной загрузки огромного файла; для осознанной загрузки
+  конкретных коллекций лимит задаётся явно. `sample3.pgn` содержит 500
+  партий, `sample4` — 13, `sample5` — 9; `--limit 1000` покрывает файлы
+  целиком, не читая лишнего.
+- **Почему baseline воспроизведён, а не «просто залиты новые».** В
+  окружении нет рабочей БД с 102 записями (порт 5434 занят чужим
+  контейнером, volume проекта не сохранился). Исторический рецепт
+  итерации 12 (`--limit 50` для трёх старых файлов) даёт ровно 102 —
+  поэтому итог **624 = 102 + 522** воспроизводим и совпадает с ожиданием
+  постановки; иначе отчёт содержал бы несравнимую цифру «522 в пустой
+  БД».
+- **Почему `--source` в `evaluate_llm.py`, а не «просто документация».**
+  `evaluate_llm.py` выбирает «самые короткие партии из всей коллекции»:
+  после +522 партий набор бы стихийно изменился, и сравнение LoRA
+  «до/после» было бы некорректным. Фильтр `--source new_samples`
+  (маленькое изменение + интеграционный тест) фиксирует eval-набор и
+  делает обещанное в постановке «включить новые партии в eval»
+  воспроизводимым, а не ручным.

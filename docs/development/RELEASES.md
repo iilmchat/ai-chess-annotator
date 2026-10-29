@@ -1298,10 +1298,18 @@ RULES §2.18)
   backend-режим `E2E_REAL_BACKEND=1`. Скрипты `test:e2e`/`test:e2e:ui`;
   vitest исключает `e2e/**`; CI-job `e2e` + `upload-artifact` при
   падении (trace/screenshot).
+- [x] **T-042, загрузка новых PGN в RAG.** В `annotated_games` загружены
+  `data/sample3.pgn` (500), `data/sample4.pgn` (13), `data/sample5.pgn`
+  (9) — **522 партии**, `source=new_samples`, `--limit 1000` (дефолт
+  `--limit 10` не покрывал файлы). Baseline `my-collection` (102 записи:
+  10+42+50) воспроизведён историческим рецептом итерации 12; итог
+  **624** записи, 621 с аннотациями, 0 `NULL` embedding. В
+  `scripts/evaluate_llm.py` добавлен фильтр `--source` (фиксирует
+  eval-набор для сравнения LoRA), описан в `LLM_EVAL.md`.
 - [x] **Документация итерации:** `KNOWN_ISSUES` (KI-030 — прогресс без
   обучения, +KI-039/KI-040), `CHANGELOG`, `README`, `TODO` (T-104,
-  T-036b), `RELEASES`, `tests/fixtures/README.md`, отчёт
-  `ITERATION-25.md`.
+  T-036b, T-042), `RELEASES`, `tests/fixtures/README.md`,
+  `LLM_EVAL.md`, отчёт `ITERATION-25.md`.
 
 ### Метрики
 
@@ -1317,6 +1325,9 @@ RULES §2.18)
 - **T-104 CLI:** `--dry-run` exit 0 (4 записи, club=4, ~880 токенов,
   r=16/alpha=32/q_proj,v_proj); реальный запуск без torch → exit 1 с
   инструкцией; `--check-env` exit 0.
+- **RAG (T-042):** `annotated_games` — **624** записи (102
+  `my-collection` + **522** `new_samples`: 500+13+9), 621 с
+  аннотациями, 0 `NULL` embedding; ingest exit 0 для всех трёх файлов.
 - **KI:** 40 записей, 23 Open, 17 Closed.
 
 ### Что не сделано и почему

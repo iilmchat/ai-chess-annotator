@@ -4,6 +4,57 @@
 > **Скрипт:** `scripts/evaluate_llm.py` · **Судья:** DeepSeek
 > **Генерация:** `club` → LM Studio, `gm` → DeepSeek
 
+## RAG-коллекция итерации 25 (T-042)
+
+> **Дата:** 2026-10-29 · **Источник:** `data/*.pgn` → `annotated_games`
+> **Эмбеддинги:** LM Studio `text-embedding-nomic-embed-text-v1.5` (768)
+
+Коллекция RAG расширена новыми партиями (`scripts/ingest_pgn.py`,
+`--limit 1000 --source new_samples`):
+
+| Файл | `--limit` | Загружено | `source` | ID |
+| :--- | ---: | ---: | :--- | :--- |
+| `data/sample3.pgn` | 1000 | **500** | `new_samples` | 103..602 |
+| `data/sample4.pgn` | 1000 | **13** | `new_samples` | 603..615 |
+| `data/sample5.pgn` | 1000 | **9** | `new_samples` | 616..624 |
+| **Итого новых** | — | **522** | `new_samples` | — |
+| Baseline (итерация 12) | 50 | 102 | `my-collection` | 1..102 |
+| **Всего в `annotated_games`** | — | **624** | — | 1..624 |
+
+- **621** партия с непустым `annotation_text`, **0** записей с `NULL`
+  embedding.
+- Команды ingest (воспроизводимо; `--limit 1000` обязателен — дефолт
+  `--limit 10` из итерации 24 читает только первые 10 партий):
+
+  ```bash
+  python scripts/ingest_pgn.py --file data/sample3.pgn --limit 1000 --source new_samples
+  python scripts/ingest_pgn.py --file data/sample4.pgn --limit 1000 --source new_samples
+  python scripts/ingest_pgn.py --file data/sample5.pgn --limit 1000 --source new_samples
+  ```
+
+- Baseline `my-collection` воспроизводится историческим рецептом итерации 12:
+  `sample.pgn --limit 50` → 10, `sample1.pgn --limit 50` → 42,
+  `sample2.pgn --limit 50` → 50, итого **102**.
+
+### Eval-набор для LoRA (T-104)
+
+`scripts/evaluate_llm.py` берёт партии из `annotated_games`, поэтому новые
+партии уже доступны для оценки. Для **воспроизводимого** сравнения
+LoRA-модели используйте фильтр `--source new_samples` (добавлен в T-042):
+
+```bash
+python scripts/evaluate_llm.py --games 10 --levels club \
+    --source new_samples --timeout-s 300
+```
+
+Без `--source` скрипт берёт самые короткие партии из всей коллекции —
+после ingest-а 522 новых партий набор изменится (в него войдут самые
+короткие партии `new_samples`). Поэтому для A/B «до/после LoRA»
+фиксируйте `--source` и `--games`. Рекомендуемый план: 10–20 партий
+`new_samples`, baseline промпта V3 (`club` 4.40/10), затем тот же набор с
+`LORA_ADAPTER_PATH`. Сравнение сохраняется в `llm_evaluations` и в
+`docs/development/reports/LLM_EVAL.md`.
+
 ## Итерация 16 — повторная оценка `club` (KI-030)
 
 > **Дата:** 2026-10-29 · **Генерация:** LM Studio `qwen/qwen3-4b-2507`

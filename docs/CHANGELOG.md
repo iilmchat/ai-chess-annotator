@@ -8,6 +8,15 @@
 
 ### Added
 
+- **RAG-коллекция и eval-фильтр (T-042, итерация 25).** В
+  `annotated_games` загружены новые PGN: `sample3.pgn` (500),
+  `sample4.pgn` (13), `sample5.pgn` (9) — **522 партии** с
+  `source=new_samples` (`--limit 1000`; итого в таблице **624** записи:
+  102 `my-collection` + 522, 621 с аннотациями, 0 `NULL` embedding).
+  `scripts/evaluate_llm.py` получил `--source SOURCE` — фильтр по
+  `annotated_games.source` для воспроизводимого сравнения LoRA
+  «до/после»; методика и команды описаны в
+  [LLM_EVAL.md](development/reports/LLM_EVAL.md).
 - **LoRA fine-tuning (T-104, итерация 25):** `scripts/train_lora.py` —
   реальный SFT на `peft`/`transformers` (QLoRA 4-bit, r=16,
   `lora_alpha=32`, `target_modules=["q_proj","v_proj"]`, 3 эпохи,
