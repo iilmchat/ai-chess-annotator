@@ -8,6 +8,26 @@
 
 ### Added
 
+- **ARQ-воркер фоновых выгрузок (KI-053, итерация 32):** `app/worker.py`
+  и корневой `worker.py` (`arq worker.WorkerSettings`), задача
+  `run_export_job(ctx, job_id)`; API только ставит задачу в Redis
+  (`enqueue_job`, 503 `export_queue_unavailable` при недоступной очереди);
+  recovery `running > EXPORT_JOB_STALE_MINUTES (15) → failed` при старте
+  API и воркера; сервис `worker` в `docker-compose.yml` и
+  `docker-compose.prod.yml` с общим volume `data/`/`prod_export_data`.
+  Тесты — burst-воркер на реальном Redis, recovery, 503.
+- **Auth finalization (KI-041, итерация 32):** миграция
+  `dcf1da1421cd` — `users.is_verified` (legacy — true, регистрация —
+  false); `app/email/sender.py` (`EmailSender` Protocol +
+  `MockEmailSender` с outbox/structlog); `GET /auth/verify-email`;
+  `POST /auth/forgot-password` (202 без enumeration) и
+  `POST /auth/reset-password` (Argon2id, одноразовый токен, глобальный
+  отзыв refresh); `POST /auth/logout-all` (`revoked_before:<user_id>`,
+  Unix-ms; `/auth/refresh` сверяет `iat_ms`); `/v1/analyze` и
+  `/v1/commentary` → 403 `email_not_verified` для неподтверждённых
+  (admin/auditor bypass). Новые настройки `APP_BASE_URL`,
+  `EMAIL_SENDER`, `EMAIL_FROM`, TTL ссылок, `ARQ_QUEUE_NAME`,
+  `EXPORT_JOB_STALE_MINUTES`.
 - **Диаграмма доски в PDF (T-107b, итерация 31):** `app/export/board.py`
   — `chess.svg.board()` → PNG через `cairosvg`; финальная позиция и до
   двух критических моментов (`blunder`/`mistake` по `|delta_cp|`) с

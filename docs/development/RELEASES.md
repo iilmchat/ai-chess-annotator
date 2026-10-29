@@ -1862,3 +1862,82 @@ T-031b/T-034b закрыты в объёме MVP; заведены KI-049/KI-050
   фазам, кэш PNG.
 - **T-109b остаток:** production-профиль Tempo/Prometheus (S3,
   remote write), datasource'ы с TLS/SSO.
+
+---
+
+## Итерация 32 — Auth Finalization & ARQ Worker (KI-041, KI-053)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ завершена. KI-041 и KI-053 закрыты; добавлены KI-054,
+KI-055.
+**Отчёт:** `docs/development/reports/v0.9.0/ITERATION-32.md`
+
+### Что сделано
+
+- [x] **KI-053, ARQ-воркер.** `app/worker.py` + корневой `worker.py`
+  (`WorkerSettings`, `run_export_job(ctx, job_id)`); API только
+  `enqueue_job` в Redis (503 `export_queue_unavailable` + `failed` при
+  недоступной очереди); recovery `running >15 мин → failed` при старте
+  API/воркера; сервис `worker` в `docker-compose.yml`/
+  `docker-compose.prod.yml` с общим volume; `Dockerfile` копирует
+  `worker.py`.
+- [x] **KI-041, email verification.** Миграция `dcf1da1421cd` —
+  `users.is_verified` (legacy true, регистрация false);
+  `app/email/sender.py` (Protocol + MockEmailSender/outbox);
+  `/auth/register` шлёт письмо, `GET /auth/verify-email` ставит флаг;
+  `/v1/analyze` и `/v1/commentary` → 403 `email_not_verified`.
+- [x] **KI-041, сброс пароля.** `POST /auth/forgot-password` (202 без
+  enumeration) и `POST /auth/reset-password` (Argon2id, одноразовый
+  токен, глобальный отзыв refresh, clear cookie).
+- [x] **KI-041, logout-all.** `POST /auth/logout-all` пишет
+  `revoked_before:<user_id>` (Unix-ms); `/auth/refresh` сверяет
+  `iat_ms`/`issued_at` и отклоняет старые refresh.
+- [x] **Тесты и документация:** см. отчёт; SPEC/ARCHITECTURE/
+  GETTING_STARTED/USER_GUIDE/DESIGN/README, TODO, CHANGELOG,
+  KNOWN_ISSUES.
+
+### Метрики
+
+- **Backend-тесты:** **746 passed, 1 skipped, 1 xfailed** (70 файлов;
+  +22 к итерации 31), **260.87 с**, exit 0. Skip — cairo на Windows-dev;
+  xfail — KI-012.
+- **Новые тесты:** ARQ — 12 (было 9), auth KI-041 — 8, email/tokens —
+  5, global revocation — +4, схема — +1.
+- **Frontend-тесты:** **46 passed**; typecheck 0; build 6.92 с
+  (JS 465.21 КБ / gzip 146.45, CSS 14.29 КБ / gzip 3.77).
+- **E2E mocked:** **10 passed** (chromium/mobile), 7.3 с; локально —
+  `vite preview` (sandbox esbuild), CI — `pnpm dev`.
+- **ruff:** 0; **mypy:** 0 (strict), 84 файла.
+- **Alembic:** 13 ревизий, head `dcf1da1421cd`; upgrade + `alembic
+  check` + roundtrip — чистые; 16 таблиц.
+- **ARQ smoke:** Docker worker (dev) — `run_export_job` job 10:
+  `done`, rows=1, size=11660, sha256 `320b3b24…`, 0.33 с; recovery
+  count=0; `arq worker.WorkerSettings --burst` — 1 function, exit 0.
+- **Auth live smoke (:8020):** register `is_verified=False`; analyze
+  без verify → 403 `email_not_verified`; verify True; analyze id=18;
+  forgot 202; reset 200; старый пароль 401; новый 200; logout-all 204.
+- **Docker image:** `chessannotator:iter32` собирается, `import
+  app.main, worker` OK, `cairosvg_available()=True`.
+- **KI:** 55 записей, 25 Open, 30 Closed (KI-041/KI-053 закрыты,
+  +KI-054/KI-055).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Реальный SMTP/SES | Mock достаточно для dev/CI; нужен провайдер/секреты | KI-055 |
+| Frontend-страницы verify/reset, resend | DoD итерации 32 — backend-flow | KI-055 |
+| 2FA/TOTP, SSO, лимит попыток по email | Отдельный объём | KI-055 |
+| Retention файлов `EXPORT_DIR`/`export_jobs`, signed URL | Не входили в DoD очереди | KI-054 |
+| Мгновенный отзыв access-токенов | JWT stateless; access живёт 15 мин | — |
+| Heartbeat/updated_at для длинных выгрузок | Нет колонки; recovery по `started_at` | KI-054 |
+| Реальный LoRA-прогон (KI-030) | Нет GPU | KI-030 |
+
+### Что дальше
+
+- **KI-055:** SMTP/SES, frontend verify/reset/resend, TOTP/SSO, лимит
+  попыток по (email, IP).
+- **KI-054:** retention export-файлов/строк, signed URL, heartbeat
+  длинных джоб.
+- **T-113:** Alertmanager по стоимости/latency/error rate.
+- **T-118:** SSO/SAML для админки.

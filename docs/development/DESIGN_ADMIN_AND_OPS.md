@@ -186,6 +186,7 @@ CREATE TYPE admin_role AS ENUM ('user', 'admin', 'auditor');
 ALTER TABLE users
     ADD COLUMN role admin_role NOT NULL DEFAULT 'user',
     ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN is_verified BOOLEAN NOT NULL DEFAULT TRUE,  -- KI-041
     ADD COLUMN password_hash TEXT,          -- Argon2id; NULL для SSO-only
     ADD COLUMN last_login_at TIMESTAMPTZ;
 
@@ -196,10 +197,25 @@ CREATE INDEX ix_users_role ON users (role) WHERE role <> 'user';
 - `password_hash` нужен для `AuthProvider` (вход по email/паролю);
   `NULL` допустим, если админ ходит только через OIDC/SSO (T-118).
 - `is_active = FALSE` немедленно запрещает вход (сессия инвалидируется).
+- `is_verified = FALSE` (KI-041): регистрация создаёт неподтверждённого
+  пользователя; `/auth/verify-email` ставит TRUE. Server default TRUE
+  оставляет legacy/админские учётки работоспособными.
 - Backfill: все существующие пользователи — `user`; первый `admin`
   создаётся операционной командой (CLI/SQL) и фиксируется в аудите.
-- JWT публичного API содержит `sub`, `role`, `jti`; срок жизни — как в
-  `ACCESS_TOKEN_TTL_MIN`.
+- JWT публичного API содержит `sub`, `role`, `jti`, `iat`/`iat_ms`; срок
+  жизни — как в `ACCESS_TOKEN_TTL_MIN`. Action-токены
+  (`email_verify`/`password_reset`) короткоживущие и не принимаются API
+  как access.
+
+**Жизненный цикл аккаунта (KI-041, итерация 32).** Регистрация →
+`is_verified=false` + письмо `MockEmailSender` (verify JWT 24 ч) →
+`GET /auth/verify-email` → TRUE; `/v1/analyze`/`/v1/commentary` проверяют
+флаг (403 `email_not_verified`, admin/auditor bypass). `forgot-password`
+(202 без enumeration) → reset JWT 30 мин → Argon2id + одноразовость через
+`revoked_before:<user_id>` (Unix-ms). `logout-all` пишет тот же маркер;
+`/auth/refresh` сверяет `issued_at` (`iat_ms`) и отклоняет токены,
+выпущенные до отзыва. Redis fail-open, как у denylist; 2FA/SSO/SMTP —
+KI-055.
 
 ### 4.2. `prompts` — реестр версий
 
@@ -689,8 +705,10 @@ T-028/T-029/T-034/T-035 без второго фреймворка
   BackgroundTasks → NDJSON в `EXPORT_DIR` (вне web-root) → `GET
   /jobs/{id}/download` (409 пока не готово, 410 если файл вне каталога).
   В админке — форма «Создать экспорт», поллинг и кнопка «Скачать»;
-  создание только admin/legacy (auditor read-only). Подписанные ссылки
-  не реализованы (доступ по JWT/cookie), очередь arq — KI-053.
+  создание только admin/legacy (auditor read-only). **В итерации 32
+  (KI-053)** BackgroundTasks заменён на arq-воркер (`app/worker.py`,
+  сервис `worker` в compose, recovery `running>15 мин → failed`);
+  подписанные ссылки и retention файлов — KI-054.
 
 ### 5.5. Кастомные страницы
 

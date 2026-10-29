@@ -159,8 +159,9 @@
 -- Пользователи и уровни
 users(id, email, level ENUM('beginner','club','gm'),
       role ENUM('user','admin','auditor') DEFAULT 'user',
-      is_active BOOL DEFAULT true, password_hash TEXT, last_login_at,
-      created_at)
+      is_active BOOL DEFAULT true,
+      is_verified BOOL DEFAULT true,  -- регистрация пишет false (KI-041)
+      password_hash TEXT, last_login_at, created_at)
 
 -- Партии
 games(id, user_id, pgn TEXT, eco_code, phase_breakdown JSONB,
@@ -260,13 +261,21 @@ HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`, `Secure` в prod), при logout
 его `jti` уходит в Redis-denylist, а ротация инвалидирует прежний refresh;
 не-браузерные клиенты могут передать refresh в теле. Пароли —
 **Argon2id** (`argon2-cffi`), legacy bcrypt-хеши перехешируются при входе.
-Роли `user/admin/auditor` (enum `admin_role`); `/admin` принимает access JWT
-admin/auditor. Чтение/запись партий, ходов,
+**Email (KI-041):** регистрация создаёт `is_verified=false` и письмо
+(`MockEmailSender`); `GET /auth/verify-email?token=...` ставит флаг;
+`/v1/analyze` и `/v1/commentary` для неподтверждённых → 403
+`email_not_verified` (admin/auditor bypass). `POST /auth/forgot-password`
+(202 без раскрытия email) и `POST /auth/reset-password` (Argon2id, токен
+одноразовый); `POST /auth/logout-all` пишет `revoked_before:<user_id>`
+(Unix-ms), и `/auth/refresh` отклоняет все refresh с `issued_at` не позже
+маркера. Роли `user/admin/auditor` (enum `admin_role`); `/admin` принимает
+access JWT admin/auditor. Чтение/запись партий, ходов,
 комментариев и чата — с изоляцией по владельцу: обычный пользователь
 видит только свои `games`, администратор — все; чужой id неотличим от
 несуществующего (404). **Rate limiting:** через Redis (в т.ч.
-`/auth/login|register`). **FinOps:** дневной бюджет токенов считается по
-`user:{id}` из JWT, анонимно — по IP.
+`/auth/login|register|forgot-password|reset-password|logout-all`).
+**FinOps:** дневной бюджет токенов считается по `user:{id}` из JWT,
+анонимно — по IP.
 
 ---
 

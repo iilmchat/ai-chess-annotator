@@ -289,8 +289,38 @@ curl -s -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
 ```
 
 Файлы лежат в `EXPORT_DIR` (`data/exports/`) вне web-root; пока джоба не
-готова — 409, если файл пропал/вне каталога — 410. Джоба не переживает
-рестарт процесса (KI-053).
+готова — 409, если файл пропал/вне каталога — 410. Выгрузку выполняет
+arq-воркер (`arq worker.WorkerSettings`), поэтому рестарт API не теряет
+джобу; `running` старше 15 минут при старте переводится в `failed`.
+
+### 7.10. Email, пароль и выход со всех устройств (KI-041)
+
+```bash
+# Регистрация (создаёт is_verified=false и письмо-ссылку в логе)
+curl -s -X POST http://127.0.0.1:8000/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"user@example.com","password":"Password123!"}'
+
+# Подтверждение (токен — из письма/лога MockEmailSender)
+curl -s "http://127.0.0.1:8000/auth/verify-email?token=$VERIFY_TOKEN"
+
+# Сброс пароля: запрос (202 всегда) → письмо → смена
+curl -s -X POST http://127.0.0.1:8000/auth/forgot-password \
+  -H 'Content-Type: application/json' -d '{"email":"user@example.com"}'
+curl -s -X POST http://127.0.0.1:8000/auth/reset-password \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"'$RESET_TOKEN'","new_password":"NewPassword456!"}'
+
+# Выход со всех устройств (нужен access-токен)
+curl -s -X POST http://127.0.0.1:8000/auth/logout-all \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+До подтверждения email `/v1/analyze` и `/v1/commentary` отвечают
+`403 {"code":"email_not_verified"}`. `MockEmailSender` пишет ссылку в
+structlog (`email_mock_sent`); реальный SMTP — KI-055. После
+`logout-all`/сброса пароля все refresh-токены, выпущенные раньше,
+перестают работать (нужен повторный вход).
 
 Полная схема — `GET /docs` (OpenAPI).
 
@@ -309,9 +339,12 @@ curl -s -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
   позиции, семантика появится позже.
 - **Правки** сохраняются в `edits`; персональные данные не собираются.
 - **Rate limit** — 10 запросов/мин на IP для `/v1/analyze`,
-  `/v1/commentary`, `/v1/chat`, `/v1/ingest` (KI-015).
-- **Аутентификации в v0.1.0 нет** (KI-026): не выставляйте API в открытый
-  интернет без reverse-proxy и ограничения доступа.
+  `/v1/commentary`, `/v1/chat`, `/v1/ingest` и `/auth/*` (KI-015).
+- **Аутентификация** — JWT (access 15 мин, refresh в HttpOnly-cookie),
+  роли `user/admin/auditor`; email-верификация обязательна для
+  анализа/комментариев (KI-041). Остатки (2FA/SSO/лимит по email) — KI-055.
+- **Email в dev/CI** — mock-отправитель: ссылка только в логе, реального
+  SMTP нет (KI-055).
 
 ---
 

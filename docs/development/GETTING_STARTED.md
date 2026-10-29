@@ -187,6 +187,11 @@ cp .env.example .env
   умолчанию, TTL 30 дней, чистка при старте приложения.
 - `PDF_FONT_PATH` — нужен только если в системе нет Arial/DejaVuSans
   (PDF-экспорт комментария подбирает их автоматически).
+- `APP_BASE_URL` — базовый URL API для ссылок в письмах (по умолчанию
+  `http://localhost:8000`); `EMAIL_SENDER=mock` логирует ссылку, SMTP —
+  отдельный шаг (KI-055).
+- `ARQ_QUEUE_NAME`/`EXPORT_JOB_STALE_MINUTES` — очередь фоновых
+  выгрузок и порог recovery (KI-053).
 
 ### 3.5. Применить миграции
 
@@ -426,7 +431,38 @@ error rate 5xx, стоимость и токены LLM, латентность �
 В production-образе она установлена (`Dockerfile`); на Windows без Cairo
 PDF генерируется без картинки (graceful degradation), см. §8.11.
 
-### 6.3. MinIO (S3-совместимое хранилище)
+### 6.3. Фоновый воркер arq (KI-053)
+
+Выгрузка датасета выполняется отдельным процессом `arq`, а не
+`BackgroundTasks` — задача переживает рестарт API.
+
+**Docker (dev):**
+
+```bash
+docker compose up -d postgres redis worker
+docker compose logs -f worker
+```
+
+`worker` использует тот же Redis и bind-mount `./data` (`EXPORT_DIR`).
+API на хосте (`REDIS_URL=redis://127.0.0.1:6381/0`) и воркер в контейнере
+(`redis://redis:6379/0`) видят **один** Redis-инстанс, поэтому очередь
+общая. В production — сервис `worker` в `docker-compose.prod.yml` и
+volume `prod_export_data`.
+
+**Без Docker:**
+
+```bash
+arq worker.WorkerSettings
+# или, если пакет установлен как wheel (без корневого worker.py):
+arq app.worker.WorkerSettings
+```
+
+При старте воркер и API выполняют recovery: `running`-джобы старше
+`EXPORT_JOB_STALE_MINUTES` (15) переводятся в `failed`. Если Redis
+недоступен, `POST /v1/admin/exports/jobs` вернёт 503
+`export_queue_unavailable`, а строка станет `failed` (не «вечный queued»).
+
+### 6.4. MinIO (S3-совместимое хранилище)
 
 Появится в T-019+ (когда понадобится хранилище для аннотированных
 партий и экспортов). Пока не требуется.

@@ -59,7 +59,7 @@
 | KI-038 | **Closed** | Med | finops, auth | Дневной бюджет токенов по IP. **Закрыт в итерации 26:** субъект `user:{id}`/tier из JWT, анонимы — по IP |
 | KI-039 | **Closed** | Med | llm, dataset | SFT-пара LoRA учила «переписать комментарий». **Закрыт в итерации 26:** `schema_version=2` — `fact_sheet → commentary`, v1 сохранён как legacy |
 | KI-040 | Open | Low | tests, web, ci | E2E-T-036b в CI работают на page.route-моках; реальный backend в CI не поднимается (нет Postgres/Stockfish/LLM), real-режим проверен только локально |
-| KI-041 | Open | Low | auth, security | Остаток KI-037: нет 2FA, верификации email, сброса пароля, отзыва всех сессий; admin RBAC внутри views (auditor ≡ admin) |
+| KI-041 | **Closed** | Low | auth, security | Остаток KI-037: нет 2FA, верификации email, сброса пароля, отзыва всех сессий. **Закрыт в итерации 32:** `users.is_verified`, `/auth/verify-email`, forgot/reset-password, `logout-all` (`revoked_before`), 403 `email_not_verified`; остаток 2FA/SSO/лимит попыток — KI-055 |
 | KI-042 | Open | Low | deps, auth | bcrypt остаётся зависимостью для legacy-verify; rehash в Argon2id только при успешном логине |
 | KI-043 | **Closed** | Low | auth, security | User-enumeration по таймингу `/auth/login`. **Закрыт в итерации 27:** dummy-Argon2id для несуществующего email, медианы 55.4/54.8 мс |
 | KI-044 | Open | Low | dataset, export | v2-экспорт: `load_analyses` на каждую правку (N+1 при нескольких правках одной партии) |
@@ -71,9 +71,12 @@
 | KI-050 | **Closed** | Low | admin, api | Экспорт `edits.jsonl` v2 собирает пакет фактов на каждую строку (медленно на больших объёмах); cookie-сессия админки разбирается вручную. **Закрыт в итерации 31:** таблица `export_jobs`, фоновые джобы `POST /jobs` + статус + download (checksum/размер), форма в админке; аудит `dataset.export` (итерация 29) и `job_id`. Остаток — KI-053 |
 | KI-051 | **Closed** | Med | packaging, ci | Production wheel/образ не содержал `scripts/`, а `app` импортировал `scripts.export_dataset` → `uvicorn app.main:app` падал. **Закрыт в итерации 28:** builder'ы вынесены в `app.dataset.export`, скрипт реэкспортирует их; в CI добавлен smoke `docker run --rm image python -c "import app.main"` |
 | KI-052 | Open | Low | db, observability | `llm_calls` не партиционирована по месяцам: единственный механизм удержания — батчевый `DELETE` (`prune_llm_calls.py`). Партиционирование потребует нового уникального ключа `(trace_id, span_id, created_at)` и пересоздания таблицы |
+| KI-053 | **Closed** | Low | admin, api | Фоновая джоба `export_jobs` жила в API (`BackgroundTasks`), не переживала рестарт. **Закрыт в итерации 32:** arq-воркер (`app/worker.py`, root `worker.py`), enqueue в Redis, recovery `running>15 мин → failed`, docker-сервисы `worker`; остаток retention файлов/подписанные ссылки — KI-054 |
+| KI-054 | Open | Low | admin, api | Нет retention `EXPORT_DIR`/`export_jobs` и подписанных ссылок на скачивание: файлы копятся, доступ только по JWT/cookie админки |
+| KI-055 | Open | Low | auth, security | Остаток KI-041: нет 2FA/TOTP, SSO, отдельного лимита попыток по (email, IP), реального SMTP-провайдера и frontend-страниц verify/reset |
 
-Всего: **53** (Open: 25, Closed: 28). KI-001…009 — итерация 1 (T-006); KI-010…012 — итерация
-2 (T-007); KI-013, KI-014 — итерация 3 (T-008); KI-014 закрыт, KI-015…018 — итерация 4 (T-009); KI-018 закрыт, KI-019, KI-020 — итерация 5 (T-010/T-011); KI-020 закрыт, KI-021, KI-022 — итерация 6 (T-012/T-013); KI-022 закрыт, KI-023, KI-024 — итерация 7 (T-014/T-015); KI-025, KI-026 — итерация 9 (T-017); KI-027…029 — итерация 12 (T-021b/T-022); KI-008, KI-009, KI-024…028 закрыты, KI-030 — итерация 14 (T-023); KI-021 закрыт, KI-031, KI-032 — итерация 17 (T-029/T-031); KI-031/KI-032 закрыты, KI-033 — итерация 18 (T-033/T-035); KI-033 закрыт, KI-034 — итерация 19 (T-032); KI-035 — итерация 20 (T-036); KI-035 закрыт, KI-036…038 — итерация 24 (T-041); KI-030 (прогресс без обучения) и KI-039/KI-040 — итерация 25 (T-104/T-036b); KI-036, KI-037, KI-038, KI-039 закрыты, +KI-041…045 — итерация 26; **KI-043 и KI-045 закрыты, +KI-046…048 — итерация 27; KI-046, KI-047 и KI-051 закрыты, +KI-049, KI-050 — итерация 28; KI-048 закрыт (retention), +KI-052 — итерация 29; KI-050 закрыт, +KI-053 — итерация 31**.
+Всего: **55** (Open: 25, Closed: 30). KI-001…009 — итерация 1 (T-006); KI-010…012 — итерация
+2 (T-007); KI-013, KI-014 — итерация 3 (T-008); KI-014 закрыт, KI-015…018 — итерация 4 (T-009); KI-018 закрыт, KI-019, KI-020 — итерация 5 (T-010/T-011); KI-020 закрыт, KI-021, KI-022 — итерация 6 (T-012/T-013); KI-022 закрыт, KI-023, KI-024 — итерация 7 (T-014/T-015); KI-025, KI-026 — итерация 9 (T-017); KI-027…029 — итерация 12 (T-021b/T-022); KI-008, KI-009, KI-024…028 закрыты, KI-030 — итерация 14 (T-023); KI-021 закрыт, KI-031, KI-032 — итерация 17 (T-029/T-031); KI-031/KI-032 закрыты, KI-033 — итерация 18 (T-033/T-035); KI-033 закрыт, KI-034 — итерация 19 (T-032); KI-035 — итерация 20 (T-036); KI-035 закрыт, KI-036…038 — итерация 24 (T-041); KI-030 (прогресс без обучения) и KI-039/KI-040 — итерация 25 (T-104/T-036b); KI-036, KI-037, KI-038, KI-039 закрыты, +KI-041…045 — итерация 26; **KI-043 и KI-045 закрыты, +KI-046…048 — итерация 27; KI-046, KI-047 и KI-051 закрыты, +KI-049, KI-050 — итерация 28; KI-048 закрыт (retention), +KI-052 — итерация 29; KI-050 закрыт, +KI-053 — итерация 31; KI-041 и KI-053 закрыты, +KI-054, KI-055 — итерация 32**.
 
 ---
 
@@ -1131,7 +1134,7 @@ real-режим остаётся ручной проверкой перед ре
 
 ---
 
-## KI-041 · Open · Low · auth, security
+## KI-041 · Closed · Low · auth, security
 
 **Симптом.** В итерации 26 закрыт основной объём KI-037 (HttpOnly-cookie,
 denylist, logout, отзыв при ротации), но управление жизненным циклом
@@ -1142,15 +1145,28 @@ denylist, logout, отзыв при ротации), но управление �
 **Причина.** Итерация 26 закрывала техдолг KI-036…039 в объёме DoD
 (куки, denylist, роли в admin); email-flow/2FA/SSO — отдельный объём.
 
-**Обход / текущее поведение.** Refresh-токены отзываются по одному
-(`/auth/logout` + denylist, ротация отзывает прежний jti); при недоступном
-Redis denylist fail-open (осознанно). Смена пароля/роли не отзывает живые
-access-токены до истечения 15 мин.
+**Решение (итерация 32).**
+- Миграция `dcf1da1421cd`: `users.is_verified` (`server_default=true` —
+  legacy/админские учётки не теряют доступ; регистрация пишет `false`).
+- `app/email/sender.py`: `EmailSender` Protocol + `MockEmailSender`
+  (outbox + structlog-ссылка); SMTP — отдельная реализация.
+- `POST /auth/register` → письмо `email_verify`; `GET /auth/verify-email`
+  → `is_verified=true`; `/v1/analyze` и `/v1/commentary` для
+  неподтверждённых → 403 `email_not_verified` (admin/auditor — bypass).
+- `POST /auth/forgot-password` (202 без enumeration) и
+  `POST /auth/reset-password`: Argon2id-хеш, одноразовый токен, глобальный
+  отзыв refresh.
+- `POST /auth/logout-all`: Redis `revoked_before:<user_id>` (Unix-ms);
+  `/auth/refresh` сравнивает `iat_ms`/`issued_at` и отвечает 401 для всех
+  токенов, выпущенных до отзыва.
+- Тесты: `tests/integration/test_auth_ki041.py` (8),
+  `tests/unit/test_email_sender.py` (5), юнит-тесты global revocation в
+  `tests/unit/test_auth.py`.
 
-**План закрытия.** Таблица `refresh_tokens`/семейства токенов с
-reuse-detection; `POST /auth/logout-all`; email-верификация и сброс
-пароля; 2FA/TOTP; лимит попыток по (email, IP); SSO — T-118. Для `/admin`
-— перевод на БД-пароли/роли и отказ от legacy `ADMIN_PASSWORD`.
+**Остаток.** 2FA/TOTP, SSO, лимит попыток по (email, IP), реальный
+SMTP-провайдер и frontend-страницы verify/reset — KI-055. Смена пароля
+не отзывает уже выданные access-токены (живут до 15 мин) — стандартное
+поведение JWT. Legacy-форма `/admin` с `ADMIN_PASSWORD` остаётся.
 
 ---
 
@@ -1480,3 +1496,69 @@ retention-скрипта достаточно, поэтому партицион
 уникального ключа на `(trace_id, span_id, created_at)`, автоматическое
 создание партиций (pg_partman или cron-миграция на месяц вперёд),
 адаптация `app.llm.calls` и тестов миграции.
+
+---
+
+## KI-053 · Closed · Low · admin, api
+
+**Симптом.** Фоновая выгрузка `export_jobs` выполнялась через
+`BackgroundTasks` в процессе API: при рестарте задача терялась, а строка
+оставалась в `running`; API-процесс тратил event loop на тяжёлый JSONL.
+
+**Решение (итерация 32).**
+- `app/worker.py` + корневой `worker.py`: `arq`-воркер, задача
+  `run_export_job(ctx, job_id)` вызывает `app.dataset.jobs.run_export_job`;
+  `WorkerSettings` читает `ARQ_QUEUE_NAME` и `REDIS_URL`.
+- `POST /v1/admin/exports/jobs` ставит задачу в arq
+  (`enqueue_job`, `_job_id=export-job:<id>`); при недоступной очереди
+  джоба помечается `failed`, клиент получает 503
+  `export_queue_unavailable`.
+- Recovery: `recover_stale_export_jobs` при старте API и воркера
+  переводит `running` старше `EXPORT_JOB_STALE_MINUTES` (15) в `failed`;
+  точка отсчёта — `started_at` (fallback `created_at`).
+- Docker: сервис `worker` в `docker-compose.yml` и
+  `docker-compose.prod.yml` (тот же образ, общий volume `data`/
+  `prod_export_data`).
+- Тесты: `tests/integration/test_export_jobs.py` — реальный arq Worker в
+  burst-режиме, recovery, 503 при недоступной очереди.
+
+**Остаток.** Retention `EXPORT_DIR`/`export_jobs` и подписанные ссылки —
+KI-054. `arq`-воркер не масштабирует recovery по незавершённым задачам
+автоматически (только помечает stale `running`).
+
+---
+
+## KI-054 · Open · Low · admin, api
+
+**Симптом.** Готовые JSONL и строки `export_jobs` не удаляются
+автоматически; ссылка `GET /v1/admin/exports/jobs/{id}/download` не
+подписана и требует JWT/cookie админки.
+
+**Причина.** В DoD итераций 31–32 входили рабочая очередь и recovery, а
+не жизненный цикл файлов/внешние ссылки.
+
+**Обход / текущее поведение.** Ручная очистка описана в
+`GETTING_STARTED.md` §9.3; доступ — только admin/auditor.
+
+**План закрытия.** `scripts/prune_export_jobs.py` (remove files +
+`DELETE` строк по retention), запуск по cron; signed URL с коротким TTL
+(itsdangerous/JWT) и отдельным scope для скачивания.
+
+---
+
+## KI-055 · Open · Low · auth, security
+
+**Симптом.** После итерации 32 закрыты email-верификация, сброс пароля и
+глобальный logout, но остаются 2FA/TOTP, SSO, лимит попыток по
+(email, IP), реальный SMTP-провайдер и frontend-страницы verify/reset.
+
+**Причина.** Это отдельные объёмы; DoD итерации 32 — три конкретных
+auth-flow.
+
+**Обход / текущее поведение.** `MockEmailSender` пишет ссылку в лог;
+пароли — Argon2id; refresh-токены отзываются глобально; rate limit
+защищает `/auth/*` по IP.
+
+**План закрытия.** SMTP/SES-реализация `EmailSender`; TOTP-секрет +
+`/auth/2fa/*`; per-email счётчик попыток в Redis; frontend-страницы
+`/verify-email` и `/reset-password`; SSO — T-118.

@@ -34,7 +34,10 @@
 | `app/ingestion/` | PGN/FEN → `ParsedGame`, ECO, фазы, повторы |
 | `app/engine/` | async UCI-клиент Stockfish, пул, классификация, Policy, валидатор; `engine_cache` (T-108) |
 | `app/export/` | PDF-экспорт комментария: fpdf2 + TTF-шрифт, шапка/ходы/текст; `board.py` — SVG доски → PNG через cairosvg с graceful degradation (T-107/T-107b) |
-| `app/dataset/` | dataset-экспорт: `records.py` — общая выборка JSONL (фильтры/keyset/сборка записи), `jobs.py` — фоновая выгрузка `export_jobs` (KI-050) |
+| `app/dataset/` | dataset-экспорт: `records.py` — общая выборка JSONL (фильтры/keyset/сборка записи), `jobs.py` — выгрузка `export_jobs` + recovery (KI-050/KI-053) |
+| `app/worker.py` + `worker.py` | arq-воркер: `WorkerSettings`, задача `run_export_job(ctx, job_id)`, recovery при старте (KI-053) |
+| `app/email/` | `EmailSender` Protocol + `MockEmailSender` (outbox/structlog), письма verify/reset (KI-041) |
+| `app/auth/` | JWT access/refresh/action-tokens, Argon2id, cookie, denylist + global revocation (`revoked_before`), email-verification dependency (KI-041) |
 | `app/motifs/` | эвристики мотивов (слабые поля, линии, вилки, мат и т.д.) |
 | `app/llm/` | OpenAI-совместимый клиент, фабрика по уровню, пакет фактов, прогрев |
 | `app/prompts/` | системные промпты `beginner`/`club`/`gm`: `.txt` — seed/fallback, таблица `prompts` — источник истины, in-memory кэш |
@@ -50,7 +53,7 @@
 | `app/llmops_dashboard.py` | LLMOps-дашборд `/admin/llmops`: p50/p95/p99, error rate, tokens/cost, cache hit rate, топ-5 пользователей |
 | `app/observability.py` | OTel: TracerProvider/MeterProvider, OTLP-экспорт спанов и метрик `llm.*`; `app/tracing.py` — W3C trace-context, HTTP-спан с `http.route`/статусом для spanmetrics |
 | `deploy/` | конфиги observability-стека: `otel-collector`, `tempo`, `prometheus`, `grafana` (datasources + дашборд) |
-| `app/api/v1/` | `analyze`, `games`, `commentary`, `chat`, `ingest`, `health`, `admin/exports` |
+| `app/api/v1/` | `analyze`, `games`, `commentary`, `chat`, `ingest`, `health`, `admin/exports`, `auth` |
 | `app/db/` | SQLAlchemy-модели, сессии, Alembic-миграции |
 
 ## 3. Потоки
@@ -139,9 +142,10 @@ PATCH /v1/commentaries/{id}
 - `commentaries` — текст, модель, токены, `validated`, `human_edited`;
 - `edits` — пары «оригинал → правка» (датасет);
 - `export_jobs` — фоновые выгрузки: статус, снимок фильтров, путь к
-  JSONL в `EXPORT_DIR`, размер/sha256, число строк (KI-050).
+  JSONL в `EXPORT_DIR`, размер/sha256, число строк (KI-050);
+- `users.is_verified` — подтверждение email (KI-041).
 
-Миграция — `b0c9d2f13425` (head); `alembic check` без дрейфа.
+Миграция — `dcf1da1421cd` (head); `alembic check` без дрейфа.
 
 ## 5.1. Observability
 
@@ -159,6 +163,36 @@ rate 5xx, стоимость и токены LLM. HTTP-спан `http_request` �
 `http.route` (полный, с префиксом) и `http.response.status_code`; при
 `OTEL_ENABLED=true` спаны и метрики уходят в коллектор, при `false` —
 no-op.
+
+## 5.2. Auth lifecycle (KI-041)
+
+```text
+register → users.is_verified=false → MockEmailSender (verify JWT 24h)
+         → GET /auth/verify-email?token → is_verified=true
+analyze/commentary → get_current_verified_user
+         → 403 email_not_verified (admin/auditor bypass)
+forgot-password → reset JWT 30m → POST /auth/reset-password
+         → Argon2id + revoked_before:<user_id> (одноразовый токен)
+logout-all → revoked_before:<user_id> (Unix-ms)
+refresh → проверка jti-denylist + issued_at (iat_ms) > revoked_before
+```
+
+Неверифицированный пользователь может войти и читать `/auth/me`, но
+генерация закрыта. `MockEmailSender` пишет ссылку в structlog; SMTP —
+KI-055. Global revocation fail-open при недоступном Redis (как denylist).
+
+## 5.3. Фоновые задачи (KI-053)
+
+```text
+API POST /v1/admin/exports/jobs
+  → export_jobs(queued) → Redis arq:queue (enqueue_job)
+  → arq worker: run_export_job → JSONL в EXPORT_DIR → done/failed
+API/worker startup → recover_stale_export_jobs: running >15 мин → failed
+```
+
+Docker-сервис `worker` (`arq worker.WorkerSettings`) в dev/prod compose,
+общий volume `data`/`prod_export_data`; API-процесс не выполняет выгрузку.
+Если Redis недоступен — 503 `export_queue_unavailable`, джоба `failed`.
 
 ## 6. Frontend
 

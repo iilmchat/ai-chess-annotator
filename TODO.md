@@ -557,6 +557,12 @@
   экспорт» с поллингом и кнопкой «Скачать». Создание — только
   admin/legacy (auditor read-only). Подписанные ссылки не входили в
   DoD; ограничение «джоба не переживает рестарт» — KI-053.
+- **Статус итерации 32 (KI-053 закрыт):** выгрузка вынесена в
+  arq-воркер (`app/worker.py`, корневой `worker.py`, `WorkerSettings`);
+  API только `enqueue_job` (503 `export_queue_unavailable`, джоба
+  `failed` при недоступном Redis); recovery `running>15 мин → failed`
+  при старте API и воркера; docker-сервис `worker` в dev/prod compose
+  с общим volume. Остаток retention файлов/подписанные ссылки — KI-054.
 - **Что (полная постановка):** страница Export в админке и `GET
   /v1/admin/exports/edits.jsonl` (streaming): фильтры по дате, уровню,
   модели, `human_edited`; схема JSONL; опциональное вырезание PII;
@@ -707,6 +713,21 @@
   E2E зелёные.
 - **Статус:** выполнено (итерация 26); остатки — KI-041, KI-042
   (KI-043 закрыт в итерации 27).
+
+### [x] T-028b. Auth finalization: email verification, reset, logout-all (KI-041, итерация 32)
+- **Зависит от:** T-028, T-041
+- **Что:** `users.is_verified` (миграция `dcf1da1421cd`), mock
+  email-sender (`app/email/sender.py`), `GET /auth/verify-email`,
+  `POST /auth/forgot-password` / `reset-password`, глобальный отзыв
+  refresh (`POST /auth/logout-all`, `revoked_before` в Redis, `iat_ms`);
+  `/v1/analyze` и `/v1/commentary` → 403 `email_not_verified` для
+  неподтверждённых (admin/auditor bypass).
+- **DoD:** регистрация → письмо; без верификации API закрыт; reset меняет
+  хеш и отзывает старые refresh; logout-all инвалидирует старые сессии;
+  тесты `tests/integration/test_auth_ki041.py` (8) и
+  `tests/unit/test_email_sender.py` (5).
+- **Остаток:** 2FA/SSO, лимит попыток по email, SMTP, frontend-страницы —
+  KI-055.
 
 ### [x] T-044. Dataset Schema v2: fact_sheet → commentary (KI-039, итерация 26)
 - **Зависит от:** T-104
