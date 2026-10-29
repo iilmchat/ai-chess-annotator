@@ -218,6 +218,15 @@ DESIGN §4.5: UNIQUE(три поля), два индекса, CHECK ≥ 0.
    подняты.
 10. **KI-030 не закрыт.** LoRA на GPU не обучалась; датасет v2 и
     `llm_calls`/`usage_daily` теперь дают данные для оценки.
+11. **Design drift `usage_daily` vs DESIGN §4.5.** Фактическая схема
+    отличается от первоначального наброска DESIGN: `subject_type`
+    varchar(8) вместо enum `budget_subject`, `subject_key` varchar(64)
+    вместо TEXT, `requests` INTEGER вместо BIGINT, surrogate `id` +
+    UNIQUE(subject_type, subject_key, day) вместо composite PK, нет
+    `global`-субъекта. Это осознанно: MVP T-031b закрывает durable-учёт
+    по постановке (subject_type/subject_key/day/tokens/cost/requests);
+    enum/глобальные лимиты — при реализации месячных бюджетов
+    (KI-049/T-031c). Миграция и отчёт описывают фактическую схему.
 
 ---
 
