@@ -336,6 +336,14 @@
   `test_tracing.py::test_unhandled_500_has_trace_id_header`.
 - **KI-046 (итерация 28):** неполный охват `llm_calls` — см. Added
   (warmup/commentary_id/cache_hit).
+- **KI-051 (итерация 28):** production wheel/образ не содержал `scripts/`,
+  но `app/api/v1/admin_exports.py` импортировал `scripts.export_dataset`
+  → `uvicorn app.main:app` падал на `ModuleNotFoundError`. Builder'ы
+  (`build_fact_sheet`, `record_from_edit`, `ExportStats`, константы схемы,
+  `load_system_prompt`) вынесены в `app/dataset/export.py`;
+  `scripts/export_dataset.py` реэкспортирует их (публичный контракт
+  сохранён), API-слой импортирует только `app`. В CI docker-job добавлен
+  smoke `docker run --rm chessannotator:ci python -c "import app.main"`.
 
 ## [0.1.0] — 2026-10-28
 

@@ -1570,16 +1570,23 @@ T-031b/T-034b закрыты в объёме MVP; заведены KI-049/KI-050
   KI), `KNOWN_ISSUES` (KI-046/047 → Closed, +KI-049/050),
   `TODO` (T-031b/T-034b → `[x]`), `CHANGELOG`, `RELEASES`,
   `ITERATION-28.md`.
+- [x] **KI-051, production import (найдено верификатором).**
+  `app/api/v1/admin_exports.py` импортировал `scripts.export_dataset`, а
+  wheel/образ содержат только `app` → `uvicorn` падал. Builder'ы
+  вынесены в `app/dataset/export.py` (скрипт реэкспортирует их), API
+  импортирует только `app`; в CI docker-job добавлен smoke
+  `docker run --rm chessannotator:ci python -c "import app.main"`.
+  Проверено эмуляцией wheel-каталога без `scripts/`.
 
 ### Метрики
 
 - **Backend-тесты:** **641 passed, 1 skipped, 1 xfailed** (56 файлов;
-  +49 к итерации 27), **362.04 с**, exit 0. Skip — нет
+  +49 к итерации 27), **315.15 с**, exit 0. Skip — нет
   `DEEPSEEK_API_KEY`, xfail — KI-012.
 - **Frontend-тесты:** **42 passed** (6 файлов); typecheck 0; build 6.92 с
   (JS 464.31 КБ / gzip 146.15, CSS 14.29 КБ / gzip 3.77).
 - **E2E mocked:** **10 passed** (5 сценариев × chromium/mobile).
-- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 72 файла.
+- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 74 файла.
 - **Alembic:** head `e9f0a1b2c3d4`; upgrade/downgrade-цикл и
   `alembic check` — чистые (14 таблиц, 10 ревизий).
 - **FinOps smoke:** реальный `/v1/chat` (LM Studio) → `usage_daily`
@@ -1592,7 +1599,7 @@ T-031b/T-034b закрыты в объёме MVP; заведены KI-049/KI-050
   страница `/admin/exports/dataset` → 200 (admin/auditor);
   `Content-Disposition: attachment; filename="edits.jsonl"`,
   `Content-Type: application/x-ndjson`, `X-Trace-Id` присутствует.
-- **KI:** 50 записей, 25 Open, 25 Closed.
+- **KI:** 51 запись, 25 Open, 26 Closed.
 
 ### Что не сделано и почему
 

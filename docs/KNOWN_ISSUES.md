@@ -69,6 +69,7 @@
 | KI-048 | Open | Low | db, observability | `llm_calls` без retention/партиционирования; `usage_daily` добавлен в итерации 28, но 90-дневного удержания и партиций по месяцу нет |
 | KI-049 | Open | Low | finops, db | Durable-upsert `usage_daily` — fire-and-forget: при падении процесса между Redis-инкрементом и INSERT дельта теряется; месячная агрегация — ручной скрипт без планировщика |
 | KI-050 | Open | Low | admin, api | Экспорт `edits.jsonl` v2 собирает пакет фактов на каждую строку (медленно на больших объёмах); cookie-сессия админки разбирается вручную (дублирует internals SessionMiddleware); факт выгрузки не пишется в `audit_logs` |
+| KI-051 | **Closed** | Med | packaging, ci | Production wheel/образ не содержал `scripts/`, а `app` импортировал `scripts.export_dataset` → `uvicorn app.main:app` падал. **Закрыт в итерации 28:** builder'ы вынесены в `app.dataset.export`, скрипт реэкспортирует их; в CI добавлен smoke `docker run --rm image python -c "import app.main"` |
 
 Всего: **48** (Open: 25, Closed: 23). KI-001…009 — итерация 1 (T-006); KI-010…012 — итерация 2 (T-007); KI-013, KI-014 — итерация 3 (T-008); KI-014 закрыт, KI-015…018 — итерация 4 (T-009); KI-018 закрыт, KI-019, KI-020 — итерация 5 (T-010/T-011); KI-020 закрыт, KI-021, KI-022 — итерация 6 (T-012/T-013); KI-022 закрыт, KI-023, KI-024 — итерация 7 (T-014/T-015); KI-025, KI-026 — итерация 9 (T-017); KI-027…029 — итерация 12 (T-021b/T-022); KI-008, KI-009, KI-024…028 закрыты, KI-030 — итерация 14 (T-023); KI-021 закрыт, KI-031, KI-032 — итерация 17 (T-029/T-031); KI-031/KI-032 закрыты, KI-033 — итерация 18 (T-033/T-035); KI-033 закрыт, KI-034 — итерация 19 (T-032); KI-035 — итерация 20 (T-036); KI-035 закрыт, KI-036…038 — итерация 24 (T-041); KI-030 (прогресс без обучения) и KI-039/KI-040 — итерация 25 (T-104/T-036b); KI-036, KI-037, KI-038, KI-039 закрыты, +KI-041…045 — итерация 26; **KI-043 и KI-045 закрыты, +KI-046…048 — итерация 27**.
 
@@ -1391,3 +1392,29 @@ T-034) не реализованы.
 скачивание; писать `audit_logs action=dataset.export`; при переходе на
 новую версию Starlette — использовать публичный API сессий или
 собственный подписанный токен для кнопки.
+
+---
+
+## KI-051 · Closed · Med · packaging, ci
+
+**Симптом.** Production Docker-образ (`Dockerfile`, `docker-compose.prod.yml`)
+не запускался: `uvicorn app.main:app` падал на импорте
+`ModuleNotFoundError: No module named 'scripts'`. `app/api/v1/admin_exports.py`
+импортировал `scripts.export_dataset`, но wheel собирается с
+`packages = ["app"]` (`pyproject.toml`), а `Dockerfile` копирует только
+`app` перед `pip install .`.
+
+**Причина.** Антипаттерн «`app` → `scripts`»: CLI-скрипт использовался как
+библиотека из API-слоя. Полный pytest этого не ловил, потому что в
+репозитории `cwd` содержит `scripts/`; CI-job `docker` только собирал образ,
+не проверяя импорт.
+
+**Решение (итерация 28).** Переиспользуемые builder'ы
+(`SCHEMA_VERSION`/`LEGACY_SCHEMA_VERSION`, `ExportStats`,
+`build_fact_sheet`, `record_from_edit`, `load_system_prompt`) вынесены в
+`app/dataset/export.py`; `scripts/export_dataset.py` реэкспортирует их
+(публичный контракт CLI/тестов сохранён), API-слой импортирует только
+`app.dataset.export`. В CI-job `docker` добавлен smoke-шаг
+`docker run --rm chessannotator:ci python -c "import app.main"`.
+Проверено эмуляцией wheel: копия только `app/` (без `scripts/`) →
+`import app.main` успешен.

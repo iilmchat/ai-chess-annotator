@@ -50,6 +50,9 @@ KI-049/KI-050). Заведены KI-049, KI-050.
 | `app/templates/dataset_export.html` *(новый)* | Форма (даты/уровень/human_edited/schema_version) + JS-сборка query и скачивание; «Скачать без фильтров» |
 | `app/main.py` | Подключение `admin_exports.router` под `api_prefix` |
 | `tests/integration/test_admin_exports.py` *(новый)* | 11 тестов: 401/403/auditor/admin, cookie-сессия после `/admin/login`, v2 (пакет фактов, metadata, `fact_sheet_chars`), v1, фильтры date/level/human_edited, пустой результат 200, invalid date 422, страница admin/auditor 200 |
+| `app/dataset/export.py`, `app/dataset/__init__.py` *(новые)* | **KI-051 (найдено верификатором):** переиспользуемые builder'ы вынесены из `scripts/export_dataset.py` в `app.dataset.export` (`SCHEMA_VERSION`/`LEGACY_SCHEMA_VERSION`, `ExportStats`, `build_fact_sheet`, `record_from_edit`, `load_system_prompt`); `admin_exports` больше не импортирует `scripts` (production wheel содержит только `app`) |
+| `scripts/export_dataset.py` | Реэкспорт builder'ов из `app.dataset.export` (публичный контракт CLI/тестов сохранён); CLI-логика не менялась |
+| `.github/workflows/ci.yml` | Docker-job: smoke `docker run --rm chessannotator:ci python -c "import app.main"` — ловит регресс «wheel без scripts» |
 | `tests/test_models.py` | `usage_daily` в SPEC_TABLES + проверка UNIQUE/индексов (10 тестов) |
 
 ### Документация
@@ -107,14 +110,15 @@ FinOps/Observability/API, KI 50/25/25), `docs/KNOWN_ISSUES.md`
 
 | Проверка | Команда | Результат |
 | :--- | :--- | :--- |
-| Backend-сюита (чистая БД) | `pytest -q` (POSTGRES_PORT=5435, `chessannotator_iter28`, Redis 0, STOCKFISH_PATH, web/dist) | **641 passed, 1 skipped, 1 xfailed, 4 warnings in 362.04s**, exit 0; collected 643. Skip — нет `DEEPSEEK_API_KEY`, xfail — KI-012; **+49** к итерации 27 (592) |
+| Backend-сюита (чистая БД) | `pytest -q` (POSTGRES_PORT=5435, `chessannotator_iter28`, Redis 0, STOCKFISH_PATH, web/dist) | **641 passed, 1 skipped, 1 xfailed, 4 warnings in 315.15s**, exit 0; collected 643. Skip — нет `DEEPSEEK_API_KEY`, xfail — KI-012; **+49** к итерации 27 (592) |
 | FinOps durable unit | `pytest tests/unit/test_finops_durable.py -q` | **20 passed** |
 | FinOps durable integration | `pytest tests/integration/test_usage_daily.py -q` | **5 passed** |
 | LLMOps/`llm_calls` | `pytest tests/unit/test_llm_calls.py tests/unit/test_warmup.py tests/integration/test_llm_calls_api.py -q` | **29 passed** (14/4/11) |
 | Admin export | `pytest tests/integration/test_admin_exports.py -q` | **11 passed** |
 | Tracing/500 | `pytest tests/integration/test_tracing.py -q` | **23 passed** |
 | ruff | `ruff check .` | **All checks passed!** (exit 0) |
-| mypy | `mypy app` | **Success: no issues found in 72 source files** (exit 0) |
+| mypy | `mypy app` | **Success: no issues found in 74 source files** (exit 0) |
+| Production import (KI-051) | копия только `app/` во временный каталог (эмуляция wheel без `scripts/`), `python -c "import app.main"` | **OK, exit 0** (`ModuleNotFoundError: scripts` до фикса; см. §5) |
 | Alembic | `alembic upgrade head`, `alembic check` (iter28) | head `e9f0a1b2c3d4`; «No new upgrade operations detected»; цикл downgrade→upgrade проверен |
 | Frontend tests | `pnpm --dir web test` | **42 passed** (6 файлов) |
 | Frontend typecheck | `pnpm --dir web typecheck` | exit 0 |
@@ -193,19 +197,27 @@ DESIGN §4.5: UNIQUE(три поля), два индекса, CHECK ≥ 0.
    может измениться — покрыто тестами, но это связанность.
 5. **Аудит выгрузки не пишется (KI-050).** `audit_logs` для
    `dataset.export` не добавлен; checksum/размер строки — тоже.
-6. **Warnings полного прогона (4).** Включая
+6. **KI-051 найден и закрыт в итерации (production import).** Верификатор
+   обнаружил, что `app/api/v1/admin_exports.py` импортировал
+   `scripts.export_dataset`, а production wheel/образ содержат только
+   `app` → `uvicorn app.main:app` падал с `ModuleNotFoundError: scripts`.
+   Исправлено вынесением builder'ов в `app.dataset.export` (скрипт
+   реэкспортирует их) и smoke-шагом в CI
+   (`docker run … python -c "import app.main"`); проверено эмуляцией
+   wheel-каталога без `scripts/` — импорт успешен.
+7. **Warnings полного прогона (4).** Включая
    `RuntimeWarning: coroutine 'Connection._cancel' was never awaited`
    (фоновые сессии/GC asyncpg в тестах) и
    `StarletteDeprecationWarning` про `httpx`/`TestClient` (KI-005);
    на результат не влияют, но шумят.
-7. **KI-048 остаётся Open.** `llm_calls` по-прежнему без
+8. **KI-048 остаётся Open.** `llm_calls` по-прежнему без
    партиционирования/retention; `usage_daily` теперь есть, но 90-дневное
    удержание для `llm_calls` — ручное.
-8. **Тестовый прогон требует Stockfish/PostgreSQL.** Интеграционные
+9. **Тестовый прогон требует Stockfish/PostgreSQL.** Интеграционные
    тесты итерации скипаются без БД/движка (как и раньше); на CI сервисы
    подняты.
-9. **KI-030 не закрыт.** LoRA на GPU не обучалась; датасет v2 и
-   `llm_calls`/`usage_daily` теперь дают данные для оценки.
+10. **KI-030 не закрыт.** LoRA на GPU не обучалась; датасет v2 и
+    `llm_calls`/`usage_daily` теперь дают данные для оценки.
 
 ---
 
@@ -215,11 +227,12 @@ DESIGN §4.5: UNIQUE(три поля), два индекса, CHECK ≥ 0.
 | :--- | :--- | :--- | :--- |
 | **KI-049** | Low | finops, db | Durable-upsert `usage_daily` fire-and-forget: потеря последней дельты при жёстком падении; месячная агрегация — ручной скрипт без планировщика/алертов |
 | **KI-050** | Low | admin, api | v2-экспорт медленный на больших объёмах (пакет фактов на строку); cookie-сессия админки разбирается вручную; нет аудита факта выгрузки/checksum/фоновой ссылки |
+| **KI-051** | Med | packaging, ci | Production wheel/образ не содержал `scripts/`, а `app` импортировал `scripts.export_dataset` → `uvicorn app.main:app` падал. **Закрыт в итерации 28** (builder'ы → `app.dataset.export`, CI smoke-import) |
 
 **Закрыты:** KI-046 (warmup/commentary_id/cache_hit), KI-047
-(`X-Trace-Id` на необработанных 500).
+(`X-Trace-Id` на необработанных 500), KI-051 (production import).
 **KI-048** остаётся **Open** (retention/партиционирование `llm_calls`).
-Сводка реестра: **50** записей, 25 Open, 25 Closed.
+Сводка реестра: **51** запись, 25 Open, 26 Closed.
 
 ---
 
@@ -284,3 +297,10 @@ DESIGN §4.5: UNIQUE(три поля), два индекса, CHECK ≥ 0.
   UI-экспорт с фильтрами и ролевой защитой; большие выгрузки, checksum,
   подписанные ссылки и `audit_logs` вынесены в KI-050, чтобы не
   раздувать итерацию (аудит-схема и фоновая очередь — отдельные решения).
+- **Почему export-builder'ы переехали в `app.dataset`.** API-слой не должен
+  зависеть от CLI-скриптов: production wheel (`packages = ["app"]`) и
+  Docker-образ не содержат `scripts/`, поэтому импорт из `app` в `scripts`
+  роняет `uvicorn` (KI-051). Вынос в `app.dataset.export` убирает
+  антипаттерн, сохраняет единый источник формата для CLI и API, а
+  CI-smoke `python -c "import app.main"` в собранном образе не даёт
+  регрессу вернуться незамеченным.
