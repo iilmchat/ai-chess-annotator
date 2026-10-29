@@ -36,6 +36,7 @@ from app.cache import cleanup_expired_cache
 from app.config import Settings, get_settings
 from app.db.session import SessionLocal
 from app.db.session import engine as db_engine
+from app.engine.cache import EngineCache
 from app.engine.pool import EnginePool
 from app.errors import AppError, EngineError
 from app.finops import TokenBudgetMiddleware, TokenUsageTracker
@@ -59,7 +60,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # T-030: трейсинг включается только при OTEL_ENABLED=true;
         # без провайдера спаны в клиенте — no-op.
         app.state.telemetry_provider = configure_telemetry(cfg)
-        app.state.engine_pool = EnginePool(cfg)
+        # T-108: кэш результатов Stockfish; выключается ENGINE_CACHE_ENABLED.
+        engine_cache: EngineCache | None = (
+            EngineCache(cfg) if cfg.engine_cache_enabled else None
+        )
+        app.state.engine_cache = engine_cache
+        app.state.engine_pool = EnginePool(cfg, cache=engine_cache)
         redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
             cfg.redis_url, decode_responses=True
         )
@@ -83,6 +89,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 logger.info("semantic_cache_cleanup", deleted=deleted)
             except Exception as exc:
                 logger.warning("semantic_cache_cleanup_failed", error=str(exc))
+        # T-108: физическая чистка engine_cache старше TTL (best-effort).
+        if engine_cache is not None:
+            try:
+                deleted_engine = await engine_cache.cleanup_expired()
+                logger.info("engine_cache_cleanup", deleted=deleted_engine)
+            except Exception as exc:
+                logger.warning("engine_cache_cleanup_failed", error=str(exc))
         app.state.rag_context_builder = make_rag_context_builder(cfg)
         app.state.rate_limiter = (
             RedisRateLimiter(

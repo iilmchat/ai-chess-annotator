@@ -52,6 +52,7 @@ __all__ = [
     "AuditLog",
     "Commentary",
     "Edit",
+    "EngineCacheEntry",
     "Game",
     "Level",
     "LlmCall",
@@ -546,6 +547,49 @@ class LlmCall(Base):
     )
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class EngineCacheEntry(Base):
+    """Кэш результатов Stockfish по позиции (T-108, итерация 30).
+
+    Ключ — позиция + версия движка + параметры поиска: `fen_hash` —
+    sha256 канонического FEN (без номера хода, чтобы одна и та же позиция,
+    достигнутая в разное время, попадала в один ключ), `engine_version` —
+    UCI `id name` бинарника, `depth`/`multipv` — параметры поиска уровня.
+    Без версии и глубины оценка `beginner` (depth 12, MultiPV 1) могла бы
+    быть отдана уровню `gm` (depth 28, MultiPV 5), а после обновления
+    Stockfish — переиспользоваться неверная оценка.
+
+    `lines` — JSONB-список `EngineLine` (multipv/score_cp|mate/move_uci/pv);
+    `created_at` + `ENGINE_CACHE_TTL_DAYS` определяют срок жизни, физическую
+    чистку делает `EngineCache.cleanup_expired` при старте приложения.
+    """
+
+    __tablename__ = "engine_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "fen_hash",
+            "engine_version",
+            "depth",
+            "multipv",
+            name="uq_engine_cache_key",
+        ),
+        Index("ix_engine_cache_created", "created_at"),
+        CheckConstraint("depth >= 1", name="ck_engine_cache_depth_positive"),
+        CheckConstraint(
+            "multipv >= 1", name="ck_engine_cache_multipv_positive"
+        ),
+    )
+
+    id: Mapped[int] = _pk()
+    fen_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    engine_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    depth: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    multipv: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    lines: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False
+    )
     created_at: Mapped[datetime] = _created_at()
 
 

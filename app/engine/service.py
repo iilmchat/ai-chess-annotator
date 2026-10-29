@@ -29,6 +29,7 @@ import chess
 from pydantic import ValidationError
 
 from app.config import Settings, get_settings
+from app.engine.cache import EngineCache, EngineCacheKey, engine_fen_hash
 from app.engine.models import (
     MATE_CP_BASE,
     EngineLine,
@@ -113,9 +114,11 @@ class EngineService:
         settings: Settings | None = None,
         *,
         executable: Path | None = None,
+        cache: EngineCache | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._executable_override = executable
+        self._cache = cache
         self._engine: _UciEngine | None = None
         self._lock = asyncio.Lock()
 
@@ -176,12 +179,29 @@ class EngineService:
 
         async with self._lock:
             engine = await self._ensure_engine()
-            return await engine.go(
+            # T-108: ключ включает позицию, версию движка и параметры поиска,
+            # чтобы beginner (12/1) не получил оценку gm (28/5), а после
+            # обновления Stockfish старые оценки не переиспользовались.
+            cache_key: EngineCacheKey | None = None
+            if self._cache is not None:
+                cache_key = EngineCacheKey(
+                    fen_hash=engine_fen_hash(board.fen()),
+                    engine_version=engine.name,
+                    depth=resolved_depth,
+                    multipv=resolved_multipv,
+                )
+                cached = await self._cache.lookup(cache_key)
+                if cached is not None:
+                    return cached
+            lines = await engine.go(
                 fen=board.fen(),
                 depth=resolved_depth,
                 multipv=resolved_multipv,
                 movetime_ms=resolved_movetime,
             )
+            if self._cache is not None and cache_key is not None:
+                await self._cache.store(cache_key, lines)
+            return lines
 
     @staticmethod
     def classify_move(
@@ -287,10 +307,17 @@ class _UciEngine:
     def __init__(self, executable: Path) -> None:
         self._executable = executable
         self._process: asyncio.subprocess.Process | None = None
+        #: UCI `id name` (например, ``Stockfish 17``) — версия для кэша (T-108).
+        self._name: str | None = None
 
     @property
     def is_running(self) -> bool:
         return self._process is not None and self._process.returncode is None
+
+    @property
+    def name(self) -> str:
+        """Версия движка из UCI-рукопожатия (fallback — ``stockfish``)."""
+        return self._name or "stockfish"
 
     async def start(self) -> None:
         try:
@@ -306,7 +333,25 @@ class _UciEngine:
                 f"Не удалось запустить Stockfish ({self._executable}): {exc}"
             ) from exc
         await self._send("uci")
-        await self._expect("uciok", timeout_s=_UCI_STARTUP_S)
+        await self._read_uci_handshake()
+
+    async def _read_uci_handshake(self) -> None:
+        """Прочитать ответ на `uci`, запомнив `id name` для версии кэша."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _UCI_STARTUP_S
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise EngineTimeoutError(
+                    f"Движок не ответил 'uciok' за {_UCI_STARTUP_S:.1f} с"
+                )
+            line = await asyncio.wait_for(self._readline(), timeout=remaining)
+            if line.startswith("id name "):
+                name = line.removeprefix("id name ").strip()
+                if name:
+                    self._name = name
+            if line == "uciok":
+                return
 
     async def close(self) -> None:
         process = self._process

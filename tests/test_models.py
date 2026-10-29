@@ -38,6 +38,7 @@ SPEC_TABLES = {
     "audit_logs",
     "commentaries",
     "edits",
+    "engine_cache",
     "games",
     "llm_calls",
     "llm_evaluations",
@@ -55,6 +56,23 @@ PGN = '[Event "Test"]\n\n1. e4 e5 2. Nf3 Nc6 1/2-1/2\n'
 
 def test_metadata_contains_exactly_spec_tables() -> None:
     assert set(Base.metadata.tables) == SPEC_TABLES
+
+
+def test_engine_cache_table_has_unique_key_and_ttl_index() -> None:
+    """T-108: ключ кэша — позиция + версия движка + depth/multipv."""
+    table = Base.metadata.tables["engine_cache"]
+    assert table.c.fen_hash.nullable is False
+    assert table.c.engine_version.nullable is False
+    assert table.c.depth.nullable is False
+    assert table.c.multipv.nullable is False
+    names = {
+        constraint.name
+        for constraint in table.constraints
+        if constraint.name
+    }
+    assert "uq_engine_cache_key" in names
+    indexes = {index.name for index in table.indexes}
+    assert "ix_engine_cache_created" in indexes
 
 
 def test_llm_calls_table_has_trace_and_indexes() -> None:

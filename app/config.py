@@ -66,12 +66,21 @@ class Settings(BaseSettings):
     #: Работает ТОЛЬКО при APP_ENV=test; в dev/prod значение игнорируется.
     test_auth_bypass: bool = False
 
+    # PDF-экспорт комментария (T-107)
+    #: Путь к TrueType-шрифту с кириллицей; по умолчанию ищется Arial/
+    #: DejaVuSans в системных каталогах Windows/Linux/macOS.
+    pdf_font_path: str | None = None
+
     # Engine
     stockfish_path: str = "/usr/bin/stockfish"
     stockfish_host: str | None = None
     stockfish_port: int | None = None
     #: Число параллельных процессов Stockfish (KI-014 / SPEC §9).
     engine_pool_size: int = 4
+    #: Кэш результатов Stockfish по позиции (T-108): ключ — позиция +
+    #: версия движка + depth/multipv, TTL — `ENGINE_CACHE_TTL_DAYS`.
+    engine_cache_enabled: bool = True
+    engine_cache_ttl_days: int = 30
 
     # Rate limiting (T-009)
     rate_limit_enabled: bool = True

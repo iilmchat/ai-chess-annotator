@@ -29,6 +29,7 @@ from pathlib import Path
 from types import TracebackType
 
 from app.config import Settings, get_settings
+from app.engine.cache import EngineCache
 from app.engine.models import EngineLine, MoveAnalysis
 from app.engine.service import (
     EngineService,
@@ -52,6 +53,7 @@ class EnginePool:
         settings: настройки (по умолчанию — `get_settings()`).
         size: размер пула; по умолчанию `settings.engine_pool_size`.
         executable: путь к бинарнику (для тестов).
+        cache: кэш результатов Stockfish (T-108); ``None`` — без кэша.
     """
 
     def __init__(
@@ -60,6 +62,7 @@ class EnginePool:
         *,
         size: int | None = None,
         executable: Path | None = None,
+        cache: EngineCache | None = None,
     ) -> None:
         cfg = settings or get_settings()
         requested = cfg.engine_pool_size if size is None else size
@@ -68,7 +71,8 @@ class EnginePool:
 
         self._size = min(requested, MAX_POOL_SIZE)
         self._services = [
-            EngineService(cfg, executable=executable) for _ in range(self._size)
+            EngineService(cfg, executable=executable, cache=cache)
+            for _ in range(self._size)
         ]
         self._idle: asyncio.Queue[EngineService] = asyncio.Queue()
         for service in self._services:
