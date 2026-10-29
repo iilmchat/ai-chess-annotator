@@ -15,7 +15,8 @@
 6. [Опциональные сервисы](#6-опциональные-сервисы)
 7. [Production-развёртывание (Docker)](#7-production-развёртывание-docker)
 8. [Troubleshooting](#8-troubleshooting)
-9. [Что дальше](#9-что-дальше)
+9. [Обслуживание: retention и FinOps](#9-обслуживание-retention-и-finops)
+10. [Что дальше](#10-что-дальше)
 
 ---
 
@@ -627,7 +628,76 @@ LLM до появления GPU.
 
 ---
 
-## 9. Что дальше
+## 9. Обслуживание: retention и FinOps
+
+Две таблицы растут постоянно: `llm_calls` (durable-история вызовов LLM,
+T-030) и `usage_daily` (FinOps-агрегаты, T-031b). Их чистку и месячные
+отчёты можно повесить на cron/планировщик: скрипты идемпотентны, читают
+`Settings` (`.env`/ENV) и возвращают exit code `0` (успех) или `2`
+(неверные аргументы / БД недоступна).
+
+### 9.1. Retention `llm_calls` (KI-048)
+
+Храним последние `LLM_CALLS_RETENTION_DAYS` дней (по умолчанию **90**).
+Скрипт удаляет старые строки **батчами** (по 1000; каждая транзакция
+короткая) — один большой `DELETE` дольше держит блокировки и раздувает
+WAL. `--dry-run` показывает объём без удаления, `--max-batches`
+ограничивает работу за один запуск (удобно для «мягкой» фоновой уборки).
+
+```bash
+# Посмотреть, сколько строк старше 90 дней (ничего не удаляет)
+python scripts/prune_llm_calls.py --dry-run
+
+# Удалить батчами по 1000 с паузой 50 мс; JSON-отчёт в stdout
+python scripts/prune_llm_calls.py --batch-size 1000 --sleep-ms 50 --json
+
+# Переопределить срок хранения для разового запуска
+python scripts/prune_llm_calls.py --retention-days 30
+```
+
+**Cron (Linux, ежедневно в 03:15):**
+
+```cron
+15 3 * * * cd /srv/chessannotator && .venv/bin/python scripts/prune_llm_calls.py --json >> /var/log/chessannotator/prune_llm_calls.log 2>&1
+```
+
+**systemd timer** (альтернатива cron): unit `chessannotator-prune.service`
+с `ExecStart=/srv/chessannotator/.venv/bin/python scripts/prune_llm_calls.py`
+и `chessannotator-prune.timer` с `OnCalendar=*-*-* 03:15:00`.
+
+**Windows Task Scheduler:**
+
+```powershell
+schtasks /Create /TN "ChessAnnotator prune llm_calls" /SC DAILY /ST 03:15 `
+  /TR "C:\Projects\AI\ai-chess-annotator\.venv\Scripts\python.exe C:\Projects\AI\ai-chess-annotator\scripts\prune_llm_calls.py"
+```
+
+Проверить результат: `python scripts/prune_llm_calls.py --dry-run --json`
+(поле `deleted` — сколько строк осталось бы к удалению).
+
+Дашборд с метриками (latency p50/p95/p99, error rate, стоимость,
+cache-hit rate, топ-5 пользователей) — в админке: `/admin/llmops`
+(см. `DESIGN_ADMIN_AND_OPS.md` §7.4).
+
+### 9.2. Retention и месячный отчёт `usage_daily`
+
+`scripts/aggregate_usage.py` печатает суммы месяца и (по умолчанию)
+удаляет агрегаты старше 90 дней:
+
+```bash
+python scripts/aggregate_usage.py --month 2026-10 --json --retention-days 90
+python scripts/aggregate_usage.py --no-cleanup        # только отчёт
+```
+
+Cron (1-е число месяца, 04:00):
+
+```cron
+0 4 1 * * cd /srv/chessannotator && .venv/bin/python scripts/aggregate_usage.py --json --retention-days 90 >> /var/log/chessannotator/aggregate_usage.log 2>&1
+```
+
+---
+
+## 10. Что дальше
 
 После успешного healthcheck:
 

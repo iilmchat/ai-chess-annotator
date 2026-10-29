@@ -208,6 +208,9 @@ class Settings(BaseSettings):
         return self.vllm_model
 
     # Observability
+    #: Retention `llm_calls` (KI-048): сколько последних дней хранить.
+    #: Используется `scripts/prune_llm_calls.py` (по умолчанию 90).
+    llm_calls_retention_days: int = 90
     otel_enabled: bool = False
     #: `console` — печать спанов в stdout; `otlp` — OTLP/HTTP экспортёр.
     otel_exporter: str = "console"
