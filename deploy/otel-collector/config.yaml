@@ -1,0 +1,81 @@
+# OpenTelemetry Collector: приём OTLP от ChessAnnotator, запись трейсов в
+# Tempo и метрик в Prometheus (T-109b).
+#
+# Схема:
+#   app --OTLP/HTTP--> otel-collector --OTLP/gRPC--> tempo    (трейсы)
+#                              \--spanmetrics--> :8890 ---\
+#                              \--OTLP metrics--> :8889 ----> prometheus
+#
+# spanmetrics-коннектор строит из HTTP-спанов `traces_span_metrics_*`
+# (calls/duration) с размерами `http_route`, `http_response_status_code` —
+# по ним считаются p95/p99 и error rate маршрутов.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+connectors:
+  spanmetrics:
+    namespace: traces.span.metrics
+    histogram:
+      explicit:
+        buckets:
+          [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 30s]
+    dimensions:
+      - name: http.route
+      - name: http.request.method
+      - name: http.response.status_code
+    metrics_flush_interval: 15s
+
+exporters:
+  # Трейсы → Tempo (внутренняя сеть compose, TLS не нужен).
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  # Метрики приложения (llm.calls/llm.tokens/llm.cost.usd/llm.latency).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+  # Метрики, построенные spanmetrics-коннектором из трейсов.
+  prometheus/spanmetrics:
+    endpoint: 0.0.0.0:8890
+    resource_to_telemetry_conversion:
+      enabled: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: basic
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo, spanmetrics]
+    metrics/llm:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    metrics/spanmetrics:
+      receivers: [spanmetrics]
+      processors: [batch]
+      exporters: [prometheus/spanmetrics]

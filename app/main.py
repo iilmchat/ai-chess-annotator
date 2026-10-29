@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Any
 
 import redis.asyncio as aioredis
 import structlog
@@ -41,7 +43,12 @@ from app.engine.pool import EnginePool
 from app.errors import AppError, EngineError
 from app.finops import TokenBudgetMiddleware, TokenUsageTracker
 from app.llm.warmup import warmup_local_llm
-from app.observability import configure_telemetry, shutdown_telemetry
+from app.observability import (
+    configure_metrics,
+    configure_telemetry,
+    shutdown_metrics,
+    shutdown_telemetry,
+)
 from app.prompts import seed_prompts, warm_prompt_cache
 from app.prompts.pubsub import watch_prompt_updates
 from app.rag.context import make_rag_context_builder
@@ -60,6 +67,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # T-030: трейсинг включается только при OTEL_ENABLED=true;
         # без провайдера спаны в клиенте — no-op.
         app.state.telemetry_provider = configure_telemetry(cfg)
+        # T-109b: OTLP-метрики LLM для Grafana (тот же признак OTEL_ENABLED).
+        app.state.metrics_provider = configure_metrics(cfg)
         # T-108: кэш результатов Stockfish; выключается ENGINE_CACHE_ENABLED.
         engine_cache: EngineCache | None = (
             EngineCache(cfg) if cfg.engine_cache_enabled else None
@@ -155,16 +164,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # соединения asyncpg остаются привязанными к закрытому циклу
             # (актуально для тестов с несколькими TestClient).
             await db_engine.dispose()
+            shutdown_metrics(app.state.metrics_provider)
             shutdown_telemetry(app.state.telemetry_provider)
             logger.info("app_stopped")
 
-    app = FastAPI(
-        title="ChessAnnotator API",
-        version=__version__,
-        lifespan=lifespan,
-        docs_url="/docs",
-        openapi_url="/openapi.json",
-    )
+    # FastAPI >= 0.162 включает нативные OTel-спаны `http_request` и
+    # `fastapi.*` по умолчанию. У проекта свой `TraceMiddleware` (W3C
+    # traceparent + X-Trace-Id + атрибуты для spanmetrics), поэтому
+    # нативную телеметрию выключаем: иначе на запрос приходится два
+    # HTTP-спана (дубли в spanmetrics и разные trace id).
+    fastapi_options: dict[str, Any] = {
+        "title": "ChessAnnotator API",
+        "version": __version__,
+        "lifespan": lifespan,
+        "docs_url": "/docs",
+        "openapi_url": "/openapi.json",
+    }
+    if "telemetry" in inspect.signature(FastAPI).parameters:
+        fastapi_options["telemetry"] = {
+            "tracing": False,
+            "metrics": False,
+            "logs": False,
+        }
+    app = FastAPI(**fastapi_options)
     app.state.settings = cfg
     # Один объект Settings — единственный источник истины для приложения:
     # зависимости Depends(get_settings) должны видеть те же настройки, что

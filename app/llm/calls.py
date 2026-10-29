@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Level, LlmCall, Prompt
 from app.db.session import SessionLocal
+from app.observability import record_llm_metrics
 from app.tracing import current_request_id, current_trace_id, new_trace_context
 
 __all__ = [
@@ -267,6 +268,24 @@ def record_llm_call(
         # найдёт строки этого вызова (в т.ч. вне HTTP, где trace генерируется).
         _last_trace_id.set(record.trace_id)
         _last_span_id.set(record.span_id)
+        # T-109b: те же цифры уходят в OTLP-метрики для Grafana (no-op без
+        # OTEL_ENABLED=true). Вызов дешёвый и не блокирует запрос.
+        record_llm_metrics(
+            provider=record.provider,
+            model=record.model,
+            operation=(
+                record.context.operation
+                if record.context is not None
+                else _DEFAULT_OPERATION
+            ),
+            level=record.level,
+            status=record.status,
+            tokens_in=record.tokens_in,
+            tokens_out=record.tokens_out,
+            cost_usd=float(record.cost_usd),
+            latency_ms=record.latency_ms,
+            cache_hit=record.cache_hit,
+        )
     except Exception as exc:  # best-effort: LLMOps не ломает запрос
         logger.warning("llm_call_schedule_failed", error=str(exc))
 

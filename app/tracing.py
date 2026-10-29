@@ -38,7 +38,10 @@ from opentelemetry import trace
 from opentelemetry.trace import (
     NonRecordingSpan,
     ProxyTracerProvider,
+    Span,
     SpanContext,
+    Status,
+    StatusCode,
     TraceFlags,
     set_span_in_context,
 )
@@ -200,10 +203,17 @@ class TraceMiddleware:
 
     Регистрируется **самым внешним** (в `create_app` — последним), чтобы
     `X-Trace-Id` был и у ответов других middleware (429/404), и у SSE.
+
+    Args:
+        app: оборачиваемое ASGI-приложение.
+        tracer: явный трейсер (тесты); по умолчанию глобальный OTel-трейсер.
     """
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(
+        self, app: ASGIApp, *, tracer: trace.Tracer | None = None
+    ) -> None:
         self.app = app
+        self._tracer = tracer
 
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send
@@ -234,14 +244,72 @@ class TraceMiddleware:
         if context.request_id is not None:
             state["request_id"] = context.request_id
 
+        # Span создаётся ниже и нужен send-хуку: статус ответа известен
+        # только на `http.response.start`. Список — изменяемая ячейка,
+        # чтобы не объявлять `span` дважды в одной области видимости.
+        span_ref: list[Span | None] = [None]
+
         async def send_with_trace(message: Message) -> None:
+            active_span = span_ref[0]
+            if (
+                active_span is not None
+                and message["type"] == "http.response.start"
+            ):
+                status_code = int(message["status"])
+                active_span.set_attribute(
+                    "http.response.status_code", status_code
+                )
+                if status_code >= 500:
+                    active_span.set_status(Status(StatusCode.ERROR))
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 headers[TRACE_HEADER] = context.trace_id_str
             await send(message)
 
-        with trace_context(context), request_span(context):
-            await self.app(scope, receive, send_with_trace)
+        with trace_context(context), request_span(
+            context, tracer=self._tracer
+        ) as span:
+            span_ref[0] = span
+            if span is not None:
+                # Атрибуты нужны spanmetrics-коннектору коллектора:
+                # без них нельзя посчитать latency/error rate по маршруту.
+                span.set_attribute("http.request.method", scope["method"])
+            try:
+                await self.app(scope, receive, send_with_trace)
+            finally:
+                # Маршрут известен только после routing-а Starlette; при
+                # исключении тоже выставляем его (span остаётся полезным).
+                active_span = span_ref[0]
+                if active_span is not None:
+                    route_path = _route_path(scope)
+                    active_span.set_attribute("http.route", route_path)
+                    method = str(scope.get("method", ""))
+                    active_span.update_name(
+                        f"{method} {route_path}".strip()
+                    )
+
+
+def _route_path(scope: Scope) -> str:
+    """Полный путь маршрута для `http.route` (с префиксом include_router).
+
+    В FastAPI 0.162 `scope["route"]` — это *исходный* `APIRoute` без
+    префикса (`/analyze`), а эффективный контекст (`scope["fastapi"]
+    ["effective_route_context"]`) содержит полный `/v1/analyze`. Без него
+    spanmetrics считал бы `/analyze`, а панель дашборда фильтрует
+    `/v1/analyze`. Для Starlette/старых FastAPI ключа нет — fallback на
+    `route.path`, затем на фактический путь запроса.
+    """
+    fastapi_scope = scope.get("fastapi")
+    if isinstance(fastapi_scope, dict):
+        context = fastapi_scope.get("effective_route_context")
+        context_path = getattr(context, "path", None)
+        if isinstance(context_path, str) and context_path:
+            return context_path
+    route = scope.get("route")
+    route_path = getattr(route, "path", None)
+    if isinstance(route_path, str) and route_path:
+        return route_path
+    return str(scope.get("path", ""))
 
 
 def _header(scope: Scope, name: str) -> str | None:
@@ -257,8 +325,13 @@ def _header(scope: Scope, name: str) -> str | None:
 @contextmanager
 def request_span(
     context: TraceContext, *, tracer: trace.Tracer | None = None
-) -> Iterator[None]:
+) -> Iterator[Span | None]:
     """Span `http_request` с trace id из W3C-контекста (no-op без OTel).
+
+    Yields:
+        Активный span (``None``, если OTel выключен). Нужен middleware-у,
+        чтобы после ответа выставить `http.route`/статус — их знает только
+        Starlette-routing, а spanmetrics-коннектор считает по ним метрики.
 
     Args:
         context: trace-контекст запроса.
@@ -269,7 +342,7 @@ def request_span(
     if active_tracer is None:
         if isinstance(trace.get_tracer_provider(), ProxyTracerProvider):
             # OTEL_ENABLED=false: провайдер не настроен, спаны не создаём.
-            yield
+            yield None
             return
         active_tracer = get_tracer("app.http")
 
@@ -285,4 +358,4 @@ def request_span(
     ) as span:
         span.set_attribute("trace.id", context.trace_id_str)
         span.set_attribute("trace.span_id", context.span_id)
-        yield
+        yield span

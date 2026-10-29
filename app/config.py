@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     #: DejaVuSans в системных каталогах Windows/Linux/macOS.
     pdf_font_path: str | None = None
 
+    # Фоновая выгрузка датасета (KI-050)
+    #: Каталог готовых JSONL-файлов; вне web-root (`web/dist`), поэтому
+    #: файлы не раздаются статикой — только через download-эндпоинт.
+    export_dir: str = "data/exports"
+    #: Сколько последних джоб показывать в админке.
+    export_jobs_page_size: int = 20
+
     # Engine
     stockfish_path: str = "/usr/bin/stockfish"
     stockfish_host: str | None = None
@@ -225,6 +232,10 @@ class Settings(BaseSettings):
     otel_exporter: str = "console"
     otel_service_name: str = "chessannotator"
     otel_exporter_otlp_endpoint: str = "http://localhost:4318"
+    #: OTLP-метрики (`/v1/metrics`): счётчики LLM для Grafana (T-109b).
+    otel_metrics_enabled: bool = True
+    #: Период экспорта метрик; короче — живее дашборд, больше сетевой шум.
+    otel_metrics_interval_ms: int = 15_000
 
     @property
     def database_url(self) -> str:

@@ -1,0 +1,108 @@
+# Observability-стек ChessAnnotator: Grafana + Tempo + Prometheus +
+# OpenTelemetry Collector (T-109b).
+#
+# Запуск (независимо от основного docker-compose.yml):
+#   docker compose -f docker-compose.observability.yml up -d
+#
+# Grafana:    http://localhost:3000  (admin / admin по умолчанию)
+# Prometheus: http://localhost:9090
+# Tempo:      http://localhost:3200 (API; трейсы — через Grafana Explore)
+# Collector:  localhost:4317 (gRPC), localhost:4318 (HTTP)
+#
+# Приложение на хосте отправляет OTLP на localhost:4318:
+#   OTEL_ENABLED=true
+#   OTEL_EXPORTER=otlp
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+# Если приложение в контейнере той же compose-сети — endpoint
+# http://otel-collector:4318 (см. README/GETTING_STARTED).
+name: chessannotator-observability
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:8889:8889"
+      - "127.0.0.1:8890:8890"
+      - "127.0.0.1:13133:13133"
+    depends_on:
+      - tempo
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol/config.yaml"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./deploy/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3200/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - otel-collector
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/chessannotator-observability.json
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  tempo_data:
+  prometheus_data:
+  grafana_data:
