@@ -1,141 +1,500 @@
-"""Каркас LoRA/QLoRA-дообучения Qwen-4B на `edits` (T-104).
+"""LoRA/QLoRA-дообучение Qwen-4B на `edits` (T-104).
 
-`--dry-run` не импортирует torch/transformers/peft: проверяет JSONL и
-печатает статистику. Реальный запуск требует GPU и зависимостей:
+Скрипт — часть пайплайна LoRA:
+
+1. `scripts/export_dataset.py --level club` — JSONL из `edits`;
+2. `scripts/train_lora.py --dry-run ...` — офлайн-проверка датасета и
+   гиперпараметров (не импортирует torch/transformers/peft);
+3. `scripts/train_lora.py ... --load-in-4bit` — реальный SFT на NVIDIA GPU
+   (RunPod/Colab; локально GPU нет, см. `docs/development/reports/
+   LORA_TRAINING.md`).
+
+Маскирование лосса: labels для `system`/`user` (и служебных токенов шаблона)
+равны `-100`, обучаются только токены `assistant`-ответа.
 
 ```bash
-pip install torch transformers peft datasets accelerate bitsandbytes
-python scripts/export_dataset.py --output data/lora_dataset.jsonl
-python scripts/train_lora.py --dry-run
+python scripts/export_dataset.py --level club --output data/lora_dataset.jsonl
+python scripts/train_lora.py --dry-run --dataset data/lora_dataset.jsonl
 python scripts/train_lora.py \
     --dataset data/lora_dataset.jsonl \
     --model Qwen/Qwen3-4B-Instruct-2507 \
-    --output-dir data/lora_adapter --load-in-4bit
+    --output-dir models/lora-club-v1 --load-in-4bit
 ```
 
-После обучения укажите `LORA_ADAPTER_PATH=data/lora_adapter` и запустите
-vLLM с `--lora-modules qwen-lora=data/lora_adapter`. Клиент использует
+После обучения укажите `LORA_ADAPTER_PATH=models/lora-club-v1` и запустите
+vLLM с `--lora-modules lora-club-v1=models/lora-club-v1`: клиент использует
 basename пути как имя adapter-модели (см. `Settings.lora_model`).
-LM Studio динамические LoRA через OpenAI API не поддерживает.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
+import importlib.util
 import json
+import platform
 import sys
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-__all__ = ["DEFAULT_DATASET", "main", "validate_dataset"]
+__all__ = [
+    "DEFAULT_DATASET",
+    "DEFAULT_MODEL",
+    "DEFAULT_OUTPUT",
+    "DEFAULT_TARGET_MODULES",
+    "SCHEMA_VERSION",
+    "DatasetStats",
+    "build_parser",
+    "collate_batch",
+    "dataset_stats",
+    "estimate_tokens",
+    "main",
+    "read_records",
+    "tokenize_example",
+    "validate_dataset",
+]
+
+#: Текущая версия схемы JSONL (см. `scripts/export_dataset.py`).
+SCHEMA_VERSION = 1
+#: Версии схемы, которые принимает обучение (совместимость).
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1})
+#: Обязательные роли и их строгий порядок в каждом примере.
+REQUIRED_ROLES = ("system", "user", "assistant")
+#: Лимит на длину одного сообщения в символах (защита от битых выгрузок).
+MAX_CONTENT_CHARS = 50_000
+#: Лимит на число сообщений в одном примере.
+MAX_MESSAGES = 16
 
 DEFAULT_DATASET = PROJECT_ROOT / "data" / "lora_dataset.jsonl"
-DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "lora_adapter"
+DEFAULT_OUTPUT = PROJECT_ROOT / "models" / "lora-club-v1"
+DEFAULT_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
+DEFAULT_TARGET_MODULES = ("q_proj", "v_proj")
+
+INSTALL_HINT = (
+    "Нет зависимостей для обучения LoRA: нужны torch, transformers, peft,\n"
+    "datasets, accelerate (и bitsandbytes для --load-in-4bit).\n"
+    "Локальный venv без NVIDIA GPU/CUDA обучение не запускает — это "
+    "ожидаемо.\n"
+    "Установите на GPU-машине (RunPod/Colab):\n"
+    "  pip install torch transformers peft datasets accelerate "
+    "bitsandbytes\n"
+    "Инструкция: docs/development/reports/LORA_TRAINING.md"
+)
+NO_CUDA_HINT = (
+    "CUDA/GPU не найдена: QLoRA-обучение требует NVIDIA GPU.\n"
+    "Локально доступен только офлайн-режим:\n"
+    "  python scripts/train_lora.py --dry-run --dataset <dataset.jsonl>\n"
+    "Запуск на GPU (RunPod/Colab и т.п.) и стоимость — в\n"
+    "docs/development/reports/LORA_TRAINING.md:\n"
+    "  python scripts/train_lora.py --dataset data/lora_dataset.jsonl \\\n"
+    "      --output-dir models/lora-club-v1 --load-in-4bit"
+)
+OOM_HINT = (
+    "CUDA OOM: не хватило видеопамяти. Варианты:\n"
+    "  - уменьшить --batch-size (например, до 1) и увеличить --grad-accum;\n"
+    "  - уменьшить --max-length (например, 1024);\n"
+    "  - включить --load-in-4bit (QLoRA; нужен bitsandbytes);\n"
+    "  - взять GPU с большей памятью (A100 40/80 GB, L40S, RTX 4090).\n"
+    "Инструкция: docs/development/reports/LORA_TRAINING.md"
+)
 
 
-def _validate_record(
-    index: int, record: Any
-) -> str | None:
+@dataclass(frozen=True, slots=True)
+class DatasetStats:
+    """Сводка по валидному датасету."""
+
+    records: int
+    levels: dict[str, int]
+    estimated_tokens: int
+    max_record_tokens: int
+
+
+# --- валидация JSONL --------------------------------------------------------
+
+
+def _validate_record(index: int, record: Any) -> str | None:
+    """Проверить одну запись; вернуть текст ошибки или None."""
     if not isinstance(record, Mapping):
         return f"строка {index}: не JSON-объект"
     messages = record.get("messages")
-    if not isinstance(messages, list) or len(messages) < 2:
-        return f"строка {index}: нет messages (user+assistant)"
-    roles = {
-        item.get("role")
-        for item in messages
-        if isinstance(item, Mapping)
-    }
-    if not {"user", "assistant"} <= roles:
-        return f"строка {index}: нужны роли user и assistant"
-    for item in messages:
+    if not isinstance(messages, list) or not messages:
+        return f"строка {index}: нет непустого messages"
+    if len(messages) > MAX_MESSAGES:
+        return (
+            f"строка {index}: сообщений {len(messages)} > лимита "
+            f"{MAX_MESSAGES}"
+        )
+    schema_version = record.get("schema_version")
+    if (
+        schema_version is not None
+        and schema_version not in SUPPORTED_SCHEMA_VERSIONS
+    ):
+        return (
+            f"строка {index}: неподдерживаемая schema_version="
+            f"{schema_version!r} (ожидается 1)"
+        )
+
+    roles: list[str] = []
+    for position, item in enumerate(messages, start=1):
         if not isinstance(item, Mapping):
-            return f"строка {index}: message не объект"
+            return f"строка {index}: сообщение {position} — не объект"
+        role = item.get("role")
+        if not isinstance(role, str) or role not in REQUIRED_ROLES:
+            return (
+                f"строка {index}: сообщение {position}: роль должна быть "
+                "system/user/assistant"
+            )
         content = item.get("content")
         if not isinstance(content, str) or not content.strip():
-            return f"строка {index}: пустой content"
+            return (
+                f"строка {index}: сообщение {position} ({role}): "
+                "пустой content"
+            )
+        if len(content) > MAX_CONTENT_CHARS:
+            return (
+                f"строка {index}: сообщение {position} ({role}): "
+                f"content длиннее {MAX_CONTENT_CHARS} символов"
+            )
+        roles.append(role)
+
+    if tuple(roles) != REQUIRED_ROLES:
+        actual = "→".join(roles)
+        return (
+            f"строка {index}: ожидается порядок system→user→assistant, "
+            f"получено {actual}"
+        )
     return None
 
 
-def validate_dataset(path: Path) -> tuple[int, list[str]]:
-    """Проверить JSONL; вернуть (число валидных строк, ошибки)."""
-    count = 0
+def _parse_lines(path: Path) -> tuple[list[tuple[int, Any]], list[str], int]:
+    """Прочитать непустые строки JSONL: (пары индекс/объект, ошибки, всего)."""
+    parsed: list[tuple[int, Any]] = []
     errors: list[str] = []
-    if not path.is_file():
-        return 0, [f"файл не найден: {path}"]
+    total = 0
     with path.open("r", encoding="utf-8") as stream:
         for index, line in enumerate(stream, start=1):
             if not line.strip():
                 continue
+            total += 1
             try:
-                record = json.loads(line)
+                parsed.append((index, json.loads(line)))
             except json.JSONDecodeError as exc:
                 errors.append(f"строка {index}: битый JSON: {exc.msg}")
-                continue
-            error = _validate_record(index, record)
-            if error:
-                errors.append(error)
-                continue
-            count += 1
+    return parsed, errors, total
+
+
+def validate_dataset(path: Path) -> tuple[int, list[str]]:
+    """Проверить JSONL; вернуть (число валидных строк, ошибки)."""
+    if not path.is_file():
+        return 0, [f"файл не найден: {path}"]
+    parsed, errors, _ = _parse_lines(path)
+    count = 0
+    for index, record in parsed:
+        error = _validate_record(index, record)
+        if error:
+            errors.append(error)
+            continue
+        count += 1
     return count, errors
 
 
-def _format_example(record: Mapping[str, Any], tokenizer: Any) -> str:
-    messages = record["messages"]
-    if hasattr(tokenizer, "apply_chat_template"):
-        return str(
-            tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False,
-            )
-        )
-    return "\n".join(
-        f"{item['role']}: {item['content']}" for item in messages
-    )
+def read_records(path: Path) -> list[dict[str, Any]]:
+    """Прочитать и провалидировать датасет для обучения.
 
-
-def train(args: argparse.Namespace) -> None:
-    """QLoRA-обучение; импорт тяжёлых библиотек только здесь."""
-    try:
-        import torch
-        from datasets import load_dataset
-        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-        from transformers import (
-            AutoModelForCausalLM,
-            AutoTokenizer,
-            BitsAndBytesConfig,
-            DataCollatorForLanguageModeling,
-            Trainer,
-            TrainingArguments,
-        )
-    except ImportError as exc:  # pragma: no cover - окружение без GPU
+    Raises:
+        SystemExit: файла нет, JSONL пуст или невалиден (код выхода 1).
+    """
+    if not path.is_file():
         raise SystemExit(
-            "Нет зависимостей LoRA: pip install torch transformers peft "
-            "datasets accelerate bitsandbytes"
-        ) from exc
+            f"Датасет не найден: {path}\n"
+            "Экспортируйте его из edits:\n"
+            "  python scripts/export_dataset.py --level club "
+            "--output data/lora_dataset.jsonl\n"
+            "Либо проверьте синтетический пример:\n"
+            "  python scripts/train_lora.py --dry-run --dataset "
+            "tests/fixtures/lora_sample.jsonl"
+        )
+    parsed, errors, total = _parse_lines(path)
+    records: list[dict[str, Any]] = []
+    for index, record in parsed:
+        error = _validate_record(index, record)
+        if error:
+            errors.append(error)
+            continue
+        records.append(dict(record))
+    if errors:
+        preview = "\n".join(f"  - {error}" for error in errors[:20])
+        hidden = len(errors) - 20
+        suffix = f"\n  ... и ещё {hidden} ошибок" if hidden > 0 else ""
+        raise SystemExit(
+            f"Датасет невалиден: {len(errors)} ошибок из {total} строк "
+            f"({path})\n{preview}{suffix}\n"
+            "Нужна строгая схема system→user→assistant; переэкспортируйте "
+            "датасет:\n"
+            "  python scripts/export_dataset.py --level club "
+            "--output data/lora_dataset.jsonl"
+        )
+    if not records:
+        raise SystemExit(
+            f"Датасет пуст: {path}\n"
+            "Сначала накопите правки редакторов (PATCH /v1/commentaries/{id}) "
+            "и экспортируйте их:\n"
+            "  python scripts/export_dataset.py --level club "
+            "--output data/lora_dataset.jsonl"
+        )
+    return records
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model, trust_remote_code=True
+
+def read_system_prompt(path: Path) -> str:
+    """Прочитать system-промпт из файла для `--system-prompt`."""
+    if not path.is_file():
+        raise SystemExit(f"Файл system-промпта не найден: {path}")
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise SystemExit(f"Пустой system-промпт: {path}")
+    return text
+
+
+def override_system_prompt(
+    records: Sequence[Mapping[str, Any]], system_prompt: str
+) -> list[dict[str, Any]]:
+    """Заменить system-сообщение во всех записях (новая версия промпта)."""
+    updated: list[dict[str, Any]] = []
+    for record in records:
+        messages = [dict(message) for message in record["messages"]]
+        messages[0]["content"] = system_prompt
+        new_record = dict(record)
+        new_record["messages"] = messages
+        updated.append(new_record)
+    return updated
+
+
+# --- статистика -------------------------------------------------------------
+
+
+def estimate_tokens(text: str) -> int:
+    """Грубая оценка числа токенов: ~4 символа на токен (+служебные)."""
+    return max(1, (len(text) + 3) // 4)
+
+
+def _record_tokens(record: Mapping[str, Any]) -> int:
+    return sum(
+        estimate_tokens(str(message["content"]))
+        for message in record["messages"]
     )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
+
+def dataset_stats(records: Sequence[Mapping[str, Any]]) -> DatasetStats:
+    """Посчитать записи, уровни и оценку токенов."""
+    levels = Counter(str(record.get("level", "unknown")) for record in records)
+    tokens = [_record_tokens(record) for record in records]
+    return DatasetStats(
+        records=len(records),
+        levels=dict(sorted(levels.items())),
+        estimated_tokens=sum(tokens),
+        max_record_tokens=max(tokens, default=0),
+    )
+
+
+def _format_hyperparams(args: argparse.Namespace) -> str:
+    effective_batch = args.batch_size * args.grad_accum
+    modules = ",".join(args.target_modules)
+    return (
+        "Гиперпараметры: "
+        f"model={args.model}, r={args.lora_r}, alpha={args.lora_alpha}, "
+        f"dropout={args.lora_dropout}, target_modules={modules}, "
+        f"epochs={args.epochs:g}, batch={args.batch_size}, "
+        f"grad_accum={args.grad_accum} (effective={effective_batch}), "
+        f"lr={args.lr:g}, max_length={args.max_length}, "
+        f"4bit={'да' if args.load_in_4bit else 'нет'}, "
+        f"gradient_checkpointing="
+        f"{'да' if args.gradient_checkpointing else 'нет'}"
+    )
+
+
+def _print_stats(stats: DatasetStats, args: argparse.Namespace) -> None:
+    print(f"Датасет: {args.dataset}")
+    print(f"Записей: {stats.records}")
+    levels = ", ".join(
+        f"{level}={count}" for level, count in stats.levels.items()
+    )
+    print(f"Распределение по уровням: {levels or 'нет данных'}")
+    average = stats.estimated_tokens // max(stats.records, 1)
+    print(
+        "Оценка токенов: "
+        f"всего ~{stats.estimated_tokens}, "
+        f"в среднем ~{average} на запись, "
+        f"максимум ~{stats.max_record_tokens}"
+    )
+    print(_format_hyperparams(args))
+
+
+# --- токенизация и маскирование labels --------------------------------------
+
+
+def _render_chat(
+    messages: Sequence[Mapping[str, Any]],
+    tokenizer: Any,
+    *,
+    add_generation_prompt: bool,
+) -> str:
+    """Отрендерить chat-шаблон (или простой текстовый фолбэк)."""
+    if hasattr(tokenizer, "apply_chat_template"):
+        rendered = tokenizer.apply_chat_template(
+            list(messages),
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+        )
+        return str(rendered)
+    lines = [
+        f"{message['role']}: {message['content']}" for message in messages
+    ]
+    if add_generation_prompt:
+        lines.append("assistant:")
+    return "\n".join(lines)
+
+
+def _encode_text(text: str, tokenizer: Any) -> list[int]:
+    encoded = tokenizer(text, add_special_tokens=False)
+    token_ids = encoded["input_ids"] if isinstance(encoded, Mapping) else encoded
+    return [int(token_id) for token_id in token_ids]
+
+
+def tokenize_example(
+    messages: Sequence[Mapping[str, Any]],
+    tokenizer: Any,
+    *,
+    max_length: int = 2048,
+) -> dict[str, list[int]]:
+    """Токенизировать диалог и замаскировать prompt в labels.
+
+    Prompt (system+user и служебные токены шаблона до ответа) получает
+    label `-100`; обучаются только токены `assistant`-ответа. Граница
+    определяется по общему префиксу токенов «prompt с generation prompt» и
+    «полный диалог», поэтому не зависит от конкретного chat-шаблона.
+
+    Raises:
+        ValueError: нет assistant-ответа, нет общего префикса или ответ
+            целиком не влез в `max_length`.
+    """
+    if max_length < 2:
+        raise ValueError("max_length должен быть ≥ 2")
+    if len(messages) < 2 or messages[-1].get("role") != "assistant":
+        raise ValueError("в записи нет assistant-ответа (последнее сообщение)")
+
+    prompt_text = _render_chat(
+        messages[:-1], tokenizer, add_generation_prompt=True
+    )
+    full_text = _render_chat(
+        messages, tokenizer, add_generation_prompt=False
+    )
+    prompt_ids = _encode_text(prompt_text, tokenizer)
+    full_ids = _encode_text(full_text, tokenizer)
+
+    prompt_length = 0
+    for prompt_token, full_token in zip(prompt_ids, full_ids, strict=False):
+        if prompt_token != full_token:
+            break
+        prompt_length += 1
+    if prompt_length == 0 and prompt_ids:
+        raise ValueError(
+            "токенизатор не даёт общего префикса prompt и полного диалога: "
+            "маскирование labels невозможно"
+        )
+
+    input_ids = full_ids[:max_length]
+    labels = ([-100] * prompt_length + full_ids[prompt_length:])[:max_length]
+    if not any(label != -100 for label in labels):
+        raise ValueError(
+            f"prompt занимает {prompt_length} токенов и не оставляет места "
+            f"assistant при max_length={max_length}; увеличьте --max-length"
+        )
+    return {"input_ids": input_ids, "labels": labels}
+
+
+def collate_batch(
+    features: Sequence[Mapping[str, Any]],
+    *,
+    pad_token_id: int,
+    label_pad_token_id: int = -100,
+) -> dict[str, list[list[int]]]:
+    """Собрать батч с right-padding; padding в labels — `-100`."""
+    if not features:
+        raise ValueError("пустой батч")
+    batch_length = max(len(feature["input_ids"]) for feature in features)
+    input_ids: list[list[int]] = []
+    attention_mask: list[list[int]] = []
+    labels: list[list[int]] = []
+    for feature in features:
+        tokens = [int(token) for token in feature["input_ids"]]
+        feature_labels = [int(label) for label in feature["labels"]]
+        padding = batch_length - len(tokens)
+        input_ids.append(tokens + [pad_token_id] * padding)
+        attention_mask.append([1] * len(tokens) + [0] * padding)
+        labels.append(feature_labels + [label_pad_token_id] * padding)
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels,
+    }
+
+
+def _is_oom_error(exc: BaseException) -> bool:
+    """Похоже ли исключение на CUDA OOM (OutOfMemoryError — подкласс RuntimeError)."""
+    return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
+
+
+# --- реальное обучение ------------------------------------------------------
+
+
+def _import_training_stack() -> Any:
+    """Импортировать тяжёлые библиотеки; вызывается только из `train()`."""
+    import torch
+    from datasets import Dataset
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        BitsAndBytesConfig,
+        Trainer,
+        TrainingArguments,
+    )
+
+    return SimpleNamespace(
+        torch=torch,
+        Dataset=Dataset,
+        LoraConfig=LoraConfig,
+        get_peft_model=get_peft_model,
+        prepare_model_for_kbit_training=prepare_model_for_kbit_training,
+        AutoModelForCausalLM=AutoModelForCausalLM,
+        AutoTokenizer=AutoTokenizer,
+        BitsAndBytesConfig=BitsAndBytesConfig,
+        Trainer=Trainer,
+        TrainingArguments=TrainingArguments,
+    )
+
+
+def _prepare_model(
+    args: argparse.Namespace, stack: Any, torch: Any, tokenizer: Any
+) -> Any:
+    """Загрузить базовую модель (опционально 4-bit) и навесить LoRA."""
     quantization_config = None
     if args.load_in_4bit:
-        quantization_config = BitsAndBytesConfig(
+        quantization_config = stack.BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
-
-    model = AutoModelForCausalLM.from_pretrained(
+    model = stack.AutoModelForCausalLM.from_pretrained(
         args.model,
         quantization_config=quantization_config,
         device_map="auto",
@@ -143,117 +502,284 @@ def train(args: argparse.Namespace) -> None:
         trust_remote_code=True,
     )
     if args.load_in_4bit:
-        model = prepare_model_for_kbit_training(model)
+        model = stack.prepare_model_for_kbit_training(model)
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+    model.config.use_cache = False
 
-    lora = LoraConfig(
+    lora = stack.LoraConfig(
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
-        lora_dropout=0.05,
+        lora_dropout=args.lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=[
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
-        ],
+        target_modules=list(args.target_modules),
     )
-    model = get_peft_model(model, lora)
-
-    dataset = load_dataset(
-        "json", data_files=str(args.dataset), split="train"
+    model = stack.get_peft_model(model, lora)
+    trainable, total = model.get_nb_trainable_parameters()
+    print(
+        f"LoRA: trainable={trainable:,} из {total:,} "
+        f"({100 * trainable / max(total, 1):.2f}%)"
     )
-    if args.limit:
-        dataset = dataset.select(range(min(args.limit, len(dataset))))
+    return model
 
-    def tokenize(example: Mapping[str, Any]) -> dict[str, Any]:
-        text = _format_example(example, tokenizer)
-        encoded = tokenizer(
-            text,
-            truncation=True,
-            max_length=args.max_length,
-            padding=False,
+
+def train(
+    args: argparse.Namespace, records: Sequence[Mapping[str, Any]]
+) -> None:
+    """QLoRA-обучение; импорт тяжёлых библиотек — только здесь."""
+    try:
+        stack = _import_training_stack()
+    except ImportError as exc:
+        raise SystemExit(INSTALL_HINT) from exc
+
+    torch = stack.torch
+    if not torch.cuda.is_available():
+        raise SystemExit(NO_CUDA_HINT)
+    print(
+        f"GPU: {torch.cuda.get_device_name(0)}; "
+        f"CUDA {torch.version.cuda}; "
+        f"bf16={'да' if torch.cuda.is_bf16_supported() else 'нет'}"
+    )
+
+    tokenizer = stack.AutoTokenizer.from_pretrained(
+        args.model, trust_remote_code=True
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    try:
+        model = _prepare_model(args, stack, torch, tokenizer)
+    except RuntimeError as exc:
+        if _is_oom_error(exc):
+            raise SystemExit(OOM_HINT) from exc
+        raise
+
+    dataset = stack.Dataset.from_list([dict(record) for record in records])
+
+    def tokenize(example: Mapping[str, Any]) -> dict[str, list[int]]:
+        return tokenize_example(
+            example["messages"], tokenizer, max_length=args.max_length
         )
-        encoded["labels"] = list(encoded["input_ids"])
-        return encoded
 
-    tokenized = dataset.map(
-        tokenize,
-        remove_columns=dataset.column_names,
-        desc="tokenize",
-    )
-    training_args = TrainingArguments(
+    try:
+        tokenized = dataset.map(
+            tokenize,
+            remove_columns=dataset.column_names,
+            desc="tokenize",
+        )
+    except ValueError as exc:
+        raise SystemExit(
+            f"Не удалось подготовить датасет: {exc}\n"
+            "Проверьте --max-length и содержимое JSONL."
+        ) from exc
+
+    training_args = stack.TrainingArguments(
         output_dir=str(args.output_dir),
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.lr,
-        logging_steps=10,
+        logging_steps=args.logging_steps,
         save_strategy="epoch",
         bf16=torch.cuda.is_bf16_supported(),
-        report_to="none",
+        fp16=False,
+        gradient_checkpointing=args.gradient_checkpointing,
+        optim="paged_adamw_8bit" if args.load_in_4bit else "adamw_torch",
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.03,
+        seed=args.seed,
+        report_to=[],
         remove_unused_columns=False,
     )
-    trainer = Trainer(
+    collator = functools.partial(
+        collate_batch, pad_token_id=tokenizer.pad_token_id
+    )
+    trainer = stack.Trainer(
         model=model,
         args=training_args,
         train_dataset=tokenized,
-        data_collator=DataCollatorForLanguageModeling(
-            tokenizer=tokenizer, mlm=False
-        ),
+        data_collator=collator,
     )
-    trainer.train()
+    try:
+        trainer.train()
+    except RuntimeError as exc:
+        if _is_oom_error(exc):
+            raise SystemExit(OOM_HINT) from exc
+        raise
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(args.output_dir))
     tokenizer.save_pretrained(str(args.output_dir))
     print(f"LoRA-адаптер сохранён: {args.output_dir}")
+    print(
+        "Подключение: LORA_ADAPTER_PATH="
+        f"{args.output_dir} и vLLM --lora-modules "
+        f"{args.output_dir.name}={args.output_dir}"
+    )
 
 
-def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+# --- CLI --------------------------------------------------------------------
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"ожидается целое число, получено {value!r}"
+        ) from exc
+    if number < 1:
+        raise argparse.ArgumentTypeError("должно быть ≥ 1")
+    return number
+
+
+def _module_list(value: str) -> tuple[str, ...]:
+    modules = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not modules:
+        raise argparse.ArgumentTypeError("пустой список target modules")
+    return modules
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="QLoRA-дообучение Qwen-4B на edits (T-104)."
+        description=(
+            "LoRA/QLoRA-дообучение Qwen-4B на edits (T-104); "
+            "--dry-run работает офлайн без torch."
+        )
     )
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
-        "--model", default="Qwen/Qwen3-4B-Instruct-2507"
+        "--system-prompt",
+        type=Path,
+        default=None,
+        help="txt-файл: заменить system-сообщение во всех записях",
+    )
+    parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=None,
+        help="взять первые N записей",
     )
     parser.add_argument("--epochs", type=float, default=3.0)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--grad-accum", type=int, default=8)
+    parser.add_argument("--batch-size", type=_positive_int, default=1)
+    parser.add_argument("--grad-accum", type=_positive_int, default=8)
     parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--max-length", type=int, default=2048)
-    parser.add_argument("--lora-r", type=int, default=16)
-    parser.add_argument("--lora-alpha", type=int, default=32)
-    parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--load-in-4bit", action="store_true")
+    parser.add_argument("--max-length", type=_positive_int, default=2048)
+    parser.add_argument("--lora-r", type=_positive_int, default=16)
+    parser.add_argument("--lora-alpha", type=_positive_int, default=32)
+    parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument(
+        "--target-modules",
+        type=_module_list,
+        default=DEFAULT_TARGET_MODULES,
+        help="модули через запятую (по умолчанию q_proj,v_proj)",
+    )
+    parser.add_argument("--logging-steps", type=_positive_int, default=10)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--gradient-checkpointing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="экономить VRAM за счёт скорости (по умолчанию включено)",
+    )
+    quantization = parser.add_mutually_exclusive_group()
+    quantization.add_argument(
+        "--load-in-4bit",
+        dest="load_in_4bit",
+        action="store_true",
+        help="QLoRA: базовая модель в 4-bit (bitsandbytes)",
+    )
+    quantization.add_argument(
+        "--no-4bit",
+        dest="load_in_4bit",
+        action="store_false",
+        help="отключить 4-bit (нужен больший объём VRAM)",
+    )
+    parser.set_defaults(load_in_4bit=True)
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="только проверить датасет, без импорта torch/transformers",
+        help="только проверить датасет и напечатать статистику, без torch",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--check-env",
+        action="store_true",
+        help="показать диагностику окружения (python, torch, CUDA) и выйти",
+    )
+    return parser
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    return build_parser().parse_args(argv)
+
+
+def _print_env_check() -> None:
+    print("Окружение LoRA:")
+    print(f"  python: {platform.python_version()} ({sys.executable})")
+    print(f"  platform: {platform.platform()}")
+    packages = (
+        "torch",
+        "transformers",
+        "peft",
+        "datasets",
+        "accelerate",
+        "bitsandbytes",
+        "trl",
+    )
+    for package in packages:
+        installed = importlib.util.find_spec(package) is not None
+        print(f"  {package}: {'установлен' if installed else 'НЕТ'}")
+    if importlib.util.find_spec("torch") is None:
+        print("  cuda: нет (torch не установлен)")
+        print("  вывод: локально доступен только --dry-run")
+        return
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover - битая установка torch
+        print(f"  cuda: ошибка импорта torch: {exc}")
+        return
+    if torch.cuda.is_available():
+        print("  cuda: да")
+        print(f"  device: {torch.cuda.get_device_name(0)}")
+        print(f"  bf16: {'да' if torch.cuda.is_bf16_supported() else 'нет'}")
+    else:
+        print("  cuda: НЕТ (GPU не видна)")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    count, errors = validate_dataset(args.dataset)
-    print(f"Записей: {count}, ошибок: {len(errors)}")
-    for error in errors[:20]:
-        print(f"  - {error}", file=sys.stderr)
-    if errors:
-        print("Датасет невалиден; обучение не запущено.", file=sys.stderr)
-        return 1
-    if count == 0:
-        print("Датасет пуст; сначала экспортируйте edits.", file=sys.stderr)
-        return 1
-    if args.dry_run:
-        print("DRY-RUN OK: формат JSONL корректен, обучение не запускалось.")
+    if args.check_env:
+        _print_env_check()
         return 0
-    train(args)
+
+    records = read_records(args.dataset)
+    if args.limit is not None:
+        if args.limit < len(records):
+            print(
+                f"Ограничение --limit: используется {args.limit} "
+                f"из {len(records)} записей"
+            )
+        records = records[: args.limit]
+    if args.system_prompt is not None:
+        system_prompt = read_system_prompt(args.system_prompt)
+        records = override_system_prompt(records, system_prompt)
+        print(f"System-промпт переопределён из {args.system_prompt}")
+
+    stats = dataset_stats(records)
+    _print_stats(stats, args)
+    if args.dry_run:
+        print(
+            "DRY-RUN OK: схема JSONL корректна, статистика посчитана, "
+            "обучение не запускалось."
+        )
+        return 0
+
+    train(args, records)
     return 0
 
 

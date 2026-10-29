@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import httpx
+import structlog
 
 from app.config import Settings, get_settings
 from app.errors import InvalidLevelError, LLMNotConfiguredError
@@ -24,6 +25,8 @@ from app.llm.base import BaseLLMClient
 from app.llm.openai_client import OpenAICompatibleClient
 
 __all__ = ["LOCAL_LEVELS", "get_llm_client", "resolve_llm_provider"]
+
+logger = structlog.get_logger(__name__)
 
 #: Уровни, которые обслуживает локальная LM Studio.
 LOCAL_LEVELS = frozenset({"beginner", "club"})
@@ -68,10 +71,26 @@ def get_llm_client(
     provider = resolve_llm_provider(level)
 
     if provider == "lmstudio":
+        # T-104: если LoRA-адаптер существует, vLLM принимает его basename
+        # как имя модели (нужен запуск с --lora-modules). Если LORA_ADAPTER_PATH
+        # задан, но пути нет — работаем базовой моделью и явно предупреждаем.
+        if cfg.lora_adapter_available:
+            logger.info(
+                "llm_lora_adapter_enabled",
+                level=level,
+                adapter_path=cfg.lora_adapter_path,
+                model=cfg.lora_model,
+            )
+        elif cfg.lora_adapter_dir is not None:
+            logger.warning(
+                "llm_lora_adapter_unavailable",
+                level=level,
+                adapter_path=cfg.lora_adapter_path,
+                model=cfg.vllm_model,
+                reason="path missing or adapter_config.json not found",
+            )
         return OpenAICompatibleClient(
             base_url=cfg.vllm_base_url,
-            # T-104: если задан LoRA-адаптер, vLLM принимает его basename
-            # как имя модели (нужен запуск с --lora-modules).
             model=cfg.lora_model,
             api_key=cfg.vllm_api_key,
             provider_name="lmstudio",

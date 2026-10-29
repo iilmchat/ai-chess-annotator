@@ -141,14 +141,41 @@ class Settings(BaseSettings):
         return {item.strip() for item in self.pro_ips.split(",") if item.strip()}
 
     @property
+    def lora_adapter_dir(self) -> Path | None:
+        """Нормализованный путь к адаптеру или None, если путь не задан."""
+        raw = (self.lora_adapter_path or "").strip()
+        if not raw:
+            return None
+        normalized = raw.rstrip("/\\")
+        return Path(normalized) if normalized else None
+
+    @property
+    def lora_adapter_available(self) -> bool:
+        """Существует ли адаптер: файл или каталог с `adapter_config.json`.
+
+        Проверка нарочно консервативная: каталог без `adapter_config.json` —
+        это не готовый PEFT-адаптер (например, недокачанный или созданный до
+        `save_pretrained`), и запрашивать его у vLLM нельзя.
+        """
+        adapter = self.lora_adapter_dir
+        if adapter is None:
+            return False
+        if adapter.is_file():
+            return True
+        return adapter.is_dir() and (adapter / "adapter_config.json").is_file()
+
+    @property
     def lora_model(self) -> str:
-        """Имя модели для запроса: LoRA-adapter basename или базовая модель."""
-        if not self.lora_adapter_path:
-            return self.vllm_model
-        adapter = Path(
-            self.lora_adapter_path.rstrip("/\\")
-        ).name
-        return adapter or self.vllm_model
+        """Имя модели для запроса: LoRA-adapter basename или базовая модель.
+
+        Basename возвращается только если адаптер реально существует (файл
+        или каталог с `adapter_config.json`): иначе vLLM ответил бы «model
+        not found», а базовую модель по-прежнему можно использовать.
+        """
+        adapter = self.lora_adapter_dir
+        if adapter is not None and self.lora_adapter_available:
+            return adapter.name or self.vllm_model
+        return self.vllm_model
 
     # Observability
     otel_enabled: bool = False

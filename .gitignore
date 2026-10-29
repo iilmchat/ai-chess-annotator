@@ -19,6 +19,11 @@ web/tsconfig.tsbuildinfo
 pnpm-lock.yaml.bak
 .tmp/
 
+# Playwright (T-036b): артефакты E2E не коммитятся
+web/test-results/
+web/playwright-report/
+web/blob-report/
+
 # Env
 .env
 .env.local
@@ -33,3 +38,6 @@ pnpm-lock.yaml.bak
 # Local data
 data/
 !data/.gitkeep
+
+# LoRA-адаптеры (T-104): локальные артефакты обучения, не коммитятся
+models/

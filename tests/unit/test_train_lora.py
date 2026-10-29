@@ -1,11 +1,39 @@
-"""Валидация JSONL для `train_lora.py --dry-run` (T-104)."""
+"""LoRA-пайплайн: валидатор, маскирование labels, CLI (T-104)."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
-from scripts.train_lora import validate_dataset
+import pytest
+
+from scripts import train_lora
+from scripts.train_lora import (
+    DEFAULT_OUTPUT,
+    DEFAULT_TARGET_MODULES,
+    SCHEMA_VERSION,
+    build_parser,
+    collate_batch,
+    dataset_stats,
+    estimate_tokens,
+    main,
+    override_system_prompt,
+    read_records,
+    tokenize_example,
+    train,
+    validate_dataset,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FIXTURE = REPO_ROOT / "tests" / "fixtures" / "lora_sample.jsonl"
+
+MESSAGES: list[dict[str, str]] = [
+    {"role": "system", "content": "sys"},
+    {"role": "user", "content": "u"},
+    {"role": "assistant", "content": "a"},
+]
 
 
 def _write(path: Path, lines: list[object]) -> None:
@@ -14,18 +42,164 @@ def _write(path: Path, lines: list[object]) -> None:
             stream.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
+def _record(
+    roles: list[str] | None = None,
+    *,
+    level: str = "club",
+    schema_version: int = SCHEMA_VERSION,
+) -> dict[str, Any]:
+    roles = roles or ["system", "user", "assistant"]
+    return {
+        "messages": [
+            {"role": role, "content": f"текст {role}"} for role in roles
+        ],
+        "level": level,
+        "schema_version": schema_version,
+    }
+
+
+class _FakeTokenizer:
+    """Посимвольный tokenizer с префиксным chat-шаблоном (без torch)."""
+
+    def apply_chat_template(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        tokenize: bool = False,
+        add_generation_prompt: bool = False,
+    ) -> str:
+        assert tokenize is False
+        parts = [
+            f"<{message['role']}>{message['content']}</{message['role']}>"
+            for message in messages
+        ]
+        if add_generation_prompt:
+            parts.append("<assistant>")
+        return "".join(parts)
+
+    def __call__(
+        self, text: str, *, add_special_tokens: bool = False
+    ) -> dict[str, list[int]]:
+        assert add_special_tokens is False
+        return {"input_ids": [ord(char) for char in text]}
+
+
+class _NoTemplateTokenizer:
+    """Tokenizer без chat-шаблона: проверяет текстовый фолбэк."""
+
+    def __call__(
+        self, text: str, *, add_special_tokens: bool = False
+    ) -> dict[str, list[int]]:
+        return {"input_ids": [ord(char) for char in text]}
+
+
+# --- валидация --------------------------------------------------------------
+
+
 def test_valid_dataset(tmp_path: Path) -> None:
     path = tmp_path / "dataset.jsonl"
-    _write(
-        path,
-        [
+    _write(path, [_record(), _record(level="beginner")])
+
+    count, errors = validate_dataset(path)
+
+    assert count == 2
+    assert errors == []
+
+
+def test_legacy_dataset_without_system_is_invalid(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.jsonl"
+    _write(path, [_record(["user", "assistant"])])
+
+    count, errors = validate_dataset(path)
+
+    assert count == 0
+    assert len(errors) == 1
+    assert "system→user→assistant" in errors[0]
+
+
+@pytest.mark.parametrize(
+    ("record", "fragment"),
+    [
+        ({"messages": []}, "messages"),
+        ({"messages": "system"}, "messages"),
+        (
             {
                 "messages": [
-                    {"role": "user", "content": "было"},
-                    {"role": "assistant", "content": "стало"},
+                    {"role": "system", "content": "s"},
+                    {"role": "assistant", "content": "a"},
+                    {"role": "user", "content": "u"},
                 ]
-            }
-        ],
+            },
+            "system→user→assistant",
+        ),
+        (
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "  "},
+                    {"role": "assistant", "content": "a"},
+                ]
+            },
+            "пустой content",
+        ),
+        (
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": "a"},
+                ],
+                "schema_version": 2,
+            },
+            "schema_version",
+        ),
+        (
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "critic", "content": "a"},
+                ]
+            },
+            "роль",
+        ),
+    ],
+)
+def test_invalid_rows_are_reported(
+    tmp_path: Path, record: object, fragment: str
+) -> None:
+    path = tmp_path / "dataset.jsonl"
+    _write(path, [record])
+
+    count, errors = validate_dataset(path)
+
+    assert count == 0
+    assert len(errors) == 1
+    assert fragment in errors[0]
+
+
+def test_broken_json_is_reported(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.jsonl"
+    path.write_text('{"messages": [}\n', encoding="utf-8")
+
+    count, errors = validate_dataset(path)
+
+    assert count == 0
+    assert "битый JSON" in errors[0]
+
+
+def test_missing_file_is_error(tmp_path: Path) -> None:
+    count, errors = validate_dataset(tmp_path / "nope.jsonl")
+
+    assert count == 0
+    assert errors
+
+
+def test_blank_lines_are_skipped(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.jsonl"
+    path.write_text(
+        json.dumps(_record(), ensure_ascii=False) + "\n\n",
+        encoding="utf-8",
     )
 
     count, errors = validate_dataset(path)
@@ -34,29 +208,448 @@ def test_valid_dataset(tmp_path: Path) -> None:
     assert errors == []
 
 
-def test_invalid_rows_are_reported(tmp_path: Path) -> None:
+# --- fixture и read_records -------------------------------------------------
+
+
+def test_sample_fixture_matches_schema() -> None:
+    count, errors = validate_dataset(FIXTURE)
+
+    assert errors == []
+    assert count >= 3
+    records = read_records(FIXTURE)
+    assert len(records) == count
+    for record in records:
+        assert [message["role"] for message in record["messages"]] == [
+            "system",
+            "user",
+            "assistant",
+        ]
+        assert record["level"] == "club"
+        assert record["schema_version"] == SCHEMA_VERSION
+
+
+def test_read_records_missing_file_explains_export() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        read_records(FIXTURE.parent / "absent.jsonl")
+
+    message = str(exc_info.value)
+    assert "не найден" in message
+    assert "export_dataset.py" in message
+
+
+def test_read_records_empty_file_is_error(tmp_path: Path) -> None:
+    path = tmp_path / "empty.jsonl"
+    path.write_text("", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc_info:
+        read_records(path)
+
+    assert "пуст" in str(exc_info.value)
+
+
+def test_read_records_invalid_schema_is_error(tmp_path: Path) -> None:
     path = tmp_path / "dataset.jsonl"
-    _write(
-        path,
-        [
-            {"messages": []},
-            {
-                "messages": [
-                    {"role": "user", "content": "x"},
-                    {"role": "assistant", "content": " "},
-                ]
-            },
-        ],
+    _write(path, [_record(["user", "assistant"])])
+
+    with pytest.raises(SystemExit) as exc_info:
+        read_records(path)
+
+    message = str(exc_info.value)
+    assert "невалиден" in message
+    assert "system→user→assistant" in message
+
+
+def test_read_system_prompt_requires_existing_file(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="не найден"):
+        train_lora.read_system_prompt(tmp_path / "absent.txt")
+
+
+def test_read_system_prompt_rejects_empty_file(tmp_path: Path) -> None:
+    prompt = tmp_path / "system.txt"
+    prompt.write_text("   \n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="Пустой"):
+        train_lora.read_system_prompt(prompt)
+
+
+# --- маскирование labels ----------------------------------------------------
+
+
+def test_tokenize_masks_system_and_user() -> None:
+    tokenizer = _FakeTokenizer()
+
+    encoded = tokenize_example(MESSAGES, tokenizer, max_length=512)
+
+    prompt_text = tokenizer.apply_chat_template(
+        MESSAGES[:-1], add_generation_prompt=True
+    )
+    full_text = tokenizer.apply_chat_template(
+        MESSAGES, add_generation_prompt=False
+    )
+    assert encoded["input_ids"] == [ord(char) for char in full_text]
+    assert len(encoded["labels"]) == len(encoded["input_ids"])
+    prompt_length = len(prompt_text)
+    assert encoded["labels"][:prompt_length] == [-100] * prompt_length
+    assistant_labels = encoded["labels"][prompt_length:]
+    assert assistant_labels == [ord(char) for char in "a</assistant>"]
+    assert all(label != -100 for label in assistant_labels)
+
+
+def test_tokenize_truncates_by_max_length() -> None:
+    tokenizer = _FakeTokenizer()
+    prompt_length = len(
+        tokenizer.apply_chat_template(
+            MESSAGES[:-1], add_generation_prompt=True
+        )
     )
 
-    count, errors = validate_dataset(path)
+    encoded = tokenize_example(
+        MESSAGES, tokenizer, max_length=prompt_length + 3
+    )
 
-    assert count == 0
-    assert len(errors) == 2
+    assert len(encoded["input_ids"]) == prompt_length + 3
+    assert len(encoded["labels"]) == prompt_length + 3
+    assert encoded["labels"][:prompt_length] == [-100] * prompt_length
+    assert all(label != -100 for label in encoded["labels"][prompt_length:])
 
 
-def test_missing_file_is_error(tmp_path: Path) -> None:
-    count, errors = validate_dataset(tmp_path / "nope.jsonl")
+def test_tokenize_rejects_prompt_longer_than_max_length() -> None:
+    tokenizer = _FakeTokenizer()
+    prompt_length = len(
+        tokenizer.apply_chat_template(
+            MESSAGES[:-1], add_generation_prompt=True
+        )
+    )
 
-    assert count == 0
-    assert errors
+    with pytest.raises(ValueError, match="max_length"):
+        tokenize_example(MESSAGES, tokenizer, max_length=prompt_length)
+
+
+def test_tokenize_requires_assistant_answer() -> None:
+    with pytest.raises(ValueError, match="assistant"):
+        tokenize_example(MESSAGES[:-1], _FakeTokenizer())
+
+
+def test_tokenize_works_without_chat_template() -> None:
+    encoded = tokenize_example(MESSAGES, _NoTemplateTokenizer())
+
+    full_text = "system: sys\nuser: u\nassistant: a"
+    prompt_text = "system: sys\nuser: u\nassistant:"
+    assert encoded["input_ids"] == [ord(char) for char in full_text]
+    assert encoded["labels"][: len(prompt_text)] == [-100] * len(prompt_text)
+
+
+def test_collate_batch_pads_right_and_masks_padding() -> None:
+    batch = collate_batch(
+        [
+            {"input_ids": [1, 2], "labels": [-100, 5]},
+            {"input_ids": [3], "labels": [7]},
+        ],
+        pad_token_id=0,
+    )
+
+    assert batch == {
+        "input_ids": [[1, 2], [3, 0]],
+        "attention_mask": [[1, 1], [1, 0]],
+        "labels": [[-100, 5], [7, -100]],
+    }
+
+
+def test_collate_batch_rejects_empty_batch() -> None:
+    with pytest.raises(ValueError, match="пустой батч"):
+        collate_batch([], pad_token_id=0)
+
+
+# --- статистика и system-prompt ---------------------------------------------
+
+
+def test_estimate_tokens_and_stats() -> None:
+    assert estimate_tokens("") == 1
+    assert estimate_tokens("abcd") == 1
+    assert estimate_tokens("a" * 40) == 10
+
+    records = [_record(), _record(level="beginner"), {"messages": []}]
+    stats = dataset_stats(records[:2])
+
+    assert stats.records == 2
+    assert stats.levels == {"beginner": 1, "club": 1}
+    assert stats.estimated_tokens > 0
+    assert stats.max_record_tokens >= stats.estimated_tokens // 2
+
+
+def test_override_system_prompt_replaces_only_system() -> None:
+    records = [read_records(FIXTURE)[0]]
+    original = records[0]["messages"]
+
+    updated = override_system_prompt(records, "новый system")
+
+    assert updated[0]["messages"][0] == {
+        "role": "system",
+        "content": "новый system",
+    }
+    assert updated[0]["messages"][1:] == original[1:]
+    # исходные записи не мутируются
+    assert records[0]["messages"][0]["content"] != "новый system"
+
+
+# --- гиперпараметры и model preparation -------------------------------------
+
+
+def test_parser_defaults() -> None:
+    args = build_parser().parse_args(["--dataset", "dataset.jsonl"])
+
+    assert args.dataset == Path("dataset.jsonl")
+    assert args.output_dir == DEFAULT_OUTPUT
+    assert DEFAULT_OUTPUT.name == "lora-club-v1"
+    assert args.epochs == 3.0
+    assert args.lr == 2e-4
+    assert args.lora_r == 16
+    assert args.lora_alpha == 32
+    assert args.target_modules == DEFAULT_TARGET_MODULES
+    assert args.max_length == 2048
+    assert args.load_in_4bit is True
+    assert args.gradient_checkpointing is True
+    assert args.dry_run is False
+
+
+def test_parser_no_4bit_turns_quantization_off() -> None:
+    args = build_parser().parse_args(["--no-4bit"])
+
+    assert args.load_in_4bit is False
+
+
+def test_parser_rejects_conflicting_quantization_flags() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["--load-in-4bit", "--no-4bit"])
+
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_parser_rejects_non_positive_limit(value: str) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["--limit", value])
+
+    assert exc_info.value.code == 2
+
+
+class _FakeBitsAndBytesConfig:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+
+class _FakeLoraConfig:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+
+class _FakeBaseModel:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(use_cache=True)
+        self.checkpointing_enabled = False
+        self.require_grads_enabled = False
+
+    def gradient_checkpointing_enable(self) -> None:
+        self.checkpointing_enabled = True
+
+    def enable_input_require_grads(self) -> None:
+        self.require_grads_enabled = True
+
+
+class _FakePeftModel:
+    def __init__(self, base_model: _FakeBaseModel, lora: _FakeLoraConfig) -> None:
+        self.base_model = base_model
+        self.lora = lora
+
+    def get_nb_trainable_parameters(self) -> tuple[int, int]:
+        return 10, 100
+
+
+def _fake_stack() -> Any:
+    class _AutoModel:
+        @staticmethod
+        def from_pretrained(*args: Any, **kwargs: Any) -> _FakeBaseModel:
+            _AutoModel.kwargs = kwargs
+            return _FakeBaseModel()
+
+    def _prepare(model: _FakeBaseModel) -> _FakeBaseModel:
+        return model
+
+    return SimpleNamespace(
+        torch=SimpleNamespace(bfloat16="bfloat16"),
+        AutoModelForCausalLM=_AutoModel,
+        BitsAndBytesConfig=_FakeBitsAndBytesConfig,
+        prepare_model_for_kbit_training=_prepare,
+        LoraConfig=_FakeLoraConfig,
+        get_peft_model=_FakePeftModel,
+    )
+
+
+def test_prepare_model_applies_lora_hyperparameters(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = build_parser().parse_args(["--no-4bit"])
+
+    model = train_lora._prepare_model(
+        args, _fake_stack(), SimpleNamespace(bfloat16="bfloat16"), object()
+    )
+
+    assert isinstance(model, _FakePeftModel)
+    assert model.lora.kwargs == {
+        "r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.05,
+        "bias": "none",
+        "task_type": "CAUSAL_LM",
+        "target_modules": ["q_proj", "v_proj"],
+    }
+    assert model.base_model.checkpointing_enabled is True
+    assert model.base_model.require_grads_enabled is True
+    assert model.base_model.config.use_cache is False
+    assert "trainable=10" in capsys.readouterr().out
+
+
+def test_prepare_model_passes_4bit_quantization_config() -> None:
+    captured: dict[str, Any] = {}
+
+    def _from_pretrained(*args: Any, **kwargs: Any) -> _FakeBaseModel:
+        captured.update(kwargs)
+        return _FakeBaseModel()
+
+    stack = _fake_stack()
+    stack.AutoModelForCausalLM = SimpleNamespace(
+        from_pretrained=_from_pretrained
+    )
+    args = build_parser().parse_args([])
+
+    train_lora._prepare_model(
+        args, stack, SimpleNamespace(bfloat16="bfloat16"), object()
+    )
+
+    quantization = captured["quantization_config"]
+    assert isinstance(quantization, _FakeBitsAndBytesConfig)
+    assert quantization.kwargs["load_in_4bit"] is True
+    assert quantization.kwargs["bnb_4bit_quant_type"] == "nf4"
+
+
+def test_oom_detection() -> None:
+    assert train_lora._is_oom_error(RuntimeError("CUDA out of memory"))
+    assert not train_lora._is_oom_error(RuntimeError("other failure"))
+    assert not train_lora._is_oom_error(ValueError("CUDA out of memory"))
+
+
+# --- ошибки окружения -------------------------------------------------------
+
+
+def test_train_without_dependencies_exits_with_install_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail() -> Any:
+        raise ImportError("No module named 'torch'")
+
+    monkeypatch.setattr(train_lora, "_import_training_stack", _fail)
+    args = build_parser().parse_args(["--dataset", "dataset.jsonl"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        train(args, [])
+
+    message = str(exc_info.value)
+    assert "torch" in message
+    assert "pip install" in message
+    assert "LORA_TRAINING.md" in message
+
+
+def test_train_without_cuda_exits_with_runpod_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_stack = SimpleNamespace(
+        torch=SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False)
+        )
+    )
+    monkeypatch.setattr(
+        train_lora, "_import_training_stack", lambda: fake_stack
+    )
+    args = build_parser().parse_args(["--dataset", "dataset.jsonl"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        train(args, [])
+
+    message = str(exc_info.value)
+    assert "CUDA" in message
+    assert "RunPod" in message
+    assert "--dry-run" in message
+
+
+# --- CLI --------------------------------------------------------------------
+
+
+def test_main_dry_run_prints_statistics(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(
+        ["--dry-run", "--dataset", str(FIXTURE), "--limit", "2"]
+    )
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Записей: 2" in captured.out
+    assert "club=2" in captured.out
+    assert "r=16" in captured.out
+    assert "alpha=32" in captured.out
+    assert "4bit=да" in captured.out
+    assert "DRY-RUN OK" in captured.out
+
+
+def test_main_check_env_returns_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["--check-env"]) == 0
+
+    captured = capsys.readouterr()
+    assert "torch:" in captured.out
+    assert "cuda:" in captured.out
+
+
+def test_main_dry_run_with_system_prompt_override(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    prompt = tmp_path / "system.txt"
+    prompt.write_text("новый system", encoding="utf-8")
+
+    code = main(
+        [
+            "--dry-run",
+            "--dataset",
+            str(FIXTURE),
+            "--limit",
+            "1",
+            "--system-prompt",
+            str(prompt),
+            "--no-4bit",
+        ]
+    )
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "System-промпт переопределён" in captured.out
+    assert "4bit=нет" in captured.out
+
+
+def test_main_dry_run_reports_invalid_dataset(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "dataset.jsonl"
+    _write(path, [_record(["user", "assistant"])])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--dry-run", "--dataset", str(path)])
+
+    assert "system→user→assistant" in str(exc_info.value)
+
+
+def test_help_exits_zero() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["--help"])
+
+    assert exc_info.value.code == 0
