@@ -1,169 +1,54 @@
 import { create } from "zustand";
 
+import { refreshSession } from "../api";
 import type { AuthTokens, AuthUser } from "../types";
 
-/** Ключ localStorage с сохранённой сессией. */
-export const AUTH_STORAGE_KEY = "chess.auth";
-
-export interface PersistedAuth {
+/**
+ * Сессия — только в памяти (KI-037): access-токен и профиль не пишутся в
+ * localStorage, а refresh-токен живёт в HttpOnly cookie и JS его не видит.
+ * После перезагрузки страницы сессия восстанавливается через
+ * `bootstrapAuth()` → `POST /auth/refresh`.
+ */
+export interface AuthState {
   accessToken: string | null;
-  refreshToken: string | null;
   user: AuthUser | null;
-}
-
-export interface AuthState extends PersistedAuth {
   /** Зеркало `Boolean(accessToken)` для удобных подписок. */
   isAuthenticated: boolean;
+  /** Пока bootstrap через `/auth/refresh` не завершён — AuthGate показывает loading. */
+  initializing: boolean;
   setSession: (tokens: AuthTokens, user?: AuthUser | null) => void;
   setUser: (user: AuthUser) => void;
   clearSession: () => void;
-}
-
-/**
- * localStorage может отсутствовать (Vitest/node, приватный режим, SSR).
- * Обращаемся к `window.localStorage` в браузере и к глобальному `localStorage`
- * в тестах, где window не объявлен.
- */
-function getAuthStorage(): Storage | null {
-  try {
-    if (typeof window !== "undefined") {
-      const candidate = (window as Window & { localStorage?: Storage })
-        .localStorage;
-      if (candidate) {
-        return candidate;
-      }
-    }
-  } catch {
-    // Доступ к localStorage запрещён (iframe без allow-same-origin).
-  }
-  try {
-    if (typeof localStorage !== "undefined") {
-      return localStorage;
-    }
-  } catch {
-    // Нет глобального localStorage.
-  }
-  return null;
-}
-
-function normalizeUser(value: unknown): AuthUser | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const candidate = value as Partial<AuthUser>;
-  if (typeof candidate.email !== "string" || !candidate.email) {
-    return null;
-  }
-  return candidate as AuthUser;
-}
-
-function readStoredAuth(): PersistedAuth | null {
-  const storage = getAuthStorage();
-  if (!storage) {
-    return null;
-  }
-  let raw: string | null;
-  try {
-    raw = storage.getItem(AUTH_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-  if (!raw) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<PersistedAuth> | null;
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    const accessToken =
-      typeof parsed.accessToken === "string" && parsed.accessToken
-        ? parsed.accessToken
-        : null;
-    const refreshToken =
-      typeof parsed.refreshToken === "string" && parsed.refreshToken
-        ? parsed.refreshToken
-        : null;
-    if (!accessToken && !refreshToken) {
-      return null;
-    }
-    return {
-      accessToken,
-      refreshToken,
-      user: normalizeUser(parsed.user),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredAuth(state: PersistedAuth): void {
-  const storage = getAuthStorage();
-  if (!storage) {
-    return;
-  }
-  try {
-    if (!state.accessToken && !state.refreshToken) {
-      storage.removeItem(AUTH_STORAGE_KEY);
-      return;
-    }
-    storage.setItem(
-      AUTH_STORAGE_KEY,
-      JSON.stringify({
-        accessToken: state.accessToken,
-        refreshToken: state.refreshToken,
-        user: state.user,
-      }),
-    );
-  } catch {
-    // Квота/запрет записи — сессия остаётся только в памяти.
-  }
-}
-
-function removeStoredAuth(): void {
-  const storage = getAuthStorage();
-  if (!storage) {
-    return;
-  }
-  try {
-    storage.removeItem(AUTH_STORAGE_KEY);
-  } catch {
-    // Ничего не остаётся, кроме как игнорировать.
-  }
+  /** Один `POST /auth/refresh` при старте приложения (single-flight). */
+  bootstrapAuth: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>()((set, get) => ({
   accessToken: null,
-  refreshToken: null,
   user: null,
   isAuthenticated: false,
+  // Стартуем «в процессе bootstrap»: App вызывает bootstrapAuth() до рендера,
+  // а AuthGate до его завершения не должен редиректить на /login.
+  initializing: true,
   setSession: (tokens, user) => {
-    const next: PersistedAuth = {
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      // `undefined` — обновляем только токены, профиль не трогаем.
-      user: user === undefined ? get().user : user,
-    };
     set({
-      ...next,
-      isAuthenticated: Boolean(next.accessToken),
+      accessToken: tokens.access_token,
+      // `undefined` — обновляем только access-токен, профиль не трогаем.
+      user: user === undefined ? get().user : user,
+      isAuthenticated: Boolean(tokens.access_token),
     });
-    writeStoredAuth(next);
   },
   setUser: (user) => {
     set({ user });
-    const { accessToken, refreshToken } = get();
-    writeStoredAuth({ accessToken, refreshToken, user });
   },
   clearSession: () => {
     set({
       accessToken: null,
-      refreshToken: null,
       user: null,
       isAuthenticated: false,
     });
-    removeStoredAuth();
   },
+  bootstrapAuth: () => bootstrapAuth(),
 }));
 
 /** Селектор «есть действующий access-токен». */
@@ -173,25 +58,40 @@ export const selectIsAuthenticated = (state: AuthState): boolean =>
 /** Короткий алиас селектора для `useAuthStore(isAuthenticated)`. */
 export const isAuthenticated = selectIsAuthenticated;
 
-/** Не-хук доступ к состоянию для api.ts (без циклического импорта). */
+/** Не-хук доступ к состоянию для api.ts (импорт authStore → api циклический, но безопасный). */
 export function getAuthState(): AuthState {
   return useAuthStore.getState();
 }
 
 /**
- * Восстанавливает сессию из localStorage. Вызывается один раз при старте
- * приложения (App.tsx) до первого рендера.
+ * Один общий bootstrap на всё приложение: React.StrictMode/HMR могут вызвать
+ * `bootstrapAuth()` повторно, но `POST /auth/refresh` уйдёт только один раз
+ * (и `refreshSession()` в api.ts тоже single-flight).
  */
-export function hydrateAuth(): PersistedAuth | null {
-  const stored = readStoredAuth();
-  if (!stored) {
-    return null;
+let bootstrapPromise: Promise<void> | null = null;
+
+async function runBootstrap(): Promise<void> {
+  useAuthStore.setState({ initializing: true });
+  try {
+    // 200 → сессия выставлена в api.ts; 401/сеть → refreshSession очистит её.
+    await refreshSession();
+  } catch {
+    // Нет/просрочен/отозван refresh-cookie или backend недоступен — аноним.
+    useAuthStore.getState().clearSession();
+  } finally {
+    useAuthStore.setState({ initializing: false });
   }
-  useAuthStore.setState({
-    accessToken: stored.accessToken,
-    refreshToken: stored.refreshToken,
-    user: stored.user,
-    isAuthenticated: Boolean(stored.accessToken),
-  });
-  return stored;
+}
+
+/**
+ * Восстанавливает сессию по HttpOnly refresh-cookie. Вызывается один раз при
+ * старте приложения (App.tsx) до первого рендера.
+ */
+export function bootstrapAuth(): Promise<void> {
+  if (!bootstrapPromise) {
+    bootstrapPromise = runBootstrap().finally(() => {
+      bootstrapPromise = null;
+    });
+  }
+  return bootstrapPromise;
 }

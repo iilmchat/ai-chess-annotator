@@ -11,6 +11,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const isAuthenticated = useAuthStore(selectIsAuthenticated);
   const user = useAuthStore((state) => state.user);
+  const clearSession = useAuthStore((state) => state.clearSession);
 
   function changeLanguage(language: string) {
     void i18n.changeLanguage(language);
@@ -19,9 +20,14 @@ export function Layout({ children }: { children: ReactNode }) {
     }
   }
 
-  function handleLogout() {
-    logoutUser();
-    navigate("/login", { replace: true });
+  async function handleLogout() {
+    // POST /auth/logout чистит HttpOnly cookie; локальную сессию — всегда.
+    try {
+      await logoutUser();
+    } finally {
+      clearSession();
+      navigate("/login", { replace: true });
+    }
   }
 
   return (
@@ -50,7 +56,9 @@ export function Layout({ children }: { children: ReactNode }) {
               <button
                 type="button"
                 className="button button--ghost button--small"
-                onClick={handleLogout}
+                onClick={() => {
+                  void handleLogout();
+                }}
               >
                 {t("auth.logout")}
               </button>

@@ -69,9 +69,9 @@ function authUser(email: string): AuthUser {
 }
 
 function authTokens(): AuthTokens {
+  // Refresh-токена здесь нет: backend отдаёт его только в HttpOnly cookie.
   return {
     access_token: "e2e-mock-access-token",
-    refresh_token: "e2e-mock-refresh-token",
     token_type: "bearer",
     expires_in: 900,
   };
@@ -216,26 +216,61 @@ function requestText(route: Route): string | null {
   return null;
 }
 
-async function handleAuthRoute(route: Route): Promise<void> {
+/**
+ * Состояние «сервера» для auth-моков в рамках одной страницы (теста).
+ * Повторяет cookie-сессию реального backend: refresh работает только после
+ * логина, logout её сбрасывает.
+ */
+interface AuthMockState {
+  loggedIn: boolean;
+  email: string;
+}
+
+async function handleAuthRoute(
+  route: Route,
+  state: AuthMockState,
+): Promise<void> {
   const request = route.request();
   const method = request.method();
   const path = new URL(request.url()).pathname;
-  const email = requestEmail(route);
 
   if (method === "POST" && path === "/auth/register") {
-    await fulfillJson(route, 201, authUser(email));
+    state.email = requestEmail(route);
+    await fulfillJson(route, 201, authUser(state.email));
     return;
   }
   if (method === "POST" && path === "/auth/login") {
-    await fulfillJson(route, 200, { ...authTokens(), user: authUser(email) });
+    state.loggedIn = true;
+    state.email = requestEmail(route);
+    await fulfillJson(route, 200, {
+      ...authTokens(),
+      user: authUser(state.email),
+    });
     return;
   }
   if (method === "POST" && path === "/auth/refresh") {
-    await fulfillJson(route, 200, { ...authTokens(), user: authUser(email) });
+    // Cookie есть только после логина — иначе bootstrap получает 401.
+    if (!state.loggedIn) {
+      await fulfillJson(route, 401, {
+        detail: "unauthorized",
+        code: "unauthorized",
+      });
+      return;
+    }
+    await fulfillJson(route, 200, {
+      ...authTokens(),
+      user: authUser(state.email),
+    });
+    return;
+  }
+  if (method === "POST" && path === "/auth/logout") {
+    state.loggedIn = false;
+    // 204 без тела: cookie и refresh-сессия «сброшены».
+    await route.fulfill({ status: 204 });
     return;
   }
   if (method === "GET" && path === "/auth/me") {
-    await fulfillJson(route, 200, authUser(email));
+    await fulfillJson(route, 200, authUser(state.email));
     return;
   }
   await fulfillJson(route, 404, {
@@ -331,13 +366,21 @@ export async function mockApi(page: Page): Promise<void> {
   if (REAL_BACKEND) {
     return;
   }
-  await page.route(/^https?:\/\/[^/]+\/auth\//, handleAuthRoute);
+  // Состояние auth-моков живёт в рамках страницы (новый context на тест).
+  const authState: AuthMockState = {
+    loggedIn: false,
+    email: "e2e@example.com",
+  };
+  await page.route(/^https?:\/\/[^/]+\/auth\//, (route) =>
+    handleAuthRoute(route, authState),
+  );
   await page.route(/^https?:\/\/[^/]+\/v1\//, handleV1Route);
 }
 
 /**
- * Регистрация + вход через реальный UI (не через сидирование localStorage):
- * так сценарий одинаково работает и на моках, и на реальном backend.
+ * Регистрация + вход через реальный UI (без сидирования сессии: access-токен
+ * живёт только в памяти, refresh — в HttpOnly cookie): так сценарий
+ * одинаково работает и на моках, и на реальном backend.
  * Возвращает email пользователя.
  */
 export async function registerAndLogin(

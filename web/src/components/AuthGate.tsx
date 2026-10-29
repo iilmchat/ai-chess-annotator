@@ -37,12 +37,15 @@ interface AuthGateProps {
 /**
  * Защищает приватные маршруты: без access-токена отправляет на `/login`,
  * а если токен есть, но профиль ещё не загружен — восстанавливает его.
+ * Пока идёт bootstrap по refresh-cookie (`initializing`), показываем loading,
+ * иначе была бы ложная перезагрузка на /login.
  */
 export function AuthGate({ children }: AuthGateProps) {
   const { t } = useTranslation();
   const location = useLocation();
   const accessToken = useAuthStore((state) => state.accessToken);
   const user = useAuthStore((state) => state.user);
+  const initializing = useAuthStore((state) => state.initializing);
   const setUser = useAuthStore((state) => state.setUser);
   const clearSession = useAuthStore((state) => state.clearSession);
   const isAuthenticated = useAuthStore(selectIsAuthenticated);
@@ -52,7 +55,7 @@ export function AuthGate({ children }: AuthGateProps) {
   const needsProfile = Boolean(accessToken) && !user;
 
   useEffect(() => {
-    if (!accessToken || user) {
+    if (initializing || !accessToken || user) {
       return;
     }
     let active = true;
@@ -80,7 +83,15 @@ export function AuthGate({ children }: AuthGateProps) {
     return () => {
       active = false;
     };
-  }, [accessToken, user, attempt, setUser, clearSession, t]);
+  }, [initializing, accessToken, user, attempt, setUser, clearSession, t]);
+
+  if (initializing) {
+    return (
+      <main className="auth-gate">
+        <p className="muted">{t("common.loading")}</p>
+      </main>
+    );
+  }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />;

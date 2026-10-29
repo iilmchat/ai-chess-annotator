@@ -56,8 +56,9 @@ web/
 | Метод и путь | Ответ мока |
 | --- | --- |
 | `POST /auth/register` | `201` + `AuthUser` |
-| `POST /auth/login` | `200` + `{access_token, refresh_token, token_type, expires_in, user}` |
-| `POST /auth/refresh` | `200` + новая пара токенов |
+| `POST /auth/login` | `200` + `{access_token, token_type, expires_in, user}`; refresh — только в HttpOnly cookie |
+| `POST /auth/refresh` | `401` до логина, после логина `200` + `{access_token, token_type, expires_in, user}` (stateful) |
+| `POST /auth/logout` | `204` без тела, сбрасывает состояние мока |
 | `GET /auth/me` | `200` + `AuthUser` |
 | `GET /v1/users/me/usage` | `200` + `{enabled:true, tier:"free", used_tokens:0, limit_tokens:50000, remaining_tokens:50000}` |
 | `POST /v1/analyze` | `200` + `AnalyzeResponse` (`analysis_id:"42"`) |

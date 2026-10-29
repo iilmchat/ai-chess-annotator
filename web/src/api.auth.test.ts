@@ -1,32 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AuthTokens, AuthUser, LoginResponse } from "./types";
+import type { AuthTokens, AuthUser, LoginResponse, RefreshResponse } from "./types";
 
 const EMAIL = "player@example.com";
 const PASSWORD = "password123";
 
 const TOKENS: AuthTokens = {
   access_token: "access-old",
-  refresh_token: "refresh-old",
   token_type: "bearer",
   expires_in: 900,
 };
 
-const REFRESHED_TOKENS: AuthTokens = {
+const REFRESHED: RefreshResponse = {
   access_token: "access-new",
-  refresh_token: "refresh-new",
   token_type: "bearer",
   expires_in: 900,
+  user: {
+    id: 7,
+    email: EMAIL,
+    level: "club",
+    role: "user",
+    is_active: true,
+    created_at: "2026-10-29T10:00:00Z",
+  },
 };
 
-const USER: AuthUser = {
-  id: 7,
-  email: EMAIL,
-  level: "club",
-  role: "user",
-  is_active: true,
-  created_at: "2026-10-29T10:00:00Z",
-};
+const USER: AuthUser = REFRESHED.user;
 
 const LOGIN_RESPONSE: LoginResponse = {
   ...TOKENS,
@@ -41,30 +40,6 @@ const USAGE = {
   reset_at: 0,
   enabled: true,
 };
-
-function createStorageMock(): Storage {
-  const data = new Map<string, string>();
-  return {
-    get length() {
-      return data.size;
-    },
-    clear() {
-      data.clear();
-    },
-    getItem(key: string) {
-      return data.has(key) ? (data.get(key) ?? null) : null;
-    },
-    key(index: number) {
-      return Array.from(data.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      data.delete(key);
-    },
-    setItem(key: string, value: string) {
-      data.set(key, value);
-    },
-  };
-}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -90,13 +65,29 @@ function authHeader(init: RequestInit): string | null {
   return new Headers(init.headers).get("Authorization");
 }
 
-let storage: Storage;
+let storage: {
+  getItem: ReturnType<typeof vi.fn>;
+  setItem: ReturnType<typeof vi.fn>;
+  removeItem: ReturnType<typeof vi.fn>;
+  clear: ReturnType<typeof vi.fn>;
+  key: ReturnType<typeof vi.fn>;
+  readonly length: number;
+};
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.resetModules();
-  storage = createStorageMock();
-  vi.stubGlobal("localStorage", storage);
+  storage = {
+    getItem: vi.fn(() => null),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+    clear: vi.fn(),
+    key: vi.fn(() => null),
+    get length() {
+      return 0;
+    },
+  };
+  vi.stubGlobal("localStorage", storage as unknown as Storage);
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -110,8 +101,8 @@ async function authorize(): Promise<void> {
   useAuthStore.getState().setSession(TOKENS, USER);
 }
 
-describe("api JWT", () => {
-  it("добавляет Bearer, когда пользователь авторизован", async () => {
+describe("api: Bearer из памяти и cookie-запросы", () => {
+  it("добавляет Bearer и credentials:'include', когда пользователь авторизован", async () => {
     await authorize();
     const { getUsage } = await import("./api");
     fetchMock.mockResolvedValueOnce(jsonResponse(USAGE));
@@ -122,9 +113,10 @@ describe("api JWT", () => {
     const { url, init } = callAt(fetchMock, 0);
     expect(url).toBe("/v1/users/me/usage");
     expect(authHeader(init)).toBe("Bearer access-old");
+    expect(init.credentials).toBe("include");
   });
 
-  it("не добавляет Authorization анонимно", async () => {
+  it("не добавляет Authorization анонимно, но шлёт cookie", async () => {
     const { getUsage } = await import("./api");
     fetchMock.mockResolvedValueOnce(jsonResponse(USAGE));
 
@@ -132,16 +124,17 @@ describe("api JWT", () => {
 
     const { init } = callAt(fetchMock, 0);
     expect(authHeader(init)).toBeNull();
+    expect(init.credentials).toBe("include");
   });
 
-  it("на 401 обновляет токен и повторяет исходный запрос", async () => {
+  it("на 401 обновляет access-токен по cookie и повторяет исходный запрос", async () => {
     await authorize();
     const { listGames } = await import("./api");
     fetchMock
       .mockResolvedValueOnce(
         jsonResponse({ detail: "unauthorized", code: "unauthorized" }, 401),
       )
-      .mockResolvedValueOnce(jsonResponse(REFRESHED_TOKENS))
+      .mockResolvedValueOnce(jsonResponse(REFRESHED))
       .mockResolvedValueOnce(jsonResponse([]));
 
     const games = await listGames();
@@ -152,28 +145,27 @@ describe("api JWT", () => {
     const original = callAt(fetchMock, 0);
     expect(original.url).toBe("/v1/games?limit=20");
     expect(authHeader(original.init)).toBe("Bearer access-old");
+    expect(original.init.credentials).toBe("include");
 
+    // Refresh — POST без тела: refresh-токен уходит только HttpOnly cookie.
     const refresh = callAt(fetchMock, 1);
     expect(refresh.url).toBe("/auth/refresh");
     expect(refresh.init.method).toBe("POST");
-    expect(JSON.parse(String(refresh.init.body))).toEqual({
-      refresh_token: "refresh-old",
-    });
+    expect(refresh.init.credentials).toBe("include");
+    expect(refresh.init.body).toBeUndefined();
+    expect(new Headers(refresh.init.headers).get("Content-Type")).toBeNull();
 
     const retry = callAt(fetchMock, 2);
     expect(retry.url).toBe("/v1/games?limit=20");
     expect(authHeader(retry.init)).toBe("Bearer access-new");
+    expect(retry.init.credentials).toBe("include");
 
-    const { useAuthStore, AUTH_STORAGE_KEY } = await import(
-      "./stores/authStore"
-    );
+    const { useAuthStore } = await import("./stores/authStore");
     const state = useAuthStore.getState();
     expect(state.accessToken).toBe("access-new");
-    expect(state.refreshToken).toBe("refresh-new");
     expect(state.user).toEqual(USER);
-    expect(
-      JSON.parse(storage.getItem(AUTH_STORAGE_KEY) ?? "null").accessToken,
-    ).toBe("access-new");
+    // Access-токен остаётся только в памяти.
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 
   it("делает один refresh на параллельные 401 (single-flight)", async () => {
@@ -186,9 +178,12 @@ describe("api JWT", () => {
         const url = String(input);
         if (url === "/auth/refresh") {
           refreshCalls += 1;
-          return Promise.resolve(jsonResponse(REFRESHED_TOKENS));
+          expect(init?.credentials).toBe("include");
+          expect(init?.body).toBeUndefined();
+          return Promise.resolve(jsonResponse(REFRESHED));
         }
         protectedCalls += 1;
+        expect(init?.credentials).toBe("include");
         if (authHeader(init ?? {}) === "Bearer access-old") {
           return Promise.resolve(
             jsonResponse({ detail: "unauthorized", code: "unauthorized" }, 401),
@@ -231,16 +226,13 @@ describe("api JWT", () => {
       message: "unauthorized",
     });
 
-    const { useAuthStore, AUTH_STORAGE_KEY } = await import(
-      "./stores/authStore"
-    );
+    const { useAuthStore } = await import("./stores/authStore");
     expect(useAuthStore.getState().accessToken).toBeNull();
-    expect(useAuthStore.getState().refreshToken).toBeNull();
     expect(useAuthStore.getState().user).toBeNull();
-    expect(storage.getItem(AUTH_STORAGE_KEY)).toBeNull();
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 
-  it("loginUser шлёт /auth/login и сохраняет сессию", async () => {
+  it("loginUser шлёт /auth/login с credentials и ставит сессию из ответа", async () => {
     const { loginUser } = await import("./api");
     fetchMock.mockResolvedValueOnce(jsonResponse(LOGIN_RESPONSE));
 
@@ -253,6 +245,7 @@ describe("api JWT", () => {
     const { url, init } = callAt(fetchMock, 0);
     expect(url).toBe("/auth/login");
     expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("include");
     expect(JSON.parse(String(init.body))).toEqual({
       email: EMAIL,
       password: PASSWORD,
@@ -261,8 +254,8 @@ describe("api JWT", () => {
     const { useAuthStore } = await import("./stores/authStore");
     const state = useAuthStore.getState();
     expect(state.accessToken).toBe("access-old");
-    expect(state.refreshToken).toBe("refresh-old");
     expect(state.user).toEqual(USER);
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 
   it("loginUser не пытается обновить токен при 401", async () => {
@@ -292,6 +285,7 @@ describe("api JWT", () => {
     const { url, init } = callAt(fetchMock, 0);
     expect(url).toBe("/auth/register");
     expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("include");
     expect(JSON.parse(String(init.body))).toEqual({
       email: EMAIL,
       password: PASSWORD,
@@ -301,14 +295,72 @@ describe("api JWT", () => {
     expect(useAuthStore.getState().accessToken).toBeNull();
   });
 
-  it("logoutUser очищает сессию без запросов к API", async () => {
+  it("logoutUser шлёт POST /auth/logout с cookie и очищает сессию", async () => {
     await authorize();
     const { logoutUser } = await import("./api");
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    logoutUser();
+    await logoutUser();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const { url, init } = callAt(fetchMock, 0);
+    expect(url).toBe("/auth/logout");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("include");
 
     const { useAuthStore } = await import("./stores/authStore");
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it("logoutUser очищает сессию даже при сетевой ошибке", async () => {
+    await authorize();
+    const { logoutUser } = await import("./api");
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    await expect(logoutUser()).resolves.toBeUndefined();
+
+    const { useAuthStore } = await import("./stores/authStore");
+    expect(useAuthStore.getState().accessToken).toBeNull();
+  });
+
+  it("logoutUser очищает сессию при 5xx и не пробрасывает ошибку", async () => {
+    await authorize();
+    const { logoutUser } = await import("./api");
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: "internal error" }, 500),
+    );
+
+    await expect(logoutUser()).resolves.toBeUndefined();
+
+    const { useAuthStore } = await import("./stores/authStore");
+    expect(useAuthStore.getState().accessToken).toBeNull();
+  });
+
+  it("streamRequest шлёт Bearer и credentials:'include'", async () => {
+    await authorize();
+    const { streamCommentary } = await import("./api");
+    const sse =
+      'event: done\ndata: {"commentary_id":1,"tokens_used":5,"validated":true}\n\n';
+    fetchMock.mockResolvedValueOnce(
+      new Response(sse, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+      }),
+    );
+
+    const deltas: string[] = [];
+    const done = await streamCommentary("42", "club", {
+      onDelta: (text) => deltas.push(text),
+    });
+
+    expect(deltas).toEqual([]);
+    expect(done.commentary_id).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const { url, init } = callAt(fetchMock, 0);
+    expect(url).toBe("/v1/commentary/stream");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("include");
+    expect(authHeader(init)).toBe("Bearer access-old");
   });
 });

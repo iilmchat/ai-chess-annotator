@@ -1,7 +1,6 @@
 import { getAuthState } from "./stores/authStore";
 import type {
   AnalyzeResponse,
-  AuthTokens,
   AuthUser,
   ChatHistoryItem,
   ChatResponse,
@@ -10,6 +9,7 @@ import type {
   GameListItem,
   Level,
   LoginResponse,
+  RefreshResponse,
   RegisterResponse,
   UsageResponse,
 } from "./types";
@@ -48,7 +48,12 @@ async function send(
     headers.Authorization = `Bearer ${accessToken}`;
   }
   try {
-    return await fetch(`${API_BASE}${path}`, { ...init, headers });
+    return await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers,
+      // Refresh-токен приходит/уходит только HttpOnly cookie (KI-037).
+      credentials: "include",
+    });
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === "AbortError") {
       throw cause;
@@ -72,23 +77,17 @@ async function throwForResponse(response: Response): Promise<never> {
 
 /**
  * Один общий refresh на все запросы: параллельные 401 ждут один и тот же
- * промис, после успеха сессия обновляется в authStore.
+ * промис, после успеха сессия обновляется в authStore. Refresh-токен браузер
+ * отправляет сам в HttpOnly cookie (`credentials: "include"`), тела нет.
  */
-let refreshPromise: Promise<AuthTokens> | null = null;
+let refreshPromise: Promise<RefreshResponse> | null = null;
 
-async function performRefresh(): Promise<AuthTokens> {
-  const refreshToken = getAuthState().refreshToken;
-  if (!refreshToken) {
-    getAuthState().clearSession();
-    throw new ApiError("unauthorized", 401, "unauthorized");
-  }
-
+async function performRefresh(): Promise<RefreshResponse> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}/auth/refresh`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      credentials: "include",
     });
   } catch {
     getAuthState().clearSession();
@@ -100,25 +99,26 @@ async function performRefresh(): Promise<AuthTokens> {
     throw new ApiError("unauthorized", 401, "unauthorized");
   }
 
-  let payload: AuthTokens & { user?: AuthUser };
+  let payload: RefreshResponse;
   try {
-    payload = (await response.json()) as AuthTokens & { user?: AuthUser };
+    payload = (await response.json()) as RefreshResponse;
   } catch {
     getAuthState().clearSession();
     throw new ApiError("unauthorized", 401, "unauthorized");
   }
 
-  if (!payload.access_token || !payload.refresh_token) {
+  if (!payload.access_token) {
     getAuthState().clearSession();
     throw new ApiError("unauthorized", 401, "unauthorized");
   }
 
+  // Cookie ротирована backend'ом — JS её не читает и не хранит.
   getAuthState().setSession(payload, payload.user);
   return payload;
 }
 
-/** Обновляет пару токенов (single-flight); возвращает новую пару. */
-export function refreshSession(): Promise<AuthTokens> {
+/** Обновляет access-токен (single-flight); возвращает новую сессию. */
+export function refreshSession(): Promise<RefreshResponse> {
   if (!refreshPromise) {
     refreshPromise = performRefresh().finally(() => {
       refreshPromise = null;
@@ -159,7 +159,7 @@ export function registerUser(
   });
 }
 
-/** `POST /auth/login` — сохраняет токены и профиль в authStore. */
+/** `POST /auth/login` — сохраняет access-токен и профиль в authStore. */
 export async function loginUser(
   email: string,
   password: string,
@@ -177,9 +177,21 @@ export function getMe(): Promise<AuthUser> {
   return request<AuthUser>("/auth/me");
 }
 
-/** Локальный выход: backend logout-эндпоинта нет. */
-export function logoutUser(): void {
-  getAuthState().clearSession();
+/**
+ * `POST /auth/logout` — backend очищает HttpOnly cookie и отзывает refresh.
+ * Сетевую ошибку не пробрасываем: локальный выход важнее, сессию чистим всегда.
+ */
+export async function logoutUser(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch {
+    // Backend недоступен — всё равно выходим локально.
+  } finally {
+    getAuthState().clearSession();
+  }
 }
 
 export function analyzeGame(pgn: string, level: Level): Promise<AnalyzeResponse> {
@@ -308,6 +320,8 @@ async function streamRequest(
         headers,
         body: JSON.stringify(body),
         signal: handlers.signal,
+        // Cookie нужна только для /auth/*; для SSE-запросов она безвредна.
+        credentials: "include",
       });
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") {

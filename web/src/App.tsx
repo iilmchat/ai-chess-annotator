@@ -7,10 +7,11 @@ import AnalysisPage from "./pages/AnalysisPage";
 import HistoryPage from "./pages/HistoryPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
-import { hydrateAuth } from "./stores/authStore";
+import { bootstrapAuth } from "./stores/authStore";
 
-// Восстанавливаем сохранённую JWT-сессию до первого рендера.
-hydrateAuth();
+// Сессия восстанавливается по HttpOnly refresh-cookie (один POST /auth/refresh)
+// до первого рендера; access-токен в localStorage не хранится (KI-037).
+void bootstrapAuth();
 
 export default function App() {
   return (

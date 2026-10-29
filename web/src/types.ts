@@ -13,18 +13,25 @@ export interface AuthUser {
   created_at: string;
 }
 
-/** Пара JWT-токенов из `/auth/login` и `/auth/refresh`. */
+/**
+ * Токены из `/auth/login` и `/auth/refresh`.
+ *
+ * Refresh-токен сюда не входит: backend отдаёт его только в HttpOnly
+ * cookie, JS его не видит (KI-037).
+ */
 export interface AuthTokens {
   access_token: string;
-  refresh_token: string;
   token_type: "bearer" | string;
   expires_in: number;
 }
 
-/** Ответ `/auth/login`: токены плюс профиль. */
+/** Ответ `/auth/login`: access-токен плюс профиль. */
 export interface LoginResponse extends AuthTokens {
   user: AuthUser;
 }
+
+/** Ответ `/auth/refresh`: новый access-токен плюс профиль (cookie ротируется). */
+export type RefreshResponse = LoginResponse;
 
 /** Ответ `/auth/register` — профиль без токенов. */
 export type RegisterResponse = AuthUser;

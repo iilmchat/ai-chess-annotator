@@ -1,15 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AuthTokens, AuthUser } from "../types";
-
-const ACCESS_TOKEN = "access-token-1";
-const REFRESH_TOKEN = "refresh-token-1";
+import type { AuthTokens, AuthUser, RefreshResponse } from "../types";
 
 const TOKENS: AuthTokens = {
-  access_token: ACCESS_TOKEN,
-  refresh_token: REFRESH_TOKEN,
+  access_token: "access-token-1",
   token_type: "bearer",
   expires_in: 900,
+};
+
+const REFRESHED: RefreshResponse = {
+  access_token: "access-token-2",
+  token_type: "bearer",
+  expires_in: 900,
+  user: {
+    id: 7,
+    email: "player@example.com",
+    level: "club",
+    role: "user",
+    is_active: true,
+    created_at: "2026-10-29T10:00:00Z",
+  },
 };
 
 const USER: AuthUser = {
@@ -21,44 +31,59 @@ const USER: AuthUser = {
   created_at: "2026-10-29T10:00:00Z",
 };
 
-function createStorageMock(): Storage {
-  const data = new Map<string, string>();
-  return {
-    get length() {
-      return data.size;
-    },
-    clear() {
-      data.clear();
-    },
-    getItem(key: string) {
-      return data.has(key) ? (data.get(key) ?? null) : null;
-    },
-    key(index: number) {
-      return Array.from(data.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      data.delete(key);
-    },
-    setItem(key: string, value: string) {
-      data.set(key, value);
-    },
-  };
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
-let storage: Storage;
+function callAt(
+  mock: ReturnType<typeof vi.fn>,
+  index: number,
+): { url: string; init: RequestInit } {
+  const call = mock.mock.calls[index] as
+    | [string, RequestInit | undefined]
+    | undefined;
+  if (!call) {
+    throw new Error(`Нет вызова fetch #${index}`);
+  }
+  return { url: String(call[0]), init: call[1] ?? {} };
+}
+
+let storage: {
+  getItem: ReturnType<typeof vi.fn>;
+  setItem: ReturnType<typeof vi.fn>;
+  removeItem: ReturnType<typeof vi.fn>;
+  clear: ReturnType<typeof vi.fn>;
+  key: ReturnType<typeof vi.fn>;
+  readonly length: number;
+};
+let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.resetModules();
-  storage = createStorageMock();
-  vi.stubGlobal("localStorage", storage);
+  storage = {
+    getItem: vi.fn(() => null),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+    clear: vi.fn(),
+    key: vi.fn(() => null),
+    get length() {
+      return 0;
+    },
+  };
+  vi.stubGlobal("localStorage", storage as unknown as Storage);
+  fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("authStore", () => {
-  it("стартует без сессии и без записи в localStorage", async () => {
+describe("authStore: сессия только в памяти", () => {
+  it("стартует без сессии, в состоянии bootstrap и без записи в localStorage", async () => {
     const { useAuthStore, selectIsAuthenticated } = await import(
       "./authStore"
     );
@@ -66,103 +91,141 @@ describe("authStore", () => {
     const state = useAuthStore.getState();
 
     expect(state.accessToken).toBeNull();
-    expect(state.refreshToken).toBeNull();
     expect(state.user).toBeNull();
     expect(state.isAuthenticated).toBe(false);
     expect(selectIsAuthenticated(state)).toBe(false);
-    expect(storage.getItem("chess.auth")).toBeNull();
+    // Refresh-cookie ещё не проверена — AuthGate обязан показать loading.
+    expect(state.initializing).toBe(true);
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 
-  it("setSession сохраняет токены, профиль и localStorage", async () => {
-    const { useAuthStore, selectIsAuthenticated, AUTH_STORAGE_KEY } =
-      await import("./authStore");
+  it("setSession хранит access-токен и профиль только в памяти", async () => {
+    const { useAuthStore, selectIsAuthenticated } = await import(
+      "./authStore"
+    );
 
     useAuthStore.getState().setSession(TOKENS, USER);
 
     const state = useAuthStore.getState();
-    expect(state.accessToken).toBe(ACCESS_TOKEN);
-    expect(state.refreshToken).toBe(REFRESH_TOKEN);
+    expect(state.accessToken).toBe("access-token-1");
     expect(state.user).toEqual(USER);
     expect(state.isAuthenticated).toBe(true);
     expect(selectIsAuthenticated(state)).toBe(true);
-    expect(
-      JSON.parse(storage.getItem(AUTH_STORAGE_KEY) ?? "null"),
-    ).toEqual({
-      accessToken: ACCESS_TOKEN,
-      refreshToken: REFRESH_TOKEN,
-      user: USER,
-    });
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(storage.getItem).not.toHaveBeenCalled();
   });
 
-  it("setSession без user обновляет только токены", async () => {
+  it("setSession без user обновляет только access-токен", async () => {
     const { useAuthStore } = await import("./authStore");
 
     useAuthStore.getState().setSession(TOKENS, USER);
     useAuthStore.getState().setSession({
       ...TOKENS,
       access_token: "access-token-2",
-      refresh_token: "refresh-token-2",
     });
 
     const state = useAuthStore.getState();
     expect(state.accessToken).toBe("access-token-2");
-    expect(state.refreshToken).toBe("refresh-token-2");
     expect(state.user).toEqual(USER);
   });
 
-  it("hydrateAuth восстанавливает сессию после перезагрузки модуля", async () => {
-    const first = await import("./authStore");
-    first.useAuthStore.getState().setSession(TOKENS, USER);
-
-    vi.resetModules();
-    const second = await import("./authStore");
-
-    // Свежий store пуст до гидратации.
-    expect(second.useAuthStore.getState().accessToken).toBeNull();
-
-    const restored = second.hydrateAuth();
-
-    expect(restored?.accessToken).toBe(ACCESS_TOKEN);
-    expect(second.useAuthStore.getState().accessToken).toBe(ACCESS_TOKEN);
-    expect(second.useAuthStore.getState().refreshToken).toBe(REFRESH_TOKEN);
-    expect(second.useAuthStore.getState().user).toEqual(USER);
-    expect(second.useAuthStore.getState().isAuthenticated).toBe(true);
-  });
-
-  it("setUser обновляет профиль и persisted-запись", async () => {
-    const { useAuthStore, AUTH_STORAGE_KEY } = await import("./authStore");
+  it("setUser обновляет профиль без localStorage", async () => {
+    const { useAuthStore } = await import("./authStore");
 
     useAuthStore.getState().setSession(TOKENS, USER);
     useAuthStore.getState().setUser({ ...USER, email: "new@example.com" });
 
     expect(useAuthStore.getState().user?.email).toBe("new@example.com");
-    const persisted = JSON.parse(storage.getItem(AUTH_STORAGE_KEY) ?? "{}");
-    expect(persisted.user.email).toBe("new@example.com");
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 
-  it("clearSession сбрасывает состояние и удаляет localStorage", async () => {
-    const { useAuthStore, AUTH_STORAGE_KEY } = await import("./authStore");
+  it("clearSession сбрасывает access-токен, профиль и флаг авторизации", async () => {
+    const { useAuthStore } = await import("./authStore");
 
     useAuthStore.getState().setSession(TOKENS, USER);
     useAuthStore.getState().clearSession();
 
     const state = useAuthStore.getState();
     expect(state.accessToken).toBeNull();
-    expect(state.refreshToken).toBeNull();
     expect(state.user).toBeNull();
     expect(state.isAuthenticated).toBe(false);
-    expect(storage.getItem(AUTH_STORAGE_KEY)).toBeNull();
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(storage.removeItem).not.toHaveBeenCalled();
+  });
+});
+
+describe("authStore.bootstrapAuth: один POST /auth/refresh по cookie", () => {
+  it("200 → восстанавливает сессию из ответа refresh", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(REFRESHED));
+    const { useAuthStore, bootstrapAuth } = await import("./authStore");
+
+    await bootstrapAuth();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const { url, init } = callAt(fetchMock, 0);
+    expect(url).toBe("/auth/refresh");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("include");
+    // Тело не отправляется: refresh-токен браузер берёт из HttpOnly cookie.
+    expect(init.body).toBeUndefined();
+
+    const state = useAuthStore.getState();
+    expect(state.accessToken).toBe("access-token-2");
+    expect(state.user).toEqual(USER);
+    expect(state.isAuthenticated).toBe(true);
+    expect(state.initializing).toBe(false);
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 
-  it("безопасно работает без localStorage", async () => {
-    vi.unstubAllGlobals();
-    const { useAuthStore, hydrateAuth } = await import("./authStore");
+  it("401 → аноним, без исключения, initializing снят", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: "unauthorized", code: "unauthorized" }, 401),
+    );
+    const { useAuthStore, bootstrapAuth } = await import("./authStore");
 
-    expect(hydrateAuth()).toBeNull();
-    expect(() =>
-      useAuthStore.getState().setSession(TOKENS, USER),
-    ).not.toThrow();
-    expect(useAuthStore.getState().accessToken).toBe(ACCESS_TOKEN);
-    expect(() => useAuthStore.getState().clearSession()).not.toThrow();
+    await expect(bootstrapAuth()).resolves.toBeUndefined();
+
+    const state = useAuthStore.getState();
+    expect(state.accessToken).toBeNull();
+    expect(state.user).toBeNull();
+    expect(state.isAuthenticated).toBe(false);
+    expect(state.initializing).toBe(false);
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it("сетевая ошибка → аноним, без исключения", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const { useAuthStore, bootstrapAuth } = await import("./authStore");
+
+    await expect(bootstrapAuth()).resolves.toBeUndefined();
+
+    const state = useAuthStore.getState();
+    expect(state.accessToken).toBeNull();
+    expect(state.initializing).toBe(false);
+  });
+
+  it("single-flight: повторные вызовы не дублируют refresh", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(REFRESHED));
+    const { bootstrapAuth } = await import("./authStore");
+
+    await Promise.all([bootstrapAuth(), bootstrapAuth(), bootstrapAuth()]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("после неудачи следующий bootstrap пробует refresh снова", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ detail: "unauthorized", code: "unauthorized" }, 401),
+      )
+      .mockResolvedValueOnce(jsonResponse(REFRESHED));
+    const { useAuthStore, bootstrapAuth } = await import("./authStore");
+
+    await bootstrapAuth();
+    expect(useAuthStore.getState().accessToken).toBeNull();
+
+    await bootstrapAuth();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(useAuthStore.getState().accessToken).toBe("access-token-2");
   });
 });
