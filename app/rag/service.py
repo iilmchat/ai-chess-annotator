@@ -7,6 +7,10 @@
 Эмбеддинг строится по **позиции** (FEN после последнего хода партии) —
 именно позицию ищет `find_similar_positions`; текст аннотации хранится
 отдельно и возвращается как контекст для LLM.
+
+T-030b: `find_similar_positions` обёрнут в OTel-спан ``rag.retrieve``
+(`top_k`, число результатов и `trace.id`); тексты аннотаций и FEN в
+атрибуты не попадают.
 """
 
 from __future__ import annotations
@@ -16,13 +20,16 @@ import re
 
 import chess
 import chess.pgn
+from opentelemetry.trace import Span, Status, StatusCode
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AnnotatedGame
 from app.db.session import SessionLocal
 from app.ingestion.parser import parse_fen
+from app.observability import get_tracer
 from app.rag.embedder import Embedder, get_embedder, position_document
+from app.tracing import trace_id_for_span
 
 __all__ = [
     "find_similar_positions",
@@ -31,6 +38,18 @@ __all__ = [
 ]
 
 _YEAR_RE = re.compile(r"^(\d{4})")
+
+
+def _request_trace_id() -> str | None:
+    """`trace_id` для атрибута спана (T-030b): UUID запроса или hex OTel."""
+    return trace_id_for_span()
+
+
+def _set_trace_id(span: Span) -> None:
+    """Проставить `trace.id` в спан, если удалось определить (без PII)."""
+    trace_id = _request_trace_id()
+    if trace_id:
+        span.set_attribute("trace.id", trace_id)
 
 
 def parse_pgn_games(pgn_text: str) -> list[chess.pgn.Game]:
@@ -141,6 +160,9 @@ async def find_similar_positions(
 ) -> list[str]:
     """Найти аннотации партий с ближайшей позицией (косинусное расстояние).
 
+    OTel-спан ``rag.retrieve`` (T-030b): `top_k`, число найденных результатов
+    и `trace.id`; текст аннотаций/позиция в атрибуты не попадают (без PII).
+
     Args:
         fen: позиция запроса.
         top_k: сколько результатов вернуть.
@@ -155,6 +177,31 @@ async def find_similar_positions(
     """
     if top_k < 1:
         raise ValueError("top_k должен быть ≥ 1")
+    tracer = get_tracer()
+    with tracer.start_as_current_span("rag.retrieve") as span:
+        _set_trace_id(span)
+        span.set_attribute("rag.top_k", top_k)
+        try:
+            texts = await _find_similar_positions_impl(
+                fen, top_k, session=session, embedder=embedder
+            )
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+            raise
+        span.set_attribute("rag.results", len(texts))
+        span.set_status(Status(StatusCode.OK))
+        return texts
+
+
+async def _find_similar_positions_impl(
+    fen: str,
+    top_k: int,
+    *,
+    session: AsyncSession | None,
+    embedder: Embedder | None,
+) -> list[str]:
+    """Тело :func:`find_similar_positions` без OTel-обвязки."""
     board = parse_fen(fen)
     emb = embedder or get_embedder()
     vector = await emb.embed(position_document(board.fen()))

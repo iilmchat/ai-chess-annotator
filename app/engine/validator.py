@@ -18,6 +18,10 @@
 `engine_service` в подписи оставлен для strict-режима (T-016): проверить,
 что оценка упомянутого варианта действительно соответствует движку. В
 T-015 он не используется — валидация чисто шахматная.
+
+T-030b: публичный вход :func:`validate_moves` (его же вызывает
+:func:`validate_llm_response`) обёрнут в OTel-спан ``validator.validate``;
+атрибуты — только счётчики/флаг валидности и `trace.id`, без текста LLM.
 """
 
 from __future__ import annotations
@@ -26,9 +30,12 @@ import re
 from collections.abc import Sequence
 
 import chess
+from opentelemetry.trace import Span, Status, StatusCode
 
 from app.engine.service import EngineService
 from app.ingestion.parser import parse_fen
+from app.observability import get_tracer
+from app.tracing import trace_id_for_span
 
 __all__ = [
     "SAN_PATTERN",
@@ -62,6 +69,18 @@ def extract_moves_from_text(text: str) -> list[str]:
     return moves
 
 
+def _request_trace_id() -> str | None:
+    """`trace_id` для атрибута спана (T-030b): UUID запроса или hex OTel."""
+    return trace_id_for_span()
+
+
+def _set_trace_id(span: Span) -> None:
+    """Проставить `trace.id` в спан, если удалось определить (без PII)."""
+    trace_id = _request_trace_id()
+    if trace_id:
+        span.set_attribute("trace.id", trace_id)
+
+
 def validate_moves(
     moves: Sequence[str],
     initial_fen: str,
@@ -70,6 +89,10 @@ def validate_moves(
     extra_fens: Sequence[str] | None = None,
 ) -> tuple[bool, list[str]]:
     """Проверить ходы на доске.
+
+    OTel-спан ``validator.validate`` (T-030b): число проверенных ходов,
+    результат, количество нелегальных и `trace.id`. Текст ответа LLM/FEN в
+    атрибуты не попадают (без PII).
 
     Args:
         moves: SAN-ходы из текста (в порядке упоминания).
@@ -86,6 +109,40 @@ def validate_moves(
     Raises:
         InvalidFenError: `initial_fen` или один из `extra_fens` некорректен.
     """
+    tracer = get_tracer()
+    with tracer.start_as_current_span("validator.validate") as span:
+        _set_trace_id(span)
+        span.set_attribute("validator.moves", len(moves))
+        if mainline_san is not None:
+            span.set_attribute("validator.mainline_moves", len(mainline_san))
+        if extra_fens is not None:
+            span.set_attribute("validator.extra_fens", len(extra_fens))
+        try:
+            result = _validate_moves_impl(
+                moves,
+                initial_fen,
+                mainline_san=mainline_san,
+                extra_fens=extra_fens,
+            )
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+            raise
+        legal, illegal = result
+        span.set_attribute("validator.valid", legal)
+        span.set_attribute("validator.illegal_count", len(illegal))
+        span.set_status(Status(StatusCode.OK))
+        return result
+
+
+def _validate_moves_impl(
+    moves: Sequence[str],
+    initial_fen: str,
+    *,
+    mainline_san: Sequence[str] | None = None,
+    extra_fens: Sequence[str] | None = None,
+) -> tuple[bool, list[str]]:
+    """Тело :func:`validate_moves` без OTel-обвязки."""
     start = parse_fen(initial_fen)
     known_positions = _mainline_positions(start, mainline_san)
     for fen in extra_fens or ():
