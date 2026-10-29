@@ -6,9 +6,11 @@ import type {
   ChatResponse,
   CommentaryResponse,
   EditedCommentary,
+  EmailVerificationResponse,
   GameListItem,
   Level,
   LoginResponse,
+  MessageResponse,
   RefreshResponse,
   RegisterResponse,
   UsageResponse,
@@ -21,7 +23,17 @@ const NO_REFRESH_PATHS = new Set([
   "/auth/login",
   "/auth/register",
   "/auth/refresh",
+  // KI-055: токен из письма проверяется как есть; 401 означает «токен
+  // недействителен», а не «access истёк» — refresh только маскировал бы это.
+  "/auth/verify-email",
+  "/auth/forgot-password",
+  "/auth/reset-password",
 ]);
+
+/** Путь без query-строки — `verify-email` приходит с `?token=…`. */
+function isNoRefreshPath(path: string): boolean {
+  return NO_REFRESH_PATHS.has(path.split("?")[0]);
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -131,7 +143,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAuthState().accessToken;
   let response = await send(path, init, token);
 
-  if (response.status === 401 && !NO_REFRESH_PATHS.has(path)) {
+  if (response.status === 401 && !isNoRefreshPath(path)) {
     const latest = getAuthState().accessToken;
     // Пока запрос летел, другой 401 уже обновил токен — просто повторяем.
     const retryToken =
@@ -192,6 +204,66 @@ export async function logoutUser(): Promise<void> {
   } finally {
     getAuthState().clearSession();
   }
+}
+
+/**
+ * `POST /auth/logout-all` — глобально отозвать refresh-токены (KI-041).
+ *
+ * Ответ 204 без тела, поэтому не используем общий `request()` (он парсит
+ * JSON). Сетевую/серверную ошибку не пробрасываем: пользователь нажал
+ * «выйти», локальная сессия должна исчезнуть в любом случае. Backend мог
+ * не отозвать токены (fail-open), но refresh-cookie всё равно очищается.
+ */
+export async function logoutAllUser(): Promise<void> {
+  try {
+    const token = getAuthState().accessToken;
+    let response = await send("/auth/logout-all", { method: "POST" }, token);
+    if (response.status === 401) {
+      const latest = getAuthState().accessToken;
+      const retryToken =
+        latest && latest !== token
+          ? latest
+          : (await refreshSession()).access_token;
+      response = await send(
+        "/auth/logout-all",
+        { method: "POST" },
+        retryToken,
+      );
+    }
+    if (!response.ok) {
+      await throwForResponse(response);
+    }
+  } catch {
+    // Локальный выход важнее ответа сервера (как у logoutUser).
+  } finally {
+    getAuthState().clearSession();
+  }
+}
+
+/** `GET /auth/verify-email?token=…` — подтвердить email по ссылке из письма. */
+export function verifyEmail(token: string): Promise<EmailVerificationResponse> {
+  return request<EmailVerificationResponse>(
+    `/auth/verify-email?token=${encodeURIComponent(token)}`,
+  );
+}
+
+/** `POST /auth/forgot-password` — запросить письмо сброса (ответ нейтрален). */
+export function forgotPassword(email: string): Promise<MessageResponse> {
+  return request<MessageResponse>("/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** `POST /auth/reset-password` — сменить пароль по токену из письма. */
+export function resetPassword(
+  token: string,
+  newPassword: string,
+): Promise<MessageResponse> {
+  return request<MessageResponse>("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
 }
 
 export function analyzeGame(pgn: string, level: Level): Promise<AnalyzeResponse> {

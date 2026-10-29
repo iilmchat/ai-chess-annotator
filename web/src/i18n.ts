@@ -41,6 +41,64 @@ const resources = {
         sessionExpired: "Сессия истекла. Войдите снова.",
         loginSuccess: "Добро пожаловать!",
         registerSuccess: "Аккаунт создан, теперь войдите.",
+        forgotPasswordLink: "Забыли пароль?",
+        logoutAll: "Выйти со всех устройств",
+        profileMenu: "Меню профиля",
+        emailNotVerifiedTitle: "Подтвердите email",
+        emailNotVerifiedBody:
+          "Мы отправили ссылку на {{email}}. Перейдите по ней, чтобы открыть анализ партий и комментарии. Ссылка действует 24 часа.",
+        emailNotVerifiedHint:
+          "Письма нет? Проверьте папку «Спам» — новая ссылка появится в следующей версии.",
+        emailNotVerifiedRefresh: "Я подтвердил(а) — проверить снова",
+        emailNotVerifiedShort:
+          "Подтвердите email, чтобы открыть анализ партий. Ссылка отправлена на вашу почту.",
+      },
+      verifyEmail: {
+        title: "Подтверждение email",
+        checking: "Идёт проверка…",
+        successTitle: "Email успешно подтвержден!",
+        successBody:
+          "Теперь вам доступен анализ партий и комментарии. Приятной игры!",
+        errorTitle: "Не удалось подтвердить email",
+        invalidToken:
+          "Токен недействителен или истёк. Запросите новое письмо.",
+        missingToken:
+          "В ссылке нет токена. Откройте ссылку из письма целиком.",
+        networkError: "Сервер недоступен. Попробуйте ещё раз.",
+        retry: "Повторить",
+        goHome: "На главную",
+        goLogin: "Войти",
+      },
+      forgotPassword: {
+        title: "Забыли пароль?",
+        subtitle:
+          "Укажите email — мы отправим ссылку для сброса пароля.",
+        submit: "Отправить ссылку",
+        submitting: "Отправляем…",
+        sentTitle: "Письмо отправлено",
+        sentBody:
+          "Если такой email существует, мы отправили ссылку. Проверьте почту.",
+        required: "Введите email.",
+        backToLogin: "Вернуться ко входу",
+        genericError: "Не удалось отправить запрос. Попробуйте позже.",
+      },
+      resetPassword: {
+        title: "Новый пароль",
+        subtitle: "Придумайте новый пароль для аккаунта.",
+        newPassword: "Новый пароль",
+        confirmPassword: "Повторите пароль",
+        submit: "Сохранить пароль",
+        submitting: "Сохраняем…",
+        errorTitle: "Не удалось сбросить пароль",
+        mismatch: "Пароли не совпадают.",
+        weakPassword: "Пароль должен быть не короче 8 символов.",
+        missingToken:
+          "Ссылка недействительна: в ней нет токена. Запросите новое письмо.",
+        invalidToken:
+          "Ссылка недействительна или уже использована. Запросите новое письмо.",
+        success: "Пароль обновлён. Войдите с новым паролем.",
+        goForgot: "Запросить новое письмо",
+        backToLogin: "Вернуться ко входу",
       },
       usage: {
         label: "{{tier}}: {{used}}/{{limit}}",
@@ -220,6 +278,61 @@ const resources = {
         sessionExpired: "Session expired. Please sign in again.",
         loginSuccess: "Welcome back!",
         registerSuccess: "Account created — please sign in.",
+        forgotPasswordLink: "Forgot password?",
+        logoutAll: "Sign out of all devices",
+        profileMenu: "Profile menu",
+        emailNotVerifiedTitle: "Confirm your email",
+        emailNotVerifiedBody:
+          "We sent a link to {{email}}. Open it to unlock game analysis and commentary. The link is valid for 24 hours.",
+        emailNotVerifiedHint:
+          "No email? Check the Spam folder — a resend option is planned for the next release.",
+        emailNotVerifiedRefresh: "I've confirmed — check again",
+        emailNotVerifiedShort:
+          "Confirm your email to unlock game analysis. We sent the link to your inbox.",
+      },
+      verifyEmail: {
+        title: "Email verification",
+        checking: "Verifying…",
+        successTitle: "Email confirmed successfully!",
+        successBody:
+          "Game analysis and commentary are now available. Enjoy your games!",
+        errorTitle: "Email verification failed",
+        invalidToken: "The token is invalid or has expired. Request a new email.",
+        missingToken: "The link has no token. Open the full link from the email.",
+        networkError: "The server is unreachable. Please try again.",
+        retry: "Retry",
+        goHome: "Go home",
+        goLogin: "Sign in",
+      },
+      forgotPassword: {
+        title: "Forgot password?",
+        subtitle: "Enter your email — we'll send a password reset link.",
+        submit: "Send link",
+        submitting: "Sending…",
+        sentTitle: "Email sent",
+        sentBody:
+          "If such an email exists, we've sent a link. Please check your inbox.",
+        required: "Enter your email.",
+        backToLogin: "Back to sign in",
+        genericError: "Could not send the request. Please try again later.",
+      },
+      resetPassword: {
+        title: "New password",
+        subtitle: "Choose a new password for your account.",
+        newPassword: "New password",
+        confirmPassword: "Repeat password",
+        submit: "Save password",
+        submitting: "Saving…",
+        errorTitle: "Password reset failed",
+        mismatch: "Passwords do not match.",
+        weakPassword: "Password must be at least 8 characters.",
+        missingToken:
+          "This link is invalid: it has no token. Request a new email.",
+        invalidToken:
+          "This link is invalid or already used. Request a new email.",
+        success: "Password updated. Please sign in with the new password.",
+        goForgot: "Request a new email",
+        backToLogin: "Back to sign in",
       },
       usage: {
         label: "{{tier}}: {{used}}/{{limit}}",

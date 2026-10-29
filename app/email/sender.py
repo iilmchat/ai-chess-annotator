@@ -101,8 +101,8 @@ def _link(settings: Settings, path: str, token: str) -> str:
 def verification_message(
     settings: Settings, *, to: str, token: str
 ) -> EmailMessage:
-    """Письмо со ссылкой подтверждения email."""
-    link = _link(settings, "/auth/verify-email", token)
+    """Письмо со ссылкой на frontend-страницу подтверждения email."""
+    link = _link(settings, "/verify-email", token)
     return EmailMessage(
         to=to,
         subject="ChessAnnotator: подтверждение email",
@@ -121,15 +121,14 @@ def verification_message(
 def password_reset_message(
     settings: Settings, *, to: str, token: str
 ) -> EmailMessage:
-    """Письмо со ссылкой сброса пароля."""
-    link = _link(settings, "/auth/reset-password", token)
+    """Письмо со ссылкой на frontend-страницу сброса пароля."""
+    link = _link(settings, "/reset-password", token)
     return EmailMessage(
         to=to,
         subject="ChessAnnotator: сброс пароля",
         body=(
             "Здравствуйте!\n\n"
-            "Для смены пароля откройте ссылку (или передайте токен в "
-            "POST /auth/reset-password):\n"
+            "Для смены пароля откройте ссылку:\n"
             f"{link}\n\n"
             f"Ссылка действует {settings.password_reset_ttl_min} мин. "
             "Если вы не запрашивали сброс, проигнорируйте письмо."

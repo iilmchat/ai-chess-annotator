@@ -46,7 +46,13 @@ export default function HomePage() {
       setAnalysis(result, parsed.positions, parsed.initialFen);
       navigate(`/analysis/${result.analysis_id}`);
     } catch (cause) {
-      setError(errorMessage(cause, t("common.unknown")));
+      // KI-055: даже если AuthGate уже показывает экран подтверждения,
+      // 403 от API должен читаться как понятная инструкция, а не код.
+      if (cause instanceof ApiError && cause.code === "email_not_verified") {
+        setError(t("auth.emailNotVerifiedShort"));
+      } else {
+        setError(errorMessage(cause, t("common.unknown")));
+      }
     } finally {
       setBusy(false);
     }

@@ -193,7 +193,7 @@ def test_register_creates_unverified_user_and_sends_link(
         assert message.kind == "verify_email"
         assert message.to == email
         assert message.token
-        assert "/auth/verify-email?token=" in message.link
+        assert "/verify-email?token=" in message.link
     finally:
         asyncio.run(_delete_users([email]))
 
@@ -304,7 +304,7 @@ def test_forgot_password_is_enumeration_safe(
         message = _outbox(client)[-1]
         assert message.to == known
         assert message.kind == "password_reset"
-        assert "/auth/reset-password?token=" in message.link
+        assert "/reset-password?token=" in message.link
     finally:
         asyncio.run(_delete_users([known]))
 

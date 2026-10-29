@@ -164,35 +164,45 @@ rate 5xx, стоимость и токены LLM. HTTP-спан `http_request` �
 `OTEL_ENABLED=true` спаны и метрики уходят в коллектор, при `false` —
 no-op.
 
-## 5.2. Auth lifecycle (KI-041)
+## 5.2. Auth lifecycle (KI-041, KI-055)
 
 ```text
 register → users.is_verified=false → MockEmailSender (verify JWT 24h)
-         → GET /auth/verify-email?token → is_verified=true
+         → frontend /verify-email?token → GET /auth/verify-email
+         → is_verified=true
 analyze/commentary → get_current_verified_user
          → 403 email_not_verified (admin/auditor bypass)
-forgot-password → reset JWT 30m → POST /auth/reset-password
+forgot-password → frontend /forgot-password → 202 (no enumeration)
+         → reset JWT 30m → /reset-password?token
+         → POST /auth/reset-password
          → Argon2id + revoked_before:<user_id> (одноразовый токен)
 logout-all → revoked_before:<user_id> (Unix-ms)
 refresh → проверка jti-denylist + issued_at (iat_ms) > revoked_before
 ```
 
-Неверифицированный пользователь может войти и читать `/auth/me`, но
-генерация закрыта. `MockEmailSender` пишет ссылку в structlog; SMTP —
-KI-055. Global revocation fail-open при недоступном Redis (как denylist).
+Неверифицированный пользователь может войти и читать `/auth/me`, но UI
+показывает экран «Подтвердите email» (`AuthGate`), а генерация закрыта.
+Ссылки в письмах строятся от `APP_BASE_URL` (SPA), а не от API:
+`/verify-email` и `/reset-password`. `MockEmailSender` пишет ссылку в
+structlog; SMTP — KI-056. Global revocation fail-open при недоступном
+Redis (как denylist).
 
-## 5.3. Фоновые задачи (KI-053)
+## 5.3. Фоновые задачи и retention (KI-053, KI-054)
 
 ```text
 API POST /v1/admin/exports/jobs
   → export_jobs(queued) → Redis arq:queue (enqueue_job)
   → arq worker: run_export_job → JSONL в EXPORT_DIR → done/failed
 API/worker startup → recover_stale_export_jobs: running >15 мин → failed
+cron → scripts/prune_export_jobs.py: created_at < cutoff
+     → удалить файл внутри EXPORT_DIR → DELETE export_jobs
 ```
 
 Docker-сервис `worker` (`arq worker.WorkerSettings`) в dev/prod compose,
 общий volume `data`/`prod_export_data`; API-процесс не выполняет выгрузку.
 Если Redis недоступен — 503 `export_queue_unavailable`, джоба `failed`.
+Retention по умолчанию 7 дней (`EXPORT_RETENTION_DAYS`); файлы вне
+`EXPORT_DIR` не удаляются, signed URL — KI-057.
 
 ## 6. Frontend
 
@@ -200,8 +210,12 @@ Docker-сервис `worker` (`arq worker.WorkerSettings`) в dev/prod compose,
   5.12.1 для доски, `chess.js` (`history({verbose:true})`) для FEN из
   PGN, `react-i18next` (RU/EN), Zustand с persist в `sessionStorage`.
 - Маршруты: `/` (PGN + анализ), `/history` (последние 20),
-  `/analysis/:id` (загрузка сохранённого анализа). `AnalysisWorkspace`
-  общий для главной и карточки.
+  `/analysis/:id` (загрузка сохранённого анализа), публичные
+  `/verify-email`, `/forgot-password`, `/reset-password` (KI-055).
+  `AnalysisWorkspace` общий для главной и карточки.
+- Auth-UX: `AuthGate` при `is_verified=false` показывает экран
+  «Подтвердите email»; в шапке — `ProfileMenu` с «Выйти» и «Выйти со всех
+  устройств» (`POST /auth/logout-all`).
 - История чата — `chatStore` (Zustand, `sessionStorage`), уходит в
   `/v1/chat` и `/v1/chat/stream` как `history`; usage-badge опрашивает
   `/v1/users/me/usage`.

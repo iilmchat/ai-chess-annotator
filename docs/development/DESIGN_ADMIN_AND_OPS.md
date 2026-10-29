@@ -214,8 +214,10 @@ CREATE INDEX ix_users_role ON users (role) WHERE role <> 'user';
 (202 без enumeration) → reset JWT 30 мин → Argon2id + одноразовость через
 `revoked_before:<user_id>` (Unix-ms). `logout-all` пишет тот же маркер;
 `/auth/refresh` сверяет `issued_at` (`iat_ms`) и отклоняет токены,
-выпущенные до отзыва. Redis fail-open, как у denylist; 2FA/SSO/SMTP —
-KI-055.
+выпущенные до отзыва. Redis fail-open, как у denylist. Frontend-страницы
+`/verify-email`, `/forgot-password`, `/reset-password` и logout-all в меню
+профиля — итерация 33 (KI-055); 2FA/SSO/SMTP/лимит по email/resend —
+KI-056.
 
 ### 4.2. `prompts` — реестр версий
 
@@ -708,7 +710,10 @@ T-028/T-029/T-034/T-035 без второго фреймворка
   создание только admin/legacy (auditor read-only). **В итерации 32
   (KI-053)** BackgroundTasks заменён на arq-воркер (`app/worker.py`,
   сервис `worker` в compose, recovery `running>15 мин → failed`);
-  подписанные ссылки и retention файлов — KI-054.
+  **в итерации 33 (KI-054)** добавлен
+  `scripts/prune_export_jobs.py` (файлы внутри `EXPORT_DIR` + строки
+  `export_jobs`, `EXPORT_RETENTION_DAYS=7`, cron); подписанные ссылки —
+  KI-057.
 
 ### 5.5. Кастомные страницы
 

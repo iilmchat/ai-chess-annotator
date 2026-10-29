@@ -23,6 +23,10 @@ services:
       STOCKFISH_PATH: /usr/bin/stockfish
       # KI-053: общий каталог с воркером (файлы выгрузок).
       EXPORT_DIR: /app/data/exports
+      # KI-054: retention export_jobs/EXPORT_DIR (scripts/prune_export_jobs.py).
+      EXPORT_RETENTION_DAYS: ${PROD_EXPORT_RETENTION_DAYS:-7}
+      # KI-055: ссылки в письмах ведут на SPA (тот же origin, что API).
+      APP_BASE_URL: ${PROD_APP_BASE_URL:-http://127.0.0.1:8000}
       # LM Studio на хосте (если используется локальная LLM). Не берём
       # VLLM_BASE_URL из dev-.env: там 127.0.0.1 указывает на контейнер.
       VLLM_BASE_URL: ${PROD_VLLM_BASE_URL:-http://host.docker.internal:8034/v1}

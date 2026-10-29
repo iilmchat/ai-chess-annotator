@@ -81,10 +81,15 @@ class Settings(BaseSettings):
     arq_queue_name: str = "arq:queue"
     #: `running`-джобы старше N минут при старте API/воркера → `failed`.
     export_job_stale_minutes: int = 15
+    #: KI-054: сколько дней хранить `export_jobs` и готовые JSONL в
+    #: `EXPORT_DIR`. Используется `scripts/prune_export_jobs.py` (cron).
+    export_retention_days: int = 7
 
     # Email / верификация (KI-041)
-    #: Базовый URL API для ссылок в письмах (без завершающего `/`).
-    app_base_url: str = "http://localhost:8000"
+    #: Публичный URL приложения (SPA) для ссылок в письмах: в dev — Vite
+    #: (5173), в prod — тот же origin, что и API (SPA раздаётся `app.web`).
+    #: Без завершающего `/`.
+    app_base_url: str = "http://localhost:5173"
     #: `mock` — лог в structlog; SMTP-реализация появится отдельным шагом.
     email_sender: str = "mock"
     email_from: str = "noreply@chessannotator.local"

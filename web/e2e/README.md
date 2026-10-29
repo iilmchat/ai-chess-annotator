@@ -2,8 +2,10 @@
 
 Сквозные сценарии фронтенда на реальном браузере: регистрация/вход, разбор
 партии, генерация и правка комментария (SSE), история партий, дневной лимит
-токенов. Гоняются на двух проектах: `chromium` (Desktop Chrome) и `mobile`
-(Pixel 7), поэтому каждый сценарий обязан работать и на мобильном вьюпорте.
+токенов, а также auth-UX итерации 33 (verify-email, forgot/reset-password,
+logout-all, экран «подтвердите email»). Гоняются на двух проектах:
+`chromium` (Desktop Chrome) и `mobile` (Pixel 7), поэтому каждый сценарий
+обязан работать и на мобильном вьюпорте.
 
 Основной режим — **mocked**: все запросы к API перехватываются
 `page.route` (`web/e2e/fixtures.ts`), поэтому не нужны backend, Postgres,
@@ -14,7 +16,7 @@ Stockfish и LLM. Этот же режим используется в CI.
 ```bash
 pnpm --dir web install
 pnpm --dir web exec playwright install chromium   # если браузера нет в кэше
-pnpm --dir web run test:e2e                       # 5 сценариев × 2 проекта = 10 тестов
+pnpm --dir web run test:e2e                       # 14 сценариев × 2 проекта = 28 тестов
 ```
 
 Отдельный проект / отладка:
@@ -30,6 +32,21 @@ Playwright сам поднимает Vite dev server (`pnpm dev --host 127.0.0.1
 запущенный сервер переиспользуется (`reuseExistingServer: !CI`). Адрес —
 именно `127.0.0.1`, не `localhost` (RULES §11.1).
 
+### `E2E_PREVIEW=1` (Windows/DSH-песочница)
+
+В DSH-песочнице на Windows dev-сервер не стартует: esbuild получает
+`Access is denied` при записи в `web/node_modules/.vite`. Обход — собрать
+`dist` и раздавать его через `vite preview` (preview проксирует `/auth` и
+`/v1` так же, как dev):
+
+```powershell
+$env:E2E_PREVIEW="1"
+pnpm --dir web run test:e2e
+```
+
+Этот режим использует те же mocked-сценарии; CI по-прежнему запускает
+`pnpm dev`.
+
 ## Структура
 
 ```
@@ -37,7 +54,8 @@ web/
 ├─ playwright.config.ts     # testDir ./e2e, projects chromium+mobile, webServer
 └─ e2e/
    ├─ fixtures.ts           # моки API + helpers (mockApi, registerAndLogin)
-   ├─ auth.spec.ts          # регистрация → вход → email в шапке → «Выйти»
+   ├─ auth.spec.ts          # регистрация → вход → меню профиля → «Выйти»
+   ├─ auth-flow.spec.ts     # verify-email, forgot/reset, unverified gate, logout-all
    ├─ analyze.spec.ts       # анализ PGN → доска + MoveList → /analysis/:id
    ├─ commentary.spec.ts    # SSE-генерация → «Редактировать» → PATCH → «edit #id»
    ├─ history.spec.ts       # «История» в шапке → /history → строка партии
@@ -55,11 +73,15 @@ web/
 
 | Метод и путь | Ответ мока |
 | --- | --- |
-| `POST /auth/register` | `201` + `AuthUser` |
+| `POST /auth/register` | `201` + `AuthUser` (обычный email — verified; `unverified-…` — нет) |
 | `POST /auth/login` | `200` + `{access_token, token_type, expires_in, user}`; refresh — только в HttpOnly cookie |
 | `POST /auth/refresh` | `401` до логина, после логина `200` + `{access_token, token_type, expires_in, user}` (stateful) |
 | `POST /auth/logout` | `204` без тела, сбрасывает состояние мока |
-| `GET /auth/me` | `200` + `AuthUser` |
+| `POST /auth/logout-all` | `204` без тела, сбрасывает состояние мока |
+| `GET /auth/verify-email` | `200` + `{email, is_verified:true}`; `token=invalid` → `401` |
+| `POST /auth/forgot-password` | `202` + нейтральный `{detail}` |
+| `POST /auth/reset-password` | `200` + `{detail}`; `token=invalid` → `401` |
+| `GET /auth/me` | `200` + `AuthUser` (учитывает verified-состояние мока) |
 | `GET /v1/users/me/usage` | `200` + `{enabled:true, tier:"free", used_tokens:0, limit_tokens:50000, remaining_tokens:50000}` |
 | `POST /v1/analyze` | `200` + `AnalyzeResponse` (`analysis_id:"42"`) |
 | `GET /v1/games` | `200` + список партий (id `77`) |
@@ -81,7 +103,10 @@ Vite-proxy (`/auth` и `/v1` из `vite.config.ts`).
 - роли/тексты RU (язык по умолчанию): `getByRole("tab", {name:"Регистрация"})`,
   `getByLabel("Email")`, `getByRole("button", {name:"Разобрать партию"})`,
   `getByRole("link", {name:"История"})`, `getByRole("region", {name:"Ходы"})`,
-  `getByRole("textbox", {name:"Текст комментария"})`;
+  `getByRole("textbox", {name:"Текст комментария"})`,
+  `getByRole("menuitem", {name:"Выйти", exact:true})` (подстрока иначе
+  совпадает с «Выйти со всех устройств»), меню профиля —
+  `getByRole("button", {name:"Вы вошли как <email>"})`;
 - устойчивые CSS-классы: `.board-wrap`, `.moves__grid .move`,
   `.commentary-text`, `[role="dialog"]`;
 - маркер успешного PATCH — текст `edit #<id>` (`commentary.savedEdit`).
@@ -118,6 +143,12 @@ proxy в `vite.config.ts` направлен на реальный API; `baseURL
   история), затем идёт в «Историю»;
 - `limits.spec.ts` проверяет тир `Free:` и модалку, точные цифры
   (`0/50k`) — только в mocked-режиме (лимит задаёт конфиг backend);
+- **регистрация в real-режиме создаёт неподтверждённый email** (KI-041):
+  без перехода по ссылке из structlog-лога (`email_mock_sent`) пользователь
+  видит экран «Подтвердите email», а `/v1/analyze` вернёт 403. Поэтому
+  real-режим требует ручного подтверждения (или SMTP-провайдера, KI-056);
+  mocked-режим считает обычный email подтверждённым, а префикс
+  `unverified-` включает экран явно;
 - `analyze.spec.ts`/`commentary.spec.ts` увеличивают таймауты
   (Stockfish/LLM): в real-режиме на комментарий даётся до 240 с, т.к.
   генерация через локальную LLM (LM Studio) занимает ~50–60 с;
@@ -127,8 +158,10 @@ proxy в `vite.config.ts` направлен на реальный API; `baseURL
   `commentary.spec.ts` ожидаемо упадёт.
 
 Проверено локально на живом backend (`127.0.0.1:8011`, Postgres 5435,
-Redis 6380, Stockfish, LM Studio): mocked-режим — 10 passed (2 проекта),
-real-режим `--project=chromium` — 5 passed (~1.2 мин).
+Redis 6380, Stockfish, LM Studio): real-режим `--project=chromium` — 5
+passed (~1.2 мин, итерация 32, до появления email-верификации).
+Mocked-режим итерации 33 — **28 passed** (14 сценариев × 2 проекта) через
+`E2E_PREVIEW=1`.
 
 ## Артефакты и CI
 

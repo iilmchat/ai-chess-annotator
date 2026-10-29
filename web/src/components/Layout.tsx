@@ -1,32 +1,19 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, NavLink, useNavigate } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 
-import { logoutUser } from "../api";
 import { selectIsAuthenticated, useAuthStore } from "../stores/authStore";
+import { ProfileMenu } from "./ProfileMenu";
 import { UsageBadge } from "./UsageBadge";
 
 export function Layout({ children }: { children: ReactNode }) {
   const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
   const isAuthenticated = useAuthStore(selectIsAuthenticated);
-  const user = useAuthStore((state) => state.user);
-  const clearSession = useAuthStore((state) => state.clearSession);
 
   function changeLanguage(language: string) {
     void i18n.changeLanguage(language);
     if (typeof window !== "undefined") {
       window.localStorage.setItem("chess.lang", language);
-    }
-  }
-
-  async function handleLogout() {
-    // POST /auth/logout чистит HttpOnly cookie; локальную сессию — всегда.
-    try {
-      await logoutUser();
-    } finally {
-      clearSession();
-      navigate("/login", { replace: true });
     }
   }
 
@@ -47,22 +34,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
         <div className="topbar__right">
           {isAuthenticated ? (
-            <div className="auth-user">
-              <span className="auth-user__email" title={user?.email}>
-                {t("auth.loggedInAs", {
-                  email: user?.email ?? t("auth.guest"),
-                })}
-              </span>
-              <button
-                type="button"
-                className="button button--ghost button--small"
-                onClick={() => {
-                  void handleLogout();
-                }}
-              >
-                {t("auth.logout")}
-              </button>
-            </div>
+            <ProfileMenu />
           ) : (
             <NavLink
               to="/login"

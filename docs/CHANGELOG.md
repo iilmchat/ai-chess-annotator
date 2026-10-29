@@ -8,6 +8,31 @@
 
 ### Added
 
+- **Frontend auth UX (KI-055, итерация 33):** публичные маршруты
+  `/verify-email?token=…` (GET `/auth/verify-email` при монтировании,
+  статусы проверки/успеха/ошибки, обновление `authStore` после успеха),
+  `/forgot-password` (нейтральное сообщение после 202) и
+  `/reset-password?token=…` (новый пароль + повтор, редирект на `/login`
+  с сообщением). `AuthGate` показывает экран «Подтвердите email» при
+  `is_verified=false` (роль `user`; admin/auditor — bypass) с повторной
+  проверкой профиля; `HomePage` отдельно обрабатывает 403
+  `email_not_verified`. В шапке — выпадающее меню профиля с «Выйти» и
+  «Выйти со всех устройств» (`POST /auth/logout-all`, очистка сессии +
+  редирект). Ссылки в письмах теперь ведут на SPA
+  (`APP_BASE_URL`/`verify-email`, `/reset-password`; dev-дефолт
+  `http://localhost:5173`). i18n RU/EN. Тесты: Vitest
+  `api.authFlow.test.ts` (7), Playwright `auth-flow.spec.ts`
+  (9 сценариев × 2 проекта).
+- **Retention экспортов (KI-054, итерация 33):**
+  `scripts/prune_export_jobs.py` — батчевое удаление строк `export_jobs`
+  старше `EXPORT_RETENTION_DAYS` (7) и их файлов; удаляются только пути
+  внутри `EXPORT_DIR` (подмена `file_path`/симлинк → warning), файл
+  удаляется до строки; `--retention-days`, `--export-dir`, `--batch-size`,
+  `--max-batches`, `--dry-run`, `--json`, exit codes 0/2. Инструкция по
+  cron/systemd/Windows Task Scheduler — `GETTING_STARTED.md` §9.3; в
+  `docker-compose.prod.yml` — `EXPORT_RETENTION_DAYS`/`APP_BASE_URL`.
+  Тесты: `tests/unit/test_prune_export_jobs.py` (7),
+  `tests/integration/test_prune_export_jobs.py` (6).
 - **ARQ-воркер фоновых выгрузок (KI-053, итерация 32):** `app/worker.py`
   и корневой `worker.py` (`arq worker.WorkerSettings`), задача
   `run_export_job(ctx, job_id)`; API только ставит задачу в Redis

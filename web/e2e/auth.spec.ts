@@ -13,9 +13,15 @@ test("регистрация и вход: email в шапке и кнопка «
 
   await registerAndLogin(page, email);
 
-  // В шапке — email пользователя (auth.loggedInAs) и кнопка выхода.
+  // В шапке — email пользователя (auth.loggedInAs) в меню профиля.
   await expect(page.getByText(`Вы вошли как ${email}`)).toBeVisible();
-  const logout = page.getByRole("button", { name: "Выйти" });
+  await page
+    .getByRole("button", { name: `Вы вошли как ${email}` })
+    .click();
+  const logout = page.getByRole("menuitem", {
+    name: "Выйти",
+    exact: true,
+  });
   await expect(logout).toBeVisible();
 
   // Выход чистит сессию и возвращает на страницу входа.

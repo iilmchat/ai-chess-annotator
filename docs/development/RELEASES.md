@@ -1941,3 +1941,84 @@ KI-055.
   длинных джоб.
 - **T-113:** Alertmanager по стоимости/latency/error rate.
 - **T-118:** SSO/SAML для админки.
+
+---
+
+## Итерация 33 — Frontend Auth UX & Export Retention (KI-055, KI-054)
+
+**Дата:** 2026-10-30
+**Статус:** ✅ завершена. KI-055 и KI-054 закрыты (в объёме итерации);
+добавлены KI-056 (SMTP/2FA/SSO/лимит по email/resend) и KI-057
+(signed URL).
+**Отчёт:** `docs/development/reports/v0.10.0/ITERATION-33.md`
+
+### Что сделано
+
+- [x] **KI-055, verify-email UI.** Публичный `/verify-email?token=…`:
+  `GET /auth/verify-email` при монтировании, статусы «Идёт проверка…» /
+  «Email успешно подтвержден!» / ошибка; single-flight на токен
+  (StrictMode); обновление профиля в `authStore` после успеха.
+- [x] **KI-055, forgot/reset UI.** `/forgot-password` (нейтральный 202) и
+  `/reset-password?token=…` (новый пароль + повтор, редирект на `/login`
+  с сообщением); ссылка «Забыли пароль?» на `/login`; i18n RU/EN.
+- [x] **KI-055, unverified gate.** `AuthGate` показывает «Подтвердите
+  email» при `is_verified=false` (admin/auditor bypass), кнопка повторной
+  проверки профиля; `HomePage` обрабатывает 403 `email_not_verified`.
+- [x] **KI-055, logout-all.** Выпадающее меню профиля в шапке: «Выйти» и
+  «Выйти со всех устройств» (`POST /auth/logout-all`, очистка store,
+  редирект на `/login`).
+- [x] **Ссылки писем.** Ведут на SPA (`APP_BASE_URL`/`verify-email`,
+  `/reset-password`), dev-дефолт `http://localhost:5173`; `APP_BASE_URL`
+  в prod-compose переопределяется.
+- [x] **KI-054, retention.** `scripts/prune_export_jobs.py` — батчевое
+  удаление старых строк `export_jobs` и файлов внутри `EXPORT_DIR`;
+  `EXPORT_RETENTION_DAYS=7`; `--dry-run`/`--json`/`--max-batches`;
+  защита от путей вне каталога; cron/systemd/Windows Task Scheduler в
+  `GETTING_STARTED.md` §9.3; `scripts/` копируется в Docker-образ.
+- [x] **Тесты и документация:** Vitest 53 (+7), Playwright 28 (+18),
+  backend 761 (+15); SPEC/ARCHITECTURE/GETTING_STARTED/USER_GUIDE/
+  DESIGN/README/TODO/CHANGELOG/KNOWN_ISSUES.
+
+### Метрики
+
+- **Backend-тесты:** **761 passed, 1 skipped, 1 xfailed** (72 файла;
+  +15 к итерации 32), **241.81 с**, exit 0. Skip — cairo на Windows-dev;
+  xfail — KI-012.
+- **Новые тесты:** retention 15 (9 unit + 6 integration), auth-flow API 7,
+  auth-UX E2E 18 (9×2); обновлены ссылки/моки auth.
+- **Frontend-тесты:** **53 passed** (8 файлов); typecheck 0; build 5.60 с
+  (JS 480.87 КБ / gzip 149.85, CSS 15.70 КБ / gzip 4.09).
+- **E2E mocked:** **28 passed** (14 сценариев × chromium/mobile), 23.0 с;
+  локально на Windows/DSH — `E2E_PREVIEW=1` (build+preview), CI —
+  `pnpm dev`.
+- **ruff:** 0; **mypy:** 0 (strict), `app` 84 файла + скрипт.
+- **Alembic:** 13 ревизий, head `dcf1da1421cd`; upgrade + `alembic check`
+  + roundtrip — чистые; 16 app-таблиц (+`alembic_version`).
+- **Docker:** `chessannotator:iter33` собирается; `import app.main,
+  worker, scripts.prune_export_jobs` OK; `cairosvg_available()=True`.
+- **Retention smoke:** `--dry-run --json` на iter33-БД → `deleted_rows=0`,
+  `deleted_files=0`, exit 0.
+- **KI:** 57 записей, 25 Open, 32 Closed (KI-054/KI-055 закрыты,
+  +KI-056/KI-057).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Реальный SMTP/SES | Mock достаточно для dev/CI; нужен провайдер/секреты | KI-056 |
+| Resend verification | Нет endpoint и cooldown; письмо живёт 24 ч | KI-056 |
+| 2FA/TOTP, SSO, per-email лимит | Отдельный объём | KI-056/T-118 |
+| Signed URL экспортов | Требует TTL/scope-дизайна; retention уже закрыт | KI-057 |
+| Мгновенный отзыв access-токенов | JWT stateless; access живёт 15 мин | — |
+| Real-backend E2E после verify | Новый пользователь unverified; нужен доступ к outbox/логу | KI-040/056 |
+| Авто-retry упавших retention-файлов | Ошибка удаления логируется, строка чистится | KI-054 §5 |
+| LoRA-обучение (KI-030) | Нет GPU | KI-030 |
+
+### Что дальше
+
+- **KI-056:** SMTP/SES, resend-verification, 2FA/TOTP, SSO, per-email
+  rate limit.
+- **KI-057:** signed URL для `/v1/admin/exports/jobs/{id}/download`
+  (TTL + scope + аудит).
+- **T-113:** Alertmanager по стоимости/latency/error rate.
+- **T-118:** SSO/SAML для админки.

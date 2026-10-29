@@ -44,6 +44,9 @@ RUN pip install --upgrade pip \
 
 COPY alembic.ini ./
 COPY alembic ./alembic
+# KI-054: ops-скрипты (retention llm_calls/export_jobs, агрегаты) доступны
+# внутри контейнера для cron/systemd — `python scripts/prune_export_jobs.py`.
+COPY scripts ./scripts
 COPY --from=web-build /web/dist ./web/dist
 
 RUN useradd --create-home --uid 10001 appuser \

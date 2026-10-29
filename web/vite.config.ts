@@ -20,6 +20,15 @@ export default defineConfig(({ mode }) => {
         "/auth": apiTarget,
       },
     },
+    // `E2E_PREVIEW=1` (Windows/DSH): preview раздаёт dist и проксирует API
+    // так же, как dev-сервер — real-backend E2E продолжает работать.
+    preview: {
+      port: 5173,
+      proxy: {
+        "/v1": apiTarget,
+        "/auth": apiTarget,
+      },
+    },
     test: {
       // E2E Playwright-спеки (web/e2e/**) не должны запускаться в Vitest
       // (T-036b): у них другой раннер и нет jsdom-окружения.

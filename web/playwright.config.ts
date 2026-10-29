@@ -8,6 +8,15 @@ import { defineConfig, devices } from "@playwright/test";
  * Подробности — web/e2e/README.md.
  */
 const REAL_BACKEND = process.env.E2E_REAL_BACKEND === "1";
+/**
+ * `E2E_PREVIEW=1` — собирать `dist` и раздавать его через `vite preview`.
+ *
+ * Windows/DSH-песочница блокирует запись esbuild в `node_modules/.vite`
+ * (`Access is denied`), поэтому dev-сервер в такой среде не стартует.
+ * Preview раздаёт уже собранный `dist` с теми же mocked-сценариями; CI
+ * по умолчанию использует `pnpm dev` (см. web/e2e/README.md).
+ */
+const PREVIEW = process.env.E2E_PREVIEW === "1";
 const CI = Boolean(process.env.CI);
 const PORT = 5173;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
@@ -41,7 +50,10 @@ export default defineConfig({
   ],
   webServer: {
     // Vite dev server; baseURL — строго 127.0.0.1 (RULES §11.1).
-    command: `pnpm dev --host 127.0.0.1 --port ${PORT} --strictPort`,
+    // E2E_PREVIEW=1: build + preview (обход sandbox-блокировки esbuild).
+    command: PREVIEW
+      ? `pnpm build && pnpm preview --host 127.0.0.1 --port ${PORT} --strictPort`
+      : `pnpm dev --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: BASE_URL,
     timeout: 180_000,
     reuseExistingServer: !CI,

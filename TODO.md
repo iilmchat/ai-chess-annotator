@@ -562,7 +562,8 @@
   API только `enqueue_job` (503 `export_queue_unavailable`, джоба
   `failed` при недоступном Redis); recovery `running>15 мин → failed`
   при старте API и воркера; docker-сервис `worker` в dev/prod compose
-  с общим volume. Остаток retention файлов/подписанные ссылки — KI-054.
+  с общим volume. Retention закрыт в итерации 33 (T-045/KI-054);
+  подписанные ссылки — KI-057.
 - **Что (полная постановка):** страница Export в админке и `GET
   /v1/admin/exports/edits.jsonl` (streaming): фильтры по дате, уровню,
   модели, `human_edited`; схема JSONL; опциональное вырезание PII;
@@ -726,8 +727,25 @@
   хеш и отзывает старые refresh; logout-all инвалидирует старые сессии;
   тесты `tests/integration/test_auth_ki041.py` (8) и
   `tests/unit/test_email_sender.py` (5).
-- **Остаток:** 2FA/SSO, лимит попыток по email, SMTP, frontend-страницы —
-  KI-055.
+- **Остаток:** frontend-страницы verify/reset и logout-all закрыты в
+  итерации 33 (T-045/KI-055); 2FA/SSO, лимит попыток по email, SMTP,
+  resend-verification — KI-056.
+
+### [x] T-045. Frontend Auth UX & Export Retention (KI-055, KI-054, итерация 33)
+- **Зависит от:** T-028b, T-034b
+- **Что:** публичные страницы `/verify-email` (GET с токеном из URL),
+  `/forgot-password` (нейтральный 202), `/reset-password` (новый пароль +
+  редирект на `/login`); экран «Подтвердите email» в `AuthGate` для
+  `is_verified=false` (admin/auditor bypass) и понятная ошибка 403
+  `email_not_verified` в `HomePage`; меню профиля с «Выйти со всех
+  устройств» (`POST /auth/logout-all`); i18n RU/EN; ссылки в письмах
+  ведут на SPA (`APP_BASE_URL`), а не на JSON-API. Retention:
+  `scripts/prune_export_jobs.py` (файлы внутри `EXPORT_DIR` + строки
+  `export_jobs`, батчи, dry-run, json), `EXPORT_RETENTION_DAYS=7`, cron.
+- **DoD:** Vitest 53, E2E mocked 28 (14×2), backend 761 (full);
+  retention unit+integration 15; ruff/mypy/build green.
+- **Остаток:** SMTP/2FA/SSO/лимит по email/resend — KI-056; signed URL
+  экспортов — KI-057.
 
 ### [x] T-044. Dataset Schema v2: fact_sheet → commentary (KI-039, итерация 26)
 - **Зависит от:** T-104

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError, loginUser, registerUser } from "../api";
 
@@ -8,12 +8,15 @@ type Mode = "login" | "register";
 
 interface LoginLocationState {
   from?: { pathname?: string };
+  /** Пришёл с `/reset-password` после успешной смены пароля (KI-055). */
+  passwordReset?: boolean;
 }
 
 export default function LoginPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+  const locationState = location.state as LoginLocationState | null;
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -96,6 +99,12 @@ export default function LoginPage() {
         <h1 className="auth-card__title">{t("auth.title")}</h1>
         <p className="muted auth-card__subtitle">{t("auth.subtitle")}</p>
 
+        {locationState?.passwordReset ? (
+          <div className="banner banner--success" role="status">
+            {t("resetPassword.success")}
+          </div>
+        ) : null}
+
         <div className="auth-tabs" role="tablist" aria-label={t("auth.title")}>
           <button
             type="button"
@@ -167,6 +176,14 @@ export default function LoginPage() {
           >
             {submitting ? t("auth.submitting") : submitLabel}
           </button>
+
+          {mode === "login" ? (
+            <div className="actions auth-links">
+              <Link to="/forgot-password" className="auth-link">
+                {t("auth.forgotPasswordLink")}
+              </Link>
+            </div>
+          ) : null}
         </form>
       </section>
     </main>

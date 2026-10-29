@@ -57,13 +57,14 @@ export function uniqueEmail(prefix = "e2e"): string {
 // Мок-данные: повторяют контракты web/src/types.ts
 // ---------------------------------------------------------------------------
 
-function authUser(email: string): AuthUser {
+function authUser(email: string, isVerified = true): AuthUser {
   return {
     id: 1,
     email,
     level: "club",
     role: "user",
     is_active: true,
+    is_verified: isVerified,
     created_at: "2026-10-28T10:00:00Z",
   };
 }
@@ -224,6 +225,15 @@ function requestText(route: Route): string | null {
 interface AuthMockState {
   loggedIn: boolean;
   email: string;
+  verified: boolean;
+}
+
+function requestBody(route: Route): Record<string, unknown> {
+  try {
+    return (route.request().postDataJSON() as Record<string, unknown>) ?? {};
+  } catch {
+    return {};
+  }
 }
 
 async function handleAuthRoute(
@@ -233,18 +243,24 @@ async function handleAuthRoute(
   const request = route.request();
   const method = request.method();
   const path = new URL(request.url()).pathname;
+  const token = new URL(request.url()).searchParams.get("token");
 
   if (method === "POST" && path === "/auth/register") {
     state.email = requestEmail(route);
-    await fulfillJson(route, 201, authUser(state.email));
+    // В mocked-режиме обычный пользователь считается подтверждённым,
+    // иначе каждый E2E-сценарий упирался бы в экран «подтвердите email».
+    // Префикс `unverified-` включает этот экран явно.
+    state.verified = !state.email.startsWith("unverified");
+    await fulfillJson(route, 201, authUser(state.email, state.verified));
     return;
   }
   if (method === "POST" && path === "/auth/login") {
     state.loggedIn = true;
     state.email = requestEmail(route);
+    state.verified = !state.email.startsWith("unverified");
     await fulfillJson(route, 200, {
       ...authTokens(),
-      user: authUser(state.email),
+      user: authUser(state.email, state.verified),
     });
     return;
   }
@@ -259,7 +275,7 @@ async function handleAuthRoute(
     }
     await fulfillJson(route, 200, {
       ...authTokens(),
-      user: authUser(state.email),
+      user: authUser(state.email, state.verified),
     });
     return;
   }
@@ -269,8 +285,48 @@ async function handleAuthRoute(
     await route.fulfill({ status: 204 });
     return;
   }
+  if (method === "POST" && path === "/auth/logout-all") {
+    state.loggedIn = false;
+    await route.fulfill({ status: 204 });
+    return;
+  }
+  if (method === "GET" && path === "/auth/verify-email") {
+    if (!token || token === "invalid") {
+      await fulfillJson(route, 401, {
+        detail: "invalid token",
+        code: "unauthorized",
+      });
+      return;
+    }
+    state.verified = true;
+    await fulfillJson(route, 200, {
+      email: state.email,
+      is_verified: true,
+    });
+    return;
+  }
+  if (method === "POST" && path === "/auth/forgot-password") {
+    await fulfillJson(route, 202, {
+      detail: "Если email зарегистрирован, письмо со ссылкой сброса отправлено",
+    });
+    return;
+  }
+  if (method === "POST" && path === "/auth/reset-password") {
+    const body = requestBody(route);
+    if (body.token === "invalid") {
+      await fulfillJson(route, 401, {
+        detail: "used token",
+        code: "unauthorized",
+      });
+      return;
+    }
+    await fulfillJson(route, 200, {
+      detail: "Пароль обновлён; войдите заново на всех устройствах",
+    });
+    return;
+  }
   if (method === "GET" && path === "/auth/me") {
-    await fulfillJson(route, 200, authUser(state.email));
+    await fulfillJson(route, 200, authUser(state.email, state.verified));
     return;
   }
   await fulfillJson(route, 404, {
@@ -370,6 +426,7 @@ export async function mockApi(page: Page): Promise<void> {
   const authState: AuthMockState = {
     loggedIn: false,
     email: "e2e@example.com",
+    verified: true,
   };
   await page.route(/^https?:\/\/[^/]+\/auth\//, (route) =>
     handleAuthRoute(route, authState),

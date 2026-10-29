@@ -4,9 +4,12 @@ import { AuthGate } from "./components/AuthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
 import AnalysisPage from "./pages/AnalysisPage";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import HistoryPage from "./pages/HistoryPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
+import VerifyEmailPage from "./pages/VerifyEmailPage";
 import { bootstrapAuth } from "./stores/authStore";
 
 // Сессия восстанавливается по HttpOnly refresh-cookie (один POST /auth/refresh)
@@ -20,6 +23,11 @@ export default function App() {
         <Layout>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            {/* KI-055: публичные auth-страницы. Ссылки из писем ведут сюда,
+                а не на JSON-эндпоинты API. */}
+            <Route path="/verify-email" element={<VerifyEmailPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route
               path="/"
               element={

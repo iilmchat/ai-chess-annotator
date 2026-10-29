@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate, useLocation } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError, getMe } from "../api";
 import { selectIsAuthenticated, useAuthStore } from "../stores/authStore";
@@ -43,6 +43,7 @@ interface AuthGateProps {
 export function AuthGate({ children }: AuthGateProps) {
   const { t } = useTranslation();
   const location = useLocation();
+  const navigate = useNavigate();
   const accessToken = useAuthStore((state) => state.accessToken);
   const user = useAuthStore((state) => state.user);
   const initializing = useAuthStore((state) => state.initializing);
@@ -51,8 +52,14 @@ export function AuthGate({ children }: AuthGateProps) {
   const isAuthenticated = useAuthStore(selectIsAuthenticated);
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [checkingVerification, setCheckingVerification] = useState(false);
 
   const needsProfile = Boolean(accessToken) && !user;
+  //: KI-041/KI-055: генерация доступна только после подтверждения email;
+  //: admin/auditor — служебные роли, backend их пропускает без флага.
+  const isUnverified = Boolean(
+    user && user.role === "user" && !user.is_verified,
+  );
 
   useEffect(() => {
     if (initializing || !accessToken || user) {
@@ -85,6 +92,27 @@ export function AuthGate({ children }: AuthGateProps) {
     };
   }, [initializing, accessToken, user, attempt, setUser, clearSession, t]);
 
+  async function refreshVerification() {
+    setCheckingVerification(true);
+    setError(null);
+    try {
+      const profile = await getMe();
+      setUser(profile);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) {
+        clearSession();
+        return;
+      }
+      setError(
+        cause instanceof Error && cause.message
+          ? cause.message
+          : t("common.unknown"),
+      );
+    } finally {
+      setCheckingVerification(false);
+    }
+  }
+
   if (initializing) {
     return (
       <main className="auth-gate">
@@ -95,6 +123,52 @@ export function AuthGate({ children }: AuthGateProps) {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  if (isUnverified && user) {
+    return (
+      <main className="auth-gate">
+        <section className="panel auth-card auth-gate__card">
+          <h1 className="auth-card__title">
+            {t("auth.emailNotVerifiedTitle")}
+          </h1>
+          <p className="muted auth-card__subtitle">
+            {t("auth.emailNotVerifiedBody", { email: user.email })}
+          </p>
+          <p className="hint">{t("auth.emailNotVerifiedHint")}</p>
+          {error ? (
+            <div className="auth-error" role="alert">
+              {error}
+            </div>
+          ) : null}
+          <div className="actions auth-gate__actions">
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={() => {
+                void refreshVerification();
+              }}
+              disabled={checkingVerification}
+              aria-busy={checkingVerification}
+            >
+              {checkingVerification
+                ? t("common.loading")
+                : t("auth.emailNotVerifiedRefresh")}
+            </button>
+            <button
+              type="button"
+              className="button"
+              onClick={() => {
+                clearSession();
+                navigate("/login", { replace: true });
+              }}
+            >
+              {t("auth.logout")}
+            </button>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   if (needsProfile) {

@@ -261,14 +261,19 @@ HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`, `Secure` в prod), при logout
 его `jti` уходит в Redis-denylist, а ротация инвалидирует прежний refresh;
 не-браузерные клиенты могут передать refresh в теле. Пароли —
 **Argon2id** (`argon2-cffi`), legacy bcrypt-хеши перехешируются при входе.
-**Email (KI-041):** регистрация создаёт `is_verified=false` и письмо
-(`MockEmailSender`); `GET /auth/verify-email?token=...` ставит флаг;
-`/v1/analyze` и `/v1/commentary` для неподтверждённых → 403
-`email_not_verified` (admin/auditor bypass). `POST /auth/forgot-password`
-(202 без раскрытия email) и `POST /auth/reset-password` (Argon2id, токен
-одноразовый); `POST /auth/logout-all` пишет `revoked_before:<user_id>`
+**Email (KI-041, KI-055):** регистрация создаёт `is_verified=false` и
+письмо (`MockEmailSender`); ссылка ведёт на frontend
+`/verify-email?token=...`, страница вызывает
+`GET /auth/verify-email?token=...` и ставит флаг; `/v1/analyze` и
+`/v1/commentary` для неподтверждённых → 403 `email_not_verified`
+(admin/auditor bypass), UI показывает экран «Подтвердите email».
+`POST /auth/forgot-password` (202 без раскрытия email) и
+`POST /auth/reset-password` (Argon2id, токен одноразовый) с UI-формами
+`/forgot-password` и `/reset-password`; `POST /auth/logout-all` пишет
+`revoked_before:<user_id>`
 (Unix-ms), и `/auth/refresh` отклоняет все refresh с `issued_at` не позже
-маркера. Роли `user/admin/auditor` (enum `admin_role`); `/admin` принимает
+маркера; кнопка «Выйти со всех устройств» — в меню профиля. Роли
+`user/admin/auditor` (enum `admin_role`); `/admin` принимает
 access JWT admin/auditor. Чтение/запись партий, ходов,
 комментариев и чата — с изоляцией по владельцу: обычный пользователь
 видит только свои `games`, администратор — все; чужой id неотличим от

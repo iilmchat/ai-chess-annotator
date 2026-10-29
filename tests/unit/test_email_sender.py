@@ -61,9 +61,7 @@ def test_mock_sender_accumulates_outbox_and_logs() -> None:
 
     assert sender.outbox == [message]
     assert message.token == "tok-123"
-    assert message.link == (
-        "https://example.test/auth/verify-email?token=tok-123"
-    )
+    assert message.link == "https://example.test/verify-email?token=tok-123"
     assert "verify-email" in message.body
 
 
@@ -74,7 +72,7 @@ def test_password_reset_message_uses_configured_ttl() -> None:
         token="reset-1",
     )
     assert message.kind == "password_reset"
-    assert "/auth/reset-password?token=reset-1" in message.link
+    assert "/reset-password?token=reset-1" in message.link
     assert "7 мин" in message.body
 
 

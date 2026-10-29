@@ -38,6 +38,17 @@ export type RefreshResponse = LoginResponse;
 /** Ответ `/auth/register` — профиль без токенов. */
 export type RegisterResponse = AuthUser;
 
+/** Ответ `GET /auth/verify-email`. */
+export interface EmailVerificationResponse {
+  email: string;
+  is_verified: boolean;
+}
+
+/** Нейтральный ответ `/auth/forgot-password` и `/auth/reset-password`. */
+export interface MessageResponse {
+  detail: string;
+}
+
 export interface Motif {
   type: string;
   description: string;

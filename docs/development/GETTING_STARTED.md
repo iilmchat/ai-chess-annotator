@@ -187,11 +187,14 @@ cp .env.example .env
   умолчанию, TTL 30 дней, чистка при старте приложения.
 - `PDF_FONT_PATH` — нужен только если в системе нет Arial/DejaVuSans
   (PDF-экспорт комментария подбирает их автоматически).
-- `APP_BASE_URL` — базовый URL API для ссылок в письмах (по умолчанию
-  `http://localhost:8000`); `EMAIL_SENDER=mock` логирует ссылку, SMTP —
-  отдельный шаг (KI-055).
+- `APP_BASE_URL` — публичный URL приложения (SPA) для ссылок в письмах:
+  `/verify-email` и `/reset-password` (в dev — `http://localhost:5173`,
+  в prod — тот же origin, что API). `EMAIL_SENDER=mock` логирует ссылку,
+  SMTP — отдельный шаг (KI-056).
 - `ARQ_QUEUE_NAME`/`EXPORT_JOB_STALE_MINUTES` — очередь фоновых
   выгрузок и порог recovery (KI-053).
+- `EXPORT_RETENTION_DAYS` — сколько дней хранить `export_jobs` и готовые
+  JSONL в `EXPORT_DIR` (по умолчанию 7; KI-054, cron — §9.3).
 
 ### 3.5. Применить миграции
 
@@ -737,11 +740,12 @@ brew install cairo
 
 ## 9. Обслуживание: retention и FinOps
 
-Две таблицы растут постоянно: `llm_calls` (durable-история вызовов LLM,
-T-030) и `usage_daily` (FinOps-агрегаты, T-031b). Их чистку и месячные
-отчёты можно повесить на cron/планировщик: скрипты идемпотентны, читают
-`Settings` (`.env`/ENV) и возвращают exit code `0` (успех) или `2`
-(неверные аргументы / БД недоступна).
+Постоянно растут `llm_calls` (durable-история вызовов LLM, T-030),
+`usage_daily` (FinOps-агрегаты, T-031b) и `export_jobs`/`EXPORT_DIR`
+(фоновые выгрузки, KI-050/KI-054). Их чистку и месячные отчёты можно
+повесить на cron/планировщик: скрипты идемпотентны, читают `Settings`
+(`.env`/ENV) и возвращают exit code `0` (успех) или `2` (неверные
+аргументы / БД недоступна).
 
 `engine_cache` (T-108) в cron не нужен: устаревшие строки удаляются
 автоматически при старте приложения (`ENGINE_CACHE_TTL_DAYS`, 30 дней).
@@ -805,27 +809,72 @@ Cron (1-е число месяца, 04:00):
 0 4 1 * * cd /srv/chessannotator && .venv/bin/python scripts/aggregate_usage.py --json --retention-days 90 >> /var/log/chessannotator/aggregate_usage.log 2>&1
 ```
 
-### 9.3. Файлы фоновых экспортов (KI-050)
+### 9.3. Retention файлов и строк экспортов (KI-054)
 
 Готовые JSONL лежат в `EXPORT_DIR` (по умолчанию `data/exports/`, вне
-web-root). Строки `export_jobs` и файлы не удаляются автоматически:
-периодически чистите старые артефакты, например:
+web-root), а метаданные — в `export_jobs`. Скрипт
+`scripts/prune_export_jobs.py` удаляет строки и файлы старше
+`EXPORT_RETENTION_DAYS` дней (по умолчанию **7**).
+
+Безопасность и порядок:
+
+- удаляются только пути **внутри** `EXPORT_DIR`; `file_path` вне корня
+  (подмена в БД, симлинк) пропускается с warning — произвольный файл хоста
+  скрипт не удалит;
+- сначала удаляется файл, потом строка: падение между шагами оставит
+  строку без файла (download → 410), а не файл-сироту;
+- работа идёт батчами (`--batch-size`, по умолчанию 100) с коммитом на
+  батч; `--max-batches` ограничивает объём одного запуска;
+- `--dry-run` только считает строки/файлы, `--json` печатает машинный
+  отчёт; exit code `0` — успех, `2` — БД недоступна/неверные аргументы.
 
 ```bash
-# Удалить файлы старше 7 дней (проверьте путь перед запуском!)
-find data/exports -type f -name 'edits-*.jsonl' -mtime +7 -print -delete
+# Посмотреть, что будет удалено (ничего не удаляет)
+python scripts/prune_export_jobs.py --dry-run --json
+
+# Удалить батчами по 100 с паузой 50 мс; отчёт — JSON
+python scripts/prune_export_jobs.py --batch-size 100 --sleep-ms 50 --json
+
+# Разово переопределить срок хранения и каталог
+python scripts/prune_export_jobs.py --retention-days 30 --export-dir /srv/data/exports
 ```
 
+**Cron (Linux, ежедневно в 03:45 — после `llm_calls`):**
+
+```cron
+45 3 * * * cd /srv/chessannotator && .venv/bin/python scripts/prune_export_jobs.py --json >> /var/log/chessannotator/prune_export_jobs.log 2>&1
+```
+
+В Docker-образе `scripts/` уже скопирован, поэтому из контейнера:
+`docker compose exec app python scripts/prune_export_jobs.py --dry-run`
+(или `docker compose run --rm app python scripts/prune_export_jobs.py`).
+
+**systemd timer:** unit `chessannotator-prune-exports.service` с
+`ExecStart=/srv/chessannotator/.venv/bin/python
+scripts/prune_export_jobs.py` и `chessannotator-prune-exports.timer` с
+`OnCalendar=*-*-* 03:45:00`.
+
+**Windows Task Scheduler:**
+
+```powershell
+schtasks /Create /TN "ChessAnnotator prune exports" /SC DAILY /ST 03:45 `
+  /TR "C:\Projects\AI\ai-chess-annotator\.venv\Scripts\python.exe C:\Projects\AI\ai-chess-annotator\scripts\prune_export_jobs.py"
+```
+
+Проверить результат: `python scripts/prune_export_jobs.py --dry-run --json`
+(поля `deleted_rows`/`deleted_files`). Скрипт — единственный механизм
+retention; подписанные ссылки на скачивание (signed URL с TTL) остаются
+KI-057, доступ — по-прежнему JWT/cookie админки.
+
+Старый ручной вариант (если скрипт ещё не настроен):
+
 ```sql
--- Удалить завершённые джобы старше 30 дней
+-- Только завершённые джобы старше 30 дней; файлы удалите отдельно и
+-- внимательно проверьте путь!
 DELETE FROM export_jobs
 WHERE status IN ('done', 'failed')
   AND finished_at < now() - interval '30 days';
 ```
-
-Джоба не переживает рестарт процесса: зависшие `running` можно пометить
-вручную (`UPDATE export_jobs SET status='failed', error='stale' WHERE ...`)
-— автоматическое восстановление/очередь arq запланированы в KI-053.
 
 ---
 
