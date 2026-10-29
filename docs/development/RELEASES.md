@@ -1658,7 +1658,7 @@ T-031b/T-034b закрыты в объёме MVP; заведены KI-049/KI-050
 ### Метрики
 
 - **Backend-тесты:** **671 passed, 1 skipped, 1 xfailed** (60 файлов;
-  +30 к итерации 28), **331.60 с**, exit 0. Skip — нет
+  +30 к итерации 28), **326.67 с**, exit 0. Skip — нет
   `DEEPSEEK_API_KEY`, xfail — маркер KI-012.
 - **Новые тесты:** retention — 9 unit + 4 integration; дашборд — 6 unit +
   7 integration; аудит экспорта — +4 (файл 15).
@@ -1677,7 +1677,7 @@ T-031b/T-034b закрыты в объёме MVP; заведены KI-049/KI-050
   schema_version=1` → 200 `application/x-ndjson`, 1 строка; в
   `audit_logs`: `jwt:smoke-admin-iter29@example.com | dataset.export |
   edits.jsonl | {"rows":1,"level":"club","schema_version":1,
-  "completed":true,...}`.
+  "completed":true,"trace_id":"5d65be9c-…",...}`.
 - **KI:** 52 записи, 25 Open, 27 Closed.
 
 ### Что не сделано и почему
