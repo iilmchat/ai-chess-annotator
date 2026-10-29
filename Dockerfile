@@ -25,9 +25,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # /usr/bin/stockfish — делаем стабильную ссылку.
 # fonts-dejavu-core — TTF с кириллицей для PDF-экспорта комментария (T-107):
 # fpdf2 встраивает шрифт, системные пакеты в slim-образе отсутствуют.
+# libcairo2 — нативная библиотека для cairosvg: диаграмма доски в PDF
+# (T-107b); без неё PDF всё равно генерируется, но без картинки.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      stockfish curl ca-certificates fonts-dejavu-core \
+      stockfish curl ca-certificates fonts-dejavu-core libcairo2 \
  && if [ -x /usr/games/stockfish ]; then ln -sf /usr/games/stockfish /usr/bin/stockfish; fi \
  && rm -rf /var/lib/apt/lists/*
 

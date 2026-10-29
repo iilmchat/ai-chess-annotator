@@ -51,6 +51,10 @@ dependencies = [
     # в отличие от weasyprint): работает в Docker/CI и на Windows; кириллица
     # через TrueType-шрифт (см. app/export/pdf.py).
     "fpdf2>=2.8",
+    # T-107b: SVG-диаграмма доски → PNG для вставки в PDF. cairosvg —
+    # чистый Python, но использует нативную cairo (libcairo2 в Docker/CI);
+    # без неё PDF собирается без картинки (app.export.board).
+    "cairosvg>=2.7",
 ]
 
 [project.optional-dependencies]
@@ -91,7 +95,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["alembic/"]
 
 [[tool.mypy.overrides]]
-module = ["stockfish.*", "chess.*"]
+module = ["stockfish.*", "chess.*", "cairosvg.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

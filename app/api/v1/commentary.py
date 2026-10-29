@@ -38,8 +38,9 @@ from app.errors import (
     PdfExportError,
     PdfFontUnavailableError,
 )
+from app.export.board import BoardDiagram, MoveSnapshot, select_diagrams
 from app.export.pdf import CommentaryPdfData, build_commentary_pdf
-from app.ingestion import parse_pgn
+from app.ingestion import STARTING_FEN, parse_pgn
 from app.llm.calls import attach_commentary_id, llm_call_context, stream_in_call_context
 
 logger = structlog.get_logger(__name__)
@@ -302,11 +303,38 @@ async def export_commentary_pdf(
     )
     # Метаданные игроков/турнира — из PGN; битый legacy-PGN не должен
     # ломать экспорт: шапка просто останется с прочерками.
-    metadata = None
+    parsed = None
     try:
-        metadata = parse_pgn(game.pgn).metadata
+        parsed = parse_pgn(game.pgn)
     except InvalidPgnError:
         logger.warning("pdf_export_invalid_pgn", game_id=game.id)
+    metadata = parsed.metadata if parsed is not None else None
+    # T-107b: финальная позиция + критические моменты. Любая ошибка выбора
+    # диаграмм (битый FEN/неожиданный SAN) не должна ломать PDF: просто
+    # отдаём документ без картинок.
+    diagrams: tuple[BoardDiagram, ...] = ()
+    try:
+        diagrams = select_diagrams(
+            tuple(
+                MoveSnapshot(
+                    ply=move.ply,
+                    san=move.san,
+                    fen=move.fen,
+                    classification=move.classification,
+                    delta_cp=move.delta_cp,
+                )
+                for move in move_rows
+            ),
+            initial_fen=(
+                parsed.initial_fen if parsed is not None else STARTING_FEN
+            ),
+        )
+    except Exception as exc:
+        logger.warning(
+            "pdf_board_diagrams_failed",
+            commentary_id=commentary_id,
+            error=type(exc).__name__,
+        )
 
     data = CommentaryPdfData(
         commentary_id=commentary.id,
@@ -319,6 +347,7 @@ async def export_commentary_pdf(
         model=commentary.model,
         moves=tuple(move.san for move in move_rows),
         commentary_text=commentary.text,
+        diagrams=diagrams,
         validated=commentary.validated,
         human_edited=commentary.human_edited,
         generated_at=commentary.created_at,

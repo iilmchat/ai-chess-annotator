@@ -15,26 +15,36 @@ Linux, Arial на macOS) или задаётся `PDF_FONT_PATH`; найденн
 пользовательской правки не ронял экспорт.
 
 Документ: шапка (игроки, турнир, дата, результат, уровень, модель,
-признак правки), PGN-ходы в нумерации и текст комментария с сохранением
-абзацев; внизу — номер страницы. Генерация CPU-bound, поэтому эндпоинт
-вызывает её через `asyncio.to_thread` (RULES §3.1).
+признак правки), PGN-ходы в нумерации, диаграммы доски (T-107b:
+финальная позиция и критические моменты, если доступен `cairosvg`) и
+текст комментария с сохранением абзацев; внизу — номер страницы.
+Генерация CPU-bound, поэтому эндпоинт вызывает её через
+`asyncio.to_thread` (RULES §3.1).
+
+Диаграммы — опциональны: при отсутствии `cairosvg`/`libcairo2`
+:func:`app.export.board.render_board_png` возвращает ``None``, и PDF
+собирается без картинок (graceful degradation, не 500).
 """
 
 from __future__ import annotations
 
+import io
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Final
 
+import structlog
 from fontTools.ttLib import TTFont  # type: ignore[import-untyped]
 from fpdf import FPDF
 from fpdf.enums import WrapMode, XPos, YPos
 
 from app.config import Settings, get_settings
 from app.errors import PdfFontUnavailableError
+from app.export.board import BoardDiagram, render_board_png
 
 __all__ = [
     "CommentaryPdfData",
@@ -43,8 +53,13 @@ __all__ = [
     "format_moves",
 ]
 
+logger = structlog.get_logger(__name__)
+
 #: Поля страницы и базовые отступы (мм).
 _MARGIN_MM: Final[float] = 18.0
+
+#: Ширина диаграммы доски в PDF (мм); сама доска квадратная.
+_BOARD_WIDTH_MM: Final[float] = 82.0
 
 #: Уровни ассистента → человекочитаемые подписи в PDF.
 _LEVEL_LABELS: Final[dict[str, str]] = {
@@ -80,6 +95,8 @@ class CommentaryPdfData:
     model: str = ""
     moves: tuple[str, ...] = ()
     commentary_text: str = ""
+    #: Диаграммы доски (T-107b); пусто — PDF без картинок.
+    diagrams: tuple[BoardDiagram, ...] = ()
     validated: bool = False
     human_edited: bool = False
     generated_at: datetime | None = None
@@ -198,6 +215,67 @@ def _write(
     )
 
 
+def _draw_diagrams(
+    pdf: FPDF,
+    diagrams: tuple[BoardDiagram, ...],
+    text: Callable[[str], str],
+) -> int:
+    """Нарисовать диаграммы доски; вернуть число вставленных картинок.
+
+    PNG рендерится заранее: если рендерер недоступен, заголовок раздела не
+    печатается вовсе (иначе в PDF остался бы пустой блок). Ошибка вставки
+    одного изображения не отменяет остальные и не роняет генерацию.
+    """
+    rendered: list[tuple[BoardDiagram, bytes]] = []
+    for diagram in diagrams:
+        png = render_board_png(diagram)
+        if png is None:
+            logger.info(
+                "pdf_board_diagram_skipped", caption=diagram.caption
+            )
+            continue
+        rendered.append((diagram, png))
+    if not rendered:
+        return 0
+
+    pdf.set_text_color(25, 25, 25)
+    pdf.set_font("Body", size=13)
+    _write(pdf, text("Позиции на доске"), height=7)
+    inserted = 0
+    for diagram, png in rendered:
+        # Диаграмма квадратная: 82 мм ширины + подпись ~7 мм.
+        if pdf.get_y() + _BOARD_WIDTH_MM + 14 > pdf.h - pdf.b_margin:
+            pdf.add_page()
+        top = pdf.get_y()
+        x = (pdf.w - _BOARD_WIDTH_MM) / 2
+        try:
+            pdf.image(io.BytesIO(png), x=x, y=top, w=_BOARD_WIDTH_MM)
+        except Exception as exc:
+            logger.warning(
+                "pdf_board_image_failed",
+                reason=type(exc).__name__,
+                caption=diagram.caption,
+            )
+            pdf.set_y(top + 4)
+            continue
+        inserted += 1
+        pdf.set_y(top + _BOARD_WIDTH_MM + 2)
+        if diagram.caption:
+            pdf.set_font("Body", size=9)
+            pdf.set_text_color(90, 90, 90)
+            pdf.cell(
+                0,
+                5,
+                text(diagram.caption),
+                align="C",
+                new_x=XPos.LMARGIN,
+                new_y=YPos.NEXT,
+            )
+        pdf.ln(3)
+    pdf.set_text_color(25, 25, 25)
+    return inserted
+
+
 def build_commentary_pdf(
     data: CommentaryPdfData, settings: Settings | None = None
 ) -> bytes:
@@ -286,6 +364,10 @@ def build_commentary_pdf(
     moves_text = format_moves(data.moves) or "—"
     _write(pdf, text(moves_text), height=5)
     pdf.ln(4)
+
+    # Диаграммы доски (T-107b): финальная позиция и критические моменты.
+    _draw_diagrams(pdf, data.diagrams, text)
+    pdf.set_text_color(25, 25, 25)
 
     # Комментарий.
     pdf.set_font("Body", size=13)

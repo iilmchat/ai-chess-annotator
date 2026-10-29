@@ -43,7 +43,9 @@ jobs:
           cache: "pip"
           cache-dependency-path: pyproject.toml
       - name: Install Stockfish
-        run: sudo apt-get update && sudo apt-get install -y stockfish
+        # libcairo2 — системная зависимость cairosvg: диаграмма доски в PDF
+        # (T-107b) проверяется в CI на реальном рендерере.
+        run: sudo apt-get update && sudo apt-get install -y stockfish libcairo2
       - name: Install deps
         run: |
           python -m pip install --upgrade pip

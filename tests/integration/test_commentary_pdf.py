@@ -39,6 +39,7 @@ from app.db.models import (
     User,
 )
 from app.errors import PdfFontUnavailableError
+from app.export.board import cairosvg_available
 from app.export.pdf import find_pdf_font
 from app.ingestion import parse_pgn
 from app.main import create_app
@@ -369,5 +370,35 @@ def test_invalid_pgn_still_exports_pdf(
         text = _pdf_text(response)
         assert "Первый абзац комментария" in text
         assert "—" in text
+    finally:
+        asyncio.run(_delete_games([seeded["game_id"]]))
+
+
+def test_export_pdf_board_diagram_matches_renderer_availability(
+    client: TestClient, people: dict[str, User]
+) -> None:
+    """T-107b: с cairo — картинка доски, без него — PDF без картинки.
+
+    Тест не падает в окружении без libcairo2 (Windows-dev): проверяется
+    именно контракт деградации, а реальный рендер — в Linux/CI/Docker.
+    """
+    seeded = asyncio.run(
+        _seed_game(owner_id=people["owner"].id, commentary_text=COMMENTARY)
+    )
+    try:
+        response = client.get(
+            f"/v1/commentaries/{seeded['commentary_id']}/export/pdf",
+            headers=_bearer(people["owner"]),
+        )
+        assert response.status_code == 200, response.text
+        reader = PdfReader(io.BytesIO(response.content))
+        text = "".join(page.extract_text() or "" for page in reader.pages)
+        has_images = any(page.images for page in reader.pages)
+        if cairosvg_available():
+            assert "Позиции на доске" in text
+            assert has_images
+        else:
+            assert "Позиции на доске" not in text
+            assert not has_images
     finally:
         asyncio.run(_delete_games([seeded["game_id"]]))
