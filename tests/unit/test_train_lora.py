@@ -13,21 +13,35 @@ from scripts import train_lora
 from scripts.train_lora import (
     DEFAULT_OUTPUT,
     DEFAULT_TARGET_MODULES,
+    LEGACY_SCHEMA_VERSION,
     SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS,
     build_parser,
     collate_batch,
     dataset_stats,
+    dataset_warnings,
     estimate_tokens,
+    looks_like_fact_package,
     main,
     override_system_prompt,
     read_records,
+    schema_version_of,
     tokenize_example,
     train,
     validate_dataset,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FIXTURE = REPO_ROOT / "tests" / "fixtures" / "lora_sample.jsonl"
+FIXTURE_V1 = REPO_ROOT / "tests" / "fixtures" / "lora_sample.jsonl"
+FIXTURE_V2 = REPO_ROOT / "tests" / "fixtures" / "lora_sample_v2.jsonl"
+
+#: Текст, похожий на `build_fact_package` (эвристика v2).
+FACT_PACKAGE_USER = (
+    "# Партия\nБелые: A\nЧёрные: B\n\n"
+    "# Ходы партии (SAN)\n1. e4 e5\n\n"
+    "# Ключевые моменты (до 3, по убыванию потери)\n"
+    "## 1. Ход 1 белых: e4 (полуход 1)\n"
+)
 
 MESSAGES: list[dict[str, str]] = [
     {"role": "system", "content": "sys"},
@@ -47,15 +61,27 @@ def _record(
     *,
     level: str = "club",
     schema_version: int = SCHEMA_VERSION,
+    user_content: str = "текст user",
+    metadata: object = "auto",
 ) -> dict[str, Any]:
     roles = roles or ["system", "user", "assistant"]
-    return {
+    record: dict[str, Any] = {
         "messages": [
             {"role": role, "content": f"текст {role}"} for role in roles
         ],
-        "level": level,
         "schema_version": schema_version,
     }
+    if roles == ["system", "user", "assistant"]:
+        record["messages"][1]["content"] = user_content
+    if schema_version == SCHEMA_VERSION:
+        record["metadata"] = (
+            {"level": level, "fact_sheet_chars": len(user_content)}
+            if metadata == "auto"
+            else metadata
+        )
+    else:
+        record["level"] = level
+    return record
 
 
 class _FakeTokenizer:
@@ -98,7 +124,45 @@ class _NoTemplateTokenizer:
 
 def test_valid_dataset(tmp_path: Path) -> None:
     path = tmp_path / "dataset.jsonl"
-    _write(path, [_record(), _record(level="beginner")])
+    _write(
+        path,
+        [
+            _record(user_content=FACT_PACKAGE_USER),
+            _record(level="beginner", user_content=FACT_PACKAGE_USER),
+        ],
+    )
+
+    count, errors = validate_dataset(path)
+
+    assert count == 2
+    assert errors == []
+
+
+def test_legacy_v1_dataset_is_still_valid(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.jsonl"
+    _write(
+        path,
+        [
+            _record(schema_version=LEGACY_SCHEMA_VERSION, user_content="было"),
+            _record(schema_version=LEGACY_SCHEMA_VERSION, user_content="было"),
+        ],
+    )
+
+    count, errors = validate_dataset(path)
+
+    assert count == 2
+    assert errors == []
+
+
+def test_mixed_schema_versions_are_valid(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.jsonl"
+    _write(
+        path,
+        [
+            _record(schema_version=LEGACY_SCHEMA_VERSION),
+            _record(user_content=FACT_PACKAGE_USER),
+        ],
+    )
 
     count, errors = validate_dataset(path)
 
@@ -149,9 +213,44 @@ def test_legacy_dataset_without_system_is_invalid(tmp_path: Path) -> None:
                     {"role": "user", "content": "u"},
                     {"role": "assistant", "content": "a"},
                 ],
-                "schema_version": 2,
+                "schema_version": 3,
             },
             "schema_version",
+        ),
+        (
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": "a"},
+                ],
+                "schema_version": 2,
+            },
+            "metadata",
+        ),
+        (
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": "a"},
+                ],
+                "schema_version": 2,
+                "metadata": "not-an-object",
+            },
+            "metadata",
+        ),
+        (
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": "a"},
+                ],
+                "schema_version": 2,
+                "metadata": {"fact_sheet_chars": -1},
+            },
+            "fact_sheet_chars",
         ),
         (
             {
@@ -176,6 +275,18 @@ def test_invalid_rows_are_reported(
     assert count == 0
     assert len(errors) == 1
     assert fragment in errors[0]
+
+
+def test_non_integer_schema_version_is_reported(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.jsonl"
+    record = _record(user_content=FACT_PACKAGE_USER)
+    record["schema_version"] = "2"
+    _write(path, [record])
+
+    count, errors = validate_dataset(path)
+
+    assert count == 0
+    assert "целым числом" in errors[0]
 
 
 def test_broken_json_is_reported(tmp_path: Path) -> None:
@@ -211,12 +322,12 @@ def test_blank_lines_are_skipped(tmp_path: Path) -> None:
 # --- fixture и read_records -------------------------------------------------
 
 
-def test_sample_fixture_matches_schema() -> None:
-    count, errors = validate_dataset(FIXTURE)
+def test_sample_v1_fixture_matches_legacy_schema() -> None:
+    count, errors = validate_dataset(FIXTURE_V1)
 
     assert errors == []
     assert count >= 3
-    records = read_records(FIXTURE)
+    records = read_records(FIXTURE_V1)
     assert len(records) == count
     for record in records:
         assert [message["role"] for message in record["messages"]] == [
@@ -225,16 +336,38 @@ def test_sample_fixture_matches_schema() -> None:
             "assistant",
         ]
         assert record["level"] == "club"
+        assert record["schema_version"] == LEGACY_SCHEMA_VERSION
+
+
+def test_sample_v2_fixture_matches_schema() -> None:
+    count, errors = validate_dataset(FIXTURE_V2)
+
+    assert errors == []
+    assert count >= 3
+    records = read_records(FIXTURE_V2)
+    assert len(records) == count
+    for record in records:
+        assert [message["role"] for message in record["messages"]] == [
+            "system",
+            "user",
+            "assistant",
+        ]
         assert record["schema_version"] == SCHEMA_VERSION
+        metadata = record["metadata"]
+        assert metadata["level"] == "club"
+        user = record["messages"][1]["content"]
+        assert looks_like_fact_package(user)
+        assert metadata["fact_sheet_chars"] == len(user)
 
 
 def test_read_records_missing_file_explains_export() -> None:
     with pytest.raises(SystemExit) as exc_info:
-        read_records(FIXTURE.parent / "absent.jsonl")
+        read_records(FIXTURE_V2.parent / "absent.jsonl")
 
     message = str(exc_info.value)
     assert "не найден" in message
     assert "export_dataset.py" in message
+    assert "--schema-version 2" in message
 
 
 def test_read_records_empty_file_is_error(tmp_path: Path) -> None:
@@ -360,7 +493,7 @@ def test_collate_batch_rejects_empty_batch() -> None:
         collate_batch([], pad_token_id=0)
 
 
-# --- статистика и system-prompt ---------------------------------------------
+# --- статистика, версии схемы и system-prompt -------------------------------
 
 
 def test_estimate_tokens_and_stats() -> None:
@@ -368,17 +501,89 @@ def test_estimate_tokens_and_stats() -> None:
     assert estimate_tokens("abcd") == 1
     assert estimate_tokens("a" * 40) == 10
 
-    records = [_record(), _record(level="beginner"), {"messages": []}]
+    records = [
+        _record(user_content=FACT_PACKAGE_USER),
+        _record(level="beginner", user_content=FACT_PACKAGE_USER),
+        _record(schema_version=LEGACY_SCHEMA_VERSION),
+        {"messages": []},
+    ]
     stats = dataset_stats(records[:2])
 
     assert stats.records == 2
     assert stats.levels == {"beginner": 1, "club": 1}
+    assert stats.schema_versions == {"2": 2}
     assert stats.estimated_tokens > 0
     assert stats.max_record_tokens >= stats.estimated_tokens // 2
 
 
+def test_dataset_stats_reads_level_from_v2_metadata() -> None:
+    record = _record(level="gm", user_content=FACT_PACKAGE_USER)
+    record.pop("level", None)
+    assert "level" not in record
+
+    stats = dataset_stats([record, record])
+
+    assert stats.levels == {"gm": 2}
+    assert stats.schema_versions == {"2": 2}
+
+
+def test_dataset_stats_mixes_schema_versions() -> None:
+    stats = dataset_stats(
+        [
+            _record(schema_version=LEGACY_SCHEMA_VERSION),
+            _record(user_content=FACT_PACKAGE_USER),
+        ]
+    )
+
+    assert stats.schema_versions == {"1": 1, "2": 1}
+
+
+def test_supported_schema_versions_are_one_and_two() -> None:
+    assert SUPPORTED_SCHEMA_VERSIONS == frozenset({1, 2})
+    assert SCHEMA_VERSION == 2
+
+
+def test_schema_version_of_defaults_to_legacy() -> None:
+    assert schema_version_of({}) == LEGACY_SCHEMA_VERSION
+    assert schema_version_of({"schema_version": None}) == LEGACY_SCHEMA_VERSION
+    assert schema_version_of({"schema_version": 2}) == SCHEMA_VERSION
+
+
+def test_schema_version_of_rejects_non_integer() -> None:
+    with pytest.raises(ValueError, match="целым числом"):
+        schema_version_of({"schema_version": "2"})
+
+
+def test_looks_like_fact_package_heuristic() -> None:
+    assert looks_like_fact_package(FACT_PACKAGE_USER)
+    assert not looks_like_fact_package("исходный комментарий модели")
+    assert not looks_like_fact_package("# Партия\nбез ключевых моментов")
+
+
+def test_dataset_warnings_explain_v1_rewrite_semantics() -> None:
+    warnings = dataset_warnings(
+        [_record(schema_version=LEGACY_SCHEMA_VERSION)] * 2
+    )
+
+    assert len(warnings) == 1
+    assert "schema_version=1" in warnings[0]
+    assert "ПЕРЕПИСЫВАТЬ" in warnings[0]
+    assert "--schema-version 2" in warnings[0]
+
+
+def test_dataset_warnings_flag_v2_without_fact_package() -> None:
+    warnings = dataset_warnings([_record(user_content="короткий текст")])
+
+    assert len(warnings) == 1
+    assert "не похож на пакет фактов" in warnings[0]
+
+
+def test_dataset_warnings_are_empty_for_v2_fixture() -> None:
+    assert dataset_warnings(read_records(FIXTURE_V2)) == []
+
+
 def test_override_system_prompt_replaces_only_system() -> None:
-    records = [read_records(FIXTURE)[0]]
+    records = [read_records(FIXTURE_V2)[0]]
     original = records[0]["messages"]
 
     updated = override_system_prompt(records, "новый system")
@@ -388,6 +593,8 @@ def test_override_system_prompt_replaces_only_system() -> None:
         "content": "новый system",
     }
     assert updated[0]["messages"][1:] == original[1:]
+    # v2: user — пакет фактов, переопределение system его не трогает.
+    assert updated[0]["messages"][1]["content"] == original[1]["content"]
     # исходные записи не мутируются
     assert records[0]["messages"][0]["content"] != "новый system"
 
@@ -588,17 +795,54 @@ def test_main_dry_run_prints_statistics(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     code = main(
-        ["--dry-run", "--dataset", str(FIXTURE), "--limit", "2"]
+        ["--dry-run", "--dataset", str(FIXTURE_V2), "--limit", "2"]
     )
 
     assert code == 0
     captured = capsys.readouterr()
     assert "Записей: 2" in captured.out
     assert "club=2" in captured.out
+    assert "Распределение по schema_version: 2=2" in captured.out
     assert "r=16" in captured.out
     assert "alpha=32" in captured.out
     assert "4bit=да" in captured.out
     assert "DRY-RUN OK" in captured.out
+    # v2-фикстура корректна — предупреждений нет.
+    assert "ВНИМАНИЕ" not in captured.out
+
+
+def test_main_dry_run_warns_about_legacy_v1(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(
+        ["--dry-run", "--dataset", str(FIXTURE_V1), "--limit", "2"]
+    )
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Распределение по schema_version: 1=2" in captured.out
+    assert "ВНИМАНИЕ: schema_version=1" in captured.out
+    assert "ПЕРЕПИСЫВАТЬ" in captured.out
+
+
+def test_main_dry_run_mixed_versions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "mixed.jsonl"
+    _write(
+        path,
+        [
+            _record(schema_version=LEGACY_SCHEMA_VERSION),
+            _record(user_content=FACT_PACKAGE_USER),
+        ],
+    )
+
+    code = main(["--dry-run", "--dataset", str(path)])
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Распределение по schema_version: 1=1, 2=1" in captured.out
+    assert "ВНИМАНИЕ: schema_version=1" in captured.out
 
 
 def test_main_check_env_returns_zero(
@@ -621,7 +865,7 @@ def test_main_dry_run_with_system_prompt_override(
         [
             "--dry-run",
             "--dataset",
-            str(FIXTURE),
+            str(FIXTURE_V2),
             "--limit",
             "1",
             "--system-prompt",

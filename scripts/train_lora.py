@@ -1,19 +1,28 @@
-"""LoRA/QLoRA-дообучение Qwen-4B на `edits` (T-104).
+"""LoRA/QLoRA-дообучение Qwen-4B на `edits` (T-104, KI-039).
 
 Скрипт — часть пайплайна LoRA:
 
-1. `scripts/export_dataset.py --level club` — JSONL из `edits`;
+1. `scripts/export_dataset.py --level club --schema-version 2` — JSONL из
+   `edits` (по умолчанию v2: `user` — пакет фактов, `assistant` — правка);
 2. `scripts/train_lora.py --dry-run ...` — офлайн-проверка датасета и
    гиперпараметров (не импортирует torch/transformers/peft);
 3. `scripts/train_lora.py ... --load-in-4bit` — реальный SFT на NVIDIA GPU
    (RunPod/Colab; локально GPU нет, см. `docs/development/reports/
    LORA_TRAINING.md`).
 
+Поддерживаются две версии схемы:
+
+* **v2** (актуальная, KI-039): `user` — сериализованный пакет фактов, модель
+  учится писать комментарий из фактов;
+* **v1** (legacy): `user` — исходный текст модели, модель учится rewrite.
+  Принимается для сравнения, `--dry-run` печатает предупреждение.
+
 Маскирование лосса: labels для `system`/`user` (и служебных токенов шаблона)
 равны `-100`, обучаются только токены `assistant`-ответа.
 
 ```bash
-python scripts/export_dataset.py --level club --output data/lora_dataset.jsonl
+python scripts/export_dataset.py --level club --schema-version 2 \
+    --output data/lora_dataset.jsonl
 python scripts/train_lora.py --dry-run --dataset data/lora_dataset.jsonl
 python scripts/train_lora.py \
     --dataset data/lora_dataset.jsonl \
@@ -50,12 +59,17 @@ __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_OUTPUT",
     "DEFAULT_TARGET_MODULES",
+    "FACT_PACKAGE_MARKERS",
+    "LEGACY_SCHEMA_VERSION",
     "SCHEMA_VERSION",
+    "SUPPORTED_SCHEMA_VERSIONS",
     "DatasetStats",
     "build_parser",
     "collate_batch",
     "dataset_stats",
+    "dataset_warnings",
     "estimate_tokens",
+    "looks_like_fact_package",
     "main",
     "read_records",
     "tokenize_example",
@@ -63,9 +77,13 @@ __all__ = [
 ]
 
 #: Текущая версия схемы JSONL (см. `scripts/export_dataset.py`).
-SCHEMA_VERSION = 1
-#: Версии схемы, которые принимает обучение (совместимость).
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1})
+SCHEMA_VERSION = 2
+#: Legacy-схема «original_text → edited_text» (rewrite-семантика).
+LEGACY_SCHEMA_VERSION = 1
+#: Версии схемы, которые принимает обучение (v1 — для сравнения).
+SUPPORTED_SCHEMA_VERSIONS = frozenset({LEGACY_SCHEMA_VERSION, SCHEMA_VERSION})
+#: Признаки пакета фактов в `user` (schema_version=2, `build_fact_package`).
+FACT_PACKAGE_MARKERS = ("# Партия", "# Ключевые моменты")
 #: Обязательные роли и их строгий порядок в каждом примере.
 REQUIRED_ROLES = ("system", "user", "assistant")
 #: Лимит на длину одного сообщения в символах (защита от битых выгрузок).
@@ -113,8 +131,64 @@ class DatasetStats:
 
     records: int
     levels: dict[str, int]
+    schema_versions: dict[str, int]
     estimated_tokens: int
     max_record_tokens: int
+
+
+# --- версия схемы и метаданные ---------------------------------------------
+
+
+def schema_version_of(record: Mapping[str, Any]) -> int:
+    """Нормализовать `schema_version` записи (нет поля → legacy v1)."""
+    raw = record.get("schema_version")
+    if raw is None:
+        return LEGACY_SCHEMA_VERSION
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    raise ValueError(f"schema_version должна быть целым числом, а не {raw!r}")
+
+
+def metadata_of(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Вложенные `metadata` записи v2 (или `None`)."""
+    metadata = record.get("metadata")
+    if metadata is None:
+        return None
+    if not isinstance(metadata, Mapping):
+        return None
+    return metadata
+
+
+def _field(record: Mapping[str, Any], key: str) -> Any:
+    """Поле записи: сначала в `metadata` (v2), затем на верхнем уровне (v1)."""
+    metadata = metadata_of(record)
+    if metadata is not None and key in metadata:
+        return metadata[key]
+    return record.get(key)
+
+
+def _message_content(
+    record: Mapping[str, Any], role: str
+) -> str | None:
+    """Текст сообщения с ролью ``role`` (или `None`)."""
+    messages = record.get("messages")
+    if not isinstance(messages, list):
+        return None
+    for message in messages:
+        if isinstance(message, Mapping) and message.get("role") == role:
+            content = message.get("content")
+            return content if isinstance(content, str) else None
+    return None
+
+
+def looks_like_fact_package(text: str) -> bool:
+    """Похож ли `user` на сериализованный пакет фактов (`build_fact_package`).
+
+    Эвристика намеренно лёгкая: заголовки `# Партия` и `# Ключевые
+    моменты` — стабильный контракт `app/llm/prompts.py`. Она не заменяет
+    валидатор, а ловит перепутанные v1/v2-выгрузки.
+    """
+    return all(marker in text for marker in FACT_PACKAGE_MARKERS)
 
 
 # --- валидация JSONL --------------------------------------------------------
@@ -133,14 +207,35 @@ def _validate_record(index: int, record: Any) -> str | None:
             f"{MAX_MESSAGES}"
         )
     schema_version = record.get("schema_version")
-    if (
-        schema_version is not None
-        and schema_version not in SUPPORTED_SCHEMA_VERSIONS
-    ):
+    try:
+        version = schema_version_of(record)
+    except ValueError as exc:
+        return f"строка {index}: {exc}"
+    if version not in SUPPORTED_SCHEMA_VERSIONS:
+        expected = " или ".join(
+            str(item) for item in sorted(SUPPORTED_SCHEMA_VERSIONS)
+        )
         return (
             f"строка {index}: неподдерживаемая schema_version="
-            f"{schema_version!r} (ожидается 1)"
+            f"{schema_version!r} (ожидается {expected})"
         )
+    if version == SCHEMA_VERSION:
+        metadata = record.get("metadata")
+        if not isinstance(metadata, Mapping):
+            return (
+                f"строка {index}: для schema_version=2 нет объекта metadata "
+                "(id, commentary_id, game_id, level, fact_sheet_chars, ...)"
+            )
+        fact_chars = metadata.get("fact_sheet_chars")
+        if fact_chars is not None and (
+            isinstance(fact_chars, bool)
+            or not isinstance(fact_chars, int)
+            or fact_chars < 0
+        ):
+            return (
+                f"строка {index}: metadata.fact_sheet_chars должен быть "
+                f"целым ≥ 0, получено {fact_chars!r}"
+            )
 
     roles: list[str] = []
     for position, item in enumerate(messages, start=1):
@@ -217,10 +312,10 @@ def read_records(path: Path) -> list[dict[str, Any]]:
             f"Датасет не найден: {path}\n"
             "Экспортируйте его из edits:\n"
             "  python scripts/export_dataset.py --level club "
-            "--output data/lora_dataset.jsonl\n"
+            "--schema-version 2 --output data/lora_dataset.jsonl\n"
             "Либо проверьте синтетический пример:\n"
             "  python scripts/train_lora.py --dry-run --dataset "
-            "tests/fixtures/lora_sample.jsonl"
+            "tests/fixtures/lora_sample_v2.jsonl"
         )
     parsed, errors, total = _parse_lines(path)
     records: list[dict[str, Any]] = []
@@ -240,7 +335,7 @@ def read_records(path: Path) -> list[dict[str, Any]]:
             "Нужна строгая схема system→user→assistant; переэкспортируйте "
             "датасет:\n"
             "  python scripts/export_dataset.py --level club "
-            "--output data/lora_dataset.jsonl"
+            "--schema-version 2 --output data/lora_dataset.jsonl"
         )
     if not records:
         raise SystemExit(
@@ -248,7 +343,7 @@ def read_records(path: Path) -> list[dict[str, Any]]:
             "Сначала накопите правки редакторов (PATCH /v1/commentaries/{id}) "
             "и экспортируйте их:\n"
             "  python scripts/export_dataset.py --level club "
-            "--output data/lora_dataset.jsonl"
+            "--schema-version 2 --output data/lora_dataset.jsonl"
         )
     return records
 
@@ -293,15 +388,53 @@ def _record_tokens(record: Mapping[str, Any]) -> int:
 
 
 def dataset_stats(records: Sequence[Mapping[str, Any]]) -> DatasetStats:
-    """Посчитать записи, уровни и оценку токенов."""
-    levels = Counter(str(record.get("level", "unknown")) for record in records)
+    """Посчитать записи, уровни, версии схемы и оценку токенов."""
+    levels = Counter(
+        str(_field(record, "level") or "unknown") for record in records
+    )
+    versions = Counter(
+        str(schema_version_of(record)) for record in records
+    )
     tokens = [_record_tokens(record) for record in records]
     return DatasetStats(
         records=len(records),
         levels=dict(sorted(levels.items())),
+        schema_versions=dict(sorted(versions.items())),
         estimated_tokens=sum(tokens),
         max_record_tokens=max(tokens, default=0),
     )
+
+
+def dataset_warnings(records: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Предупреждения по составу датасета (v1 legacy, v2 не похож на факты).
+
+    Обучение v1 не блокируется: схема официально поддерживается для
+    сравнения. Предупреждения печатаются в `--dry-run` и перед реальным
+    запуском — они объясняют, чему именно учится модель.
+    """
+    warnings: list[str] = []
+    versions = Counter(schema_version_of(record) for record in records)
+    legacy = versions.get(LEGACY_SCHEMA_VERSION, 0)
+    if legacy:
+        warnings.append(
+            f"schema_version=1: {legacy} записей — user содержит "
+            "original_text, модель учится ПЕРЕПИСЫВАТЬ готовый комментарий "
+            "(rewrite), а не писать его из пакета фактов. Для новой "
+            "постановки переэкспортируйте: scripts/export_dataset.py "
+            "--schema-version 2"
+        )
+    for position, record in enumerate(records, start=1):
+        if schema_version_of(record) != SCHEMA_VERSION:
+            continue
+        user = _message_content(record, "user")
+        if user is not None and not looks_like_fact_package(user):
+            warnings.append(
+                f"запись {position}: schema_version=2, но user не похож на "
+                "пакет фактов (нет «# Партия»/«# Ключевые моменты»); "
+                "проверьте, что датасет собран scripts/export_dataset.py "
+                "--schema-version 2"
+            )
+    return warnings
 
 
 def _format_hyperparams(args: argparse.Namespace) -> str:
@@ -327,6 +460,11 @@ def _print_stats(stats: DatasetStats, args: argparse.Namespace) -> None:
         f"{level}={count}" for level, count in stats.levels.items()
     )
     print(f"Распределение по уровням: {levels or 'нет данных'}")
+    versions = ", ".join(
+        f"{version}={count}"
+        for version, count in stats.schema_versions.items()
+    )
+    print(f"Распределение по schema_version: {versions or 'нет данных'}")
     average = stats.estimated_tokens // max(stats.records, 1)
     print(
         "Оценка токенов: "
@@ -335,6 +473,12 @@ def _print_stats(stats: DatasetStats, args: argparse.Namespace) -> None:
         f"максимум ~{stats.max_record_tokens}"
     )
     print(_format_hyperparams(args))
+
+
+def _print_warnings(records: Sequence[Mapping[str, Any]]) -> None:
+    """Напечатать предупреждения по составу датасета."""
+    for warning in dataset_warnings(records):
+        print(f"ВНИМАНИЕ: {warning}")
 
 
 # --- токенизация и маскирование labels --------------------------------------
@@ -772,6 +916,7 @@ def main(argv: list[str] | None = None) -> int:
 
     stats = dataset_stats(records)
     _print_stats(stats, args)
+    _print_warnings(records)
     if args.dry_run:
         print(
             "DRY-RUN OK: схема JSONL корректна, статистика посчитана, "
