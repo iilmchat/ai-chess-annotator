@@ -1,5 +1,6 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig, loadEnv } from "vite";
+import { loadEnv } from "vite";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -18,6 +19,11 @@ export default defineConfig(({ mode }) => {
         // T-028: JWT-эндпоинты /auth/* живут вне /v1.
         "/auth": apiTarget,
       },
+    },
+    test: {
+      // E2E Playwright-спеки (web/e2e/**) не должны запускаться в Vitest
+      // (T-036b): у них другой раннер и нет jsdom-окружения.
+      exclude: [...configDefaults.exclude, "e2e/**"],
     },
   };
 });
