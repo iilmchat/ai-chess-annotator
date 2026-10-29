@@ -1,12 +1,15 @@
-"""Роли и дневной лимит токенов в `GET /v1/users/me/usage` (T-028).
+"""Роли и дневной лимит токенов в `GET /v1/users/me/usage` (T-028, KI-038).
 
 Приложение собирается с реальной аутентификацией (`test_auth_bypass=False`),
 бюджет токенов выключен — поэтому эндпоинт отдаёт `_fallback` с лимитом
-соответствующего тира. Проверяется:
+соответствующего тира. `subject`/`tier` резолвятся из JWT (как в
+middleware): роль `admin`/`auditor` → `pro`, `user` → `free`; без валидного
+токена — IP + `PRO_IPS` (KI-031). Проверяется:
 
 * аноним (без токена) → `free` по IP (белый список `PRO_IPS` пуст);
 * обычный пользователь → `free`;
-* администратор → `pro`.
+* администратор → `pro`;
+* битый токен → анонимный ответ по IP, а не 401.
 
 Тесты требуют PostgreSQL: пользователи создаются через `/auth/register`.
 """
@@ -175,7 +178,7 @@ def test_admin_usage_is_pro_tier(env: UsageEnv) -> None:
 
 
 def test_usage_accepts_invalid_token_as_anonymous(env: UsageEnv) -> None:
-    """`get_current_user_optional`: битый токен не мешает анонимному ответу."""
+    """Битый токен не даёт 401: резолвер FinOps откатывается на IP (KI-038)."""
     response = env.client.get(
         "/v1/users/me/usage", headers=_headers("not-a-valid-jwt")
     )

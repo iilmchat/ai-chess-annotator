@@ -1,8 +1,15 @@
-"""FinOps: дневные бюджеты токенов и учёт расхода (T-031).
+"""FinOps: дневные бюджеты токенов и учёт расхода (T-031, KI-038).
 
 Счётчик — Redis `usage:{day}:{subject}` с `INCRBY`; TTL — до ближайшей
 UTC-полуночи плюс минута. Проверка выполняется **до** вызова LLM, поэтому
 превышение лимита возвращает 429 без расхода токенов.
+
+Субъект счётчика — проверенный JWT-пользователь (`user:{id}`), если в
+запросе есть валидный access-токен; иначе — IP клиента (`ip:{ip}`), как
+было до JWT (KI-031). Токен проверяется только подписью/сроком
+(`decode_token`), без запроса в БД: middleware работает на каждом запросе,
+а FinOps не должен зависеть от доступности PostgreSQL. Битый, просроченный
+или refresh-токен не даёт 401 — запрос считается анонимным (KI-038).
 
 Почему Redis, а не БД: проверка должна быть дешёвой и атомарной на каждом
 запросе. Durable-агрегаты (`usage_daily`) и точный reserve/reconcile —
@@ -22,9 +29,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.auth.tokens import decode_token
 from app.config import Settings
+from app.errors import AuthError
 
 __all__ = [
+    "PRO_ROLES",
     "TokenBudgetMiddleware",
     "TokenBudgetStatus",
     "TokenUsageTracker",
@@ -40,6 +50,10 @@ __all__ = [
 
 logger = structlog.get_logger(__name__)
 
+#: Роли из claim `role`, которым положен «профессиональный» дневной лимит.
+#: Строки, а не `AdminRole`, чтобы FinOps-слой не зависел от моделей БД.
+PRO_ROLES = frozenset({"admin", "auditor"})
+
 #: Текущий трекер и субъект запроса; выставляются middleware и читаются
 #: LLM-клиентом после ответа (без протаскивания Redis через все слои).
 _current_tracker: contextvars.ContextVar[TokenUsageTracker | None] = (
@@ -48,6 +62,7 @@ _current_tracker: contextvars.ContextVar[TokenUsageTracker | None] = (
 _current_subject: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "token_subject", default=None
 )
+
 
 def utc_day(now: datetime | None = None) -> str:
     """Дата в UTC в формате ``YYYY-MM-DD`` (ключ счётчика)."""
@@ -190,24 +205,24 @@ async def record_token_usage(tokens_in: int, tokens_out: int) -> None:
 
 
 class TokenBudgetMiddleware:
-    """ASGI-middleware: 429, если дневной бюджет токенов исчерпан."""
+    """ASGI-middleware: 429, если дневной бюджет токенов исчерпан.
+
+    Субъект и tier определяются по проверенному access-токену
+    (`user:{id}` + роль), иначе — по IP и белому списку `PRO_IPS` (KI-038).
+    """
 
     def __init__(
         self,
         app: ASGIApp,
         *,
+        settings: Settings,
         protected: Iterable[tuple[str, str]],
-        pro_ips: Iterable[str] = (),
-        trust_forwarded_for: bool = False,
     ) -> None:
         self.app = app
+        self._settings = settings
         self._protected = frozenset(
             (method.upper(), path) for method, path in protected
         )
-        # KI-031: pro определяется доверенным IP, а не заголовком клиента.
-        self._pro_ips = frozenset(pro_ips)
-        # X-Forwarded-For доверяем только за явно настроенным прокси.
-        self._trust_forwarded_for = trust_forwarded_for
 
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send
@@ -227,12 +242,7 @@ class TokenBudgetMiddleware:
             await self.app(scope, receive, send)
             return
 
-        subject = _subject_from_scope(
-            scope, self._trust_forwarded_for
-        )
-        tier = _tier_from_scope(
-            scope, self._pro_ips, self._trust_forwarded_for
-        )
+        subject, tier = _identity_from_scope(scope, self._settings)
         try:
             status = await tracker.check(subject, tier)
         except Exception as exc:
@@ -284,34 +294,55 @@ def _tracker_from_scope(scope: Scope) -> TokenUsageTracker | None:
 
 
 def request_subject(request: Request, settings: Settings) -> str:
-    """Публичный subject запроса — тот же, что у middleware."""
-    return _subject_from_scope(
-        request.scope, settings.trust_forwarded_for
-    )
+    """Публичный subject запроса — тот же, что у middleware (JWT-aware)."""
+    return _identity_from_scope(request.scope, settings)[0]
 
 
 def request_tier(request: Request, settings: Settings) -> str:
-    """Публичный tier запроса — тот же, что у middleware."""
-    return _tier_from_scope(
-        request.scope,
-        frozenset(settings.pro_ips_set),
-        settings.trust_forwarded_for,
-    )
+    """Публичный tier запроса — тот же, что у middleware (JWT-aware)."""
+    return _identity_from_scope(request.scope, settings)[1]
 
 
-def _subject_from_scope(scope: Scope, trust_forwarded_for: bool) -> str:
-    """Ключ счётчика — IP клиента (до JWT другого доверенного субъекта нет)."""
-    return f"ip:{_client_ip(scope, trust_forwarded_for)}"
+def _identity_from_scope(scope: Scope, settings: Settings) -> tuple[str, str]:
+    """``(subject, tier)`` запроса: JWT-пользователь, иначе IP и `PRO_IPS`.
+
+    Токен проверяется только подписью и сроком, без запроса в БД: слой
+    FinOps не зависит от PostgreSQL. Отсутствующий/битый/просроченный токен
+    — не ошибка, а анонимный запрос (KI-038).
+    """
+    identity = _jwt_identity(scope, settings)
+    if identity is not None:
+        return identity
+    client_ip = _client_ip(scope, settings.trust_forwarded_for)
+    # KI-031: pro определяется доверенным IP, а не заголовком клиента.
+    tier = "pro" if client_ip in settings.pro_ips_set else "free"
+    return f"ip:{client_ip}", tier
 
 
-def _tier_from_scope(
-    scope: Scope,
-    pro_ips: frozenset[str],
-    trust_forwarded_for: bool,
-) -> str:
-    """`pro` только для IP из белого списка; заголовкам не доверяем."""
-    client = _client_ip(scope, trust_forwarded_for)
-    return "pro" if client in pro_ips else "free"
+def _jwt_identity(scope: Scope, settings: Settings) -> tuple[str, str] | None:
+    """``("user:{id}", tier по роли)`` из валидного access-токена или ``None``."""
+    token = _bearer_token(scope)
+    if token is None:
+        return None
+    try:
+        payload = decode_token(token, settings, expected_type="access")
+    except AuthError:
+        return None
+    tier = "pro" if payload.role in PRO_ROLES else "free"
+    return f"user:{payload.user_id}", tier
+
+
+def _bearer_token(scope: Scope) -> str | None:
+    """Значение ``Authorization: Bearer <token>`` из ASGI-scope."""
+    headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
+    for name, value in headers:
+        if name.lower() != b"authorization":
+            continue
+        scheme, _, token = value.decode("latin-1").strip().partition(" ")
+        if scheme.lower() == "bearer" and token.strip():
+            return token.strip()
+        return None
+    return None
 
 
 def _client_ip(scope: Scope, trust_forwarded_for: bool) -> str:

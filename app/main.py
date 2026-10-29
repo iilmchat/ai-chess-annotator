@@ -190,8 +190,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ("POST", f"{cfg.api_prefix}/chat"),
             ("POST", f"{cfg.api_prefix}/chat/stream"),
         ],
-        pro_ips=cfg.pro_ips_set,
-        trust_forwarded_for=cfg.trust_forwarded_for,
+        # KI-038: субъект/tier — из JWT (иначе IP + PRO_IPS); настройки
+        # передаются целиком, чтобы middleware и request_subject/
+        # request_tier считали одинаково.
+        settings=cfg,
     )
     app.add_middleware(
         CORSMiddleware,

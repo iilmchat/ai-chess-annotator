@@ -1,8 +1,12 @@
-"""Дневные бюджеты токенов (T-031).
+"""Дневные бюджеты токенов (T-031, KI-038).
 
 Redis подменён фейком: проверяем INCRBY/TTL, 429 с заголовками,
 разделение free/pro и fail-open при недоступном Redis. Реальный Redis и
 LLM не нужны.
+
+KI-038: субъект счётчика — JWT-пользователь (`user:{id}`) с tier из claim
+`role`, иначе IP и `PRO_IPS`. Токены подписываются реальным хелпером auth,
+но БД не нужна: `decode_token` проверяет только подпись/срок/тип.
 """
 
 from __future__ import annotations
@@ -10,18 +14,26 @@ from __future__ import annotations
 import time
 
 import httpx
+import pytest
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from app.auth.tokens import create_access_token, create_refresh_token
+from app.config import Settings
+from app.db.models import AdminRole, Level, User
 from app.finops import (
     TokenBudgetMiddleware,
     TokenUsageTracker,
     record_token_usage,
+    request_subject,
+    request_tier,
 )
 from app.llm.openai_client import OpenAICompatibleClient
+
+JWT_SECRET = "unit-token-budget-secret-0123456789"
 
 
 class FakeRedis:
@@ -58,11 +70,61 @@ def _tracker(
     )
 
 
+def _settings(**overrides: object) -> Settings:
+    """Настройки теста: свой JWT-секрет, пустой белый список IP."""
+    values: dict[str, object] = {
+        "app_env": "test",
+        "jwt_secret": JWT_SECRET,
+        "pro_ips": "",
+        "trust_forwarded_for": False,
+    }
+    values.update(overrides)
+    return Settings(_env_file=None, **values)  # type: ignore[arg-type]
+
+
+def _user(user_id: int, role: AdminRole) -> User:
+    """Несохранённый пользователь: нужны только id и role для claim-ов."""
+    return User(
+        id=user_id,
+        email=f"unit-{user_id}@example.com",
+        level=Level.club,
+        role=role,
+        is_active=True,
+    )
+
+
+def _access_token(role: AdminRole, *, user_id: int = 42) -> str:
+    return create_access_token(_user(user_id, role), _settings())
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _request(
+    headers: dict[str, str] | None = None,
+    *,
+    client_ip: str = "1.2.3.4",
+) -> Request:
+    """Request с ASGI-scope: без сети и без запуска приложения."""
+    raw_headers = [
+        (name.lower().encode("latin-1"), value.encode("latin-1"))
+        for name, value in (headers or {}).items()
+    ]
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/v1/users/me/usage",
+        "headers": raw_headers,
+        "client": (client_ip, 1234),
+    }
+    return Request(scope)
+
+
 def _make_app(
     tracker: TokenUsageTracker | None,
     *,
-    pro_ips: set[str] | None = None,
-    trust_forwarded_for: bool = False,
+    settings: Settings | None = None,
 ) -> Starlette:
     async def analyze_endpoint(_request: Request) -> JSONResponse:
         # Имитация LLM-вызова: клиент фиксирует фактический расход.
@@ -78,8 +140,7 @@ def _make_app(
     app.add_middleware(
         TokenBudgetMiddleware,
         protected=[("POST", "/v1/analyze")],
-        pro_ips=pro_ips or (),
-        trust_forwarded_for=trust_forwarded_for,
+        settings=settings or _settings(),
     )
     return app
 
@@ -122,6 +183,59 @@ async def test_tracker_sets_ttl_on_first_write() -> None:
     assert redis.expires[key] > 0
 
 
+# --- резолвер subject/tier (публичный API для usage) -----------------------
+
+
+@pytest.mark.parametrize(
+    ("role", "expected_tier"),
+    [
+        (AdminRole.admin, "pro"),
+        (AdminRole.auditor, "pro"),
+        (AdminRole.user, "free"),
+    ],
+)
+def test_request_tier_comes_from_jwt_role(
+    role: AdminRole, expected_tier: str
+) -> None:
+    settings = _settings()
+    request = _request(_auth(_access_token(role)))
+
+    assert request_subject(request, settings) == "user:42"
+    assert request_tier(request, settings) == expected_tier
+
+
+def test_request_subject_falls_back_to_ip_without_token() -> None:
+    request = _request()
+
+    assert request_subject(request, _settings()) == "ip:1.2.3.4"
+    assert request_tier(request, _settings()) == "free"
+
+
+def test_request_subject_falls_back_to_ip_for_broken_token() -> None:
+    request = _request(_auth("not-a-valid-jwt"))
+
+    assert request_subject(request, _settings()) == "ip:1.2.3.4"
+    assert request_tier(request, _settings()) == "free"
+
+
+def test_refresh_token_does_not_authorize_a_subject() -> None:
+    """FinOps принимает только access-токен; refresh — аноним (KI-038)."""
+    settings = _settings()
+    refresh = create_refresh_token(_user(42, AdminRole.admin), settings)
+    request = _request(_auth(refresh))
+
+    assert request_subject(request, settings) == "ip:1.2.3.4"
+    assert request_tier(request, settings) == "free"
+
+
+def test_request_tier_from_pro_ip_whitelist() -> None:
+    settings = _settings(pro_ips="1.2.3.4")
+    request = _request()
+
+    assert request_subject(request, settings) == "ip:1.2.3.4"
+    assert request_tier(request, settings) == "pro"
+
+
 # --- middleware -----------------------------------------------------------
 
 
@@ -147,14 +261,65 @@ def test_third_request_is_blocked_by_token_budget() -> None:
     assert redis.values[key] == 120
 
 
+def test_admin_token_uses_pro_limit() -> None:
+    """Валидный JWT администратора — субъект `user:{id}` и лимит pro."""
+    redis = FakeRedis()
+    tracker = _tracker(redis, free=10, pro=100)
+    client = TestClient(_make_app(tracker))
+    headers = _auth(_access_token(AdminRole.admin))
+
+    assert client.post("/v1/analyze", headers=headers).status_code == 200
+    # 60 < 100, поэтому pro-запрос проходит; free-лимит (10) дал бы 429.
+    assert client.post("/v1/analyze", headers=headers).status_code == 200
+    blocked = client.post("/v1/analyze", headers=headers)
+
+    assert blocked.status_code == 429
+    assert blocked.headers["X-RateLimit-Limit"] == "100"
+    key = next(iter(redis.values))
+    assert key.endswith("user:42")
+    assert redis.values[key] == 120
+
+
+def test_user_token_uses_free_limit() -> None:
+    """Обычный пользователь — `user:{id}`, но лимит free."""
+    redis = FakeRedis()
+    tracker = _tracker(redis, free=10, pro=1000)
+    client = TestClient(_make_app(tracker))
+    headers = _auth(_access_token(AdminRole.user, user_id=7))
+
+    assert client.post("/v1/analyze", headers=headers).status_code == 200
+    blocked = client.post("/v1/analyze", headers=headers)
+
+    assert blocked.status_code == 429
+    assert blocked.headers["X-RateLimit-Limit"] == "10"
+    key = next(iter(redis.values))
+    assert key.endswith("user:7")
+
+
+def test_broken_token_falls_back_to_ip_instead_of_401() -> None:
+    redis = FakeRedis()
+    tracker = _tracker(redis, free=10, pro=1000)
+    client = TestClient(_make_app(tracker))
+    headers = _auth("garbage-token")
+
+    assert client.post("/v1/analyze", headers=headers).status_code == 200
+    blocked = client.post("/v1/analyze", headers=headers)
+
+    assert blocked.status_code == 429
+    assert blocked.headers["X-RateLimit-Limit"] == "10"
+    key = next(iter(redis.values))
+    assert key.endswith("ip:testclient")
+
+
 def test_pro_tier_is_granted_only_by_ip_whitelist() -> None:
     redis = FakeRedis()
     tracker = _tracker(redis, free=10, pro=1000)
     client = TestClient(
         _make_app(
             tracker,
-            pro_ips={"10.0.0.1"},
-            trust_forwarded_for=True,
+            settings=_settings(
+                pro_ips="10.0.0.1", trust_forwarded_for=True
+            ),
         )
     )
 
@@ -227,7 +392,9 @@ def test_llm_client_records_tokens_inside_request() -> None:
     app = Starlette(routes=[Route("/v1/analyze", endpoint, methods=["POST"])])
     app.state.token_usage_tracker = tracker
     app.add_middleware(
-        TokenBudgetMiddleware, protected=[("POST", "/v1/analyze")]
+        TokenBudgetMiddleware,
+        protected=[("POST", "/v1/analyze")],
+        settings=_settings(),
     )
     client = TestClient(app)
 
