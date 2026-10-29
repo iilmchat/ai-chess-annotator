@@ -384,23 +384,47 @@ STOCKFISH_PORT=5000
 что `STOCKFISH_HOST` задан). Реальная проверка — при первом запросе
 `/v1/analyze`.
 
-### 6.2. OpenTelemetry-коллектор (для трейсов)
+### 6.2. Observability-стек: Grafana + Tempo + Prometheus (T-109b)
+
+Полный стек (коллектор, Tempo, Prometheus, Grafana) поднимается отдельным
+compose-файлом и не конфликтует с основным:
 
 ```bash
-docker run -d --name otel-collector \
-  -p 4318:4318 \
-  otel/opentelemetry-collector:latest
+docker compose -f docker-compose.observability.yml up -d
+docker compose -f docker-compose.observability.yml ps
 ```
 
-В `.env`:
+Ожидаемо: `grafana`, `otel-collector`, `prometheus`, `tempo` — `healthy`.
+Адреса (только loopback):
+
+| Сервис | URL / порт |
+| :--- | :--- |
+| Grafana | http://localhost:3000 (`admin` / `admin`, переопределяется `GRAFANA_ADMIN_PASSWORD`) |
+| Prometheus | http://localhost:9090 |
+| Tempo | http://localhost:3200 (API; трейсы — Grafana → Explore → Tempo) |
+| OTel Collector | `localhost:4317` (gRPC), `localhost:4318` (HTTP) |
+
+В `.env` приложения:
 
 ```dotenv
 OTEL_ENABLED=true
+OTEL_EXPORTER=otlp
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+OTEL_METRICS_ENABLED=true
+OTEL_METRICS_INTERVAL_MS=15000
 ```
 
-Перезапустить uvicorn. Трейсы появятся в коллекторе (можно смотреть через
-Jaeger/Grafana Tempo — см. T-109).
+Перезапустите uvicorn. Спаны и метрики уйдут в коллектор: трейсы — в
+Tempo, метрики — в Prometheus. Дашборд
+**ChessAnnotator — Observability** появляется в Grafana автоматически
+(папка `ChessAnnotator`): p95/p99 для `/v1/commentary` и `/v1/analyze`,
+error rate 5xx, стоимость и токены LLM, латентность по моделям. Если
+приложение запущено в контейнере в сети observability-стека, endpoint —
+`http://otel-collector:4318`.
+
+**Диаграммы доски в PDF** требуют нативной `libcairo2` (для `cairosvg`).
+В production-образе она установлена (`Dockerfile`); на Windows без Cairo
+PDF генерируется без картинки (graceful degradation), см. §8.11.
 
 ### 6.3. MinIO (S3-совместимое хранилище)
 
@@ -650,6 +674,29 @@ sudo apt-get install -y fonts-dejavu-core
 В Docker-образе (`Dockerfile`) `fonts-dejavu-core` уже установлен.
 Проверка шрифтов: `python -c "from app.export.pdf import find_pdf_font; print(find_pdf_font())"`.
 
+### 8.11. PDF без диаграммы доски (нет cairo)
+
+**Симптом:** PDF скачивается, текст и ходы на месте, но раздела
+«Позиции на доске» нет.
+
+**Причина:** `cairosvg` не может загрузить `libcairo2` (Windows без
+GTK/Cairo, slim-образ без пакета). Это **graceful degradation**, а не
+ошибка: `app.export.board.render_board_png` возвращает `None`, PDF
+собирается без картинок.
+
+**Решение:**
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y libcairo2
+# macOS
+brew install cairo
+# Windows: установите GTK3 Runtime (Cairo DLL) или используйте WSL/Docker
+```
+
+Проверка: `python -c "from app.export.board import cairosvg_available; print(cairosvg_available())"`
+→ `True`. В production-образе `libcairo2` уже установлен.
+
 ---
 
 ## 9. Обслуживание: retention и FinOps
@@ -721,6 +768,28 @@ Cron (1-е число месяца, 04:00):
 ```cron
 0 4 1 * * cd /srv/chessannotator && .venv/bin/python scripts/aggregate_usage.py --json --retention-days 90 >> /var/log/chessannotator/aggregate_usage.log 2>&1
 ```
+
+### 9.3. Файлы фоновых экспортов (KI-050)
+
+Готовые JSONL лежат в `EXPORT_DIR` (по умолчанию `data/exports/`, вне
+web-root). Строки `export_jobs` и файлы не удаляются автоматически:
+периодически чистите старые артефакты, например:
+
+```bash
+# Удалить файлы старше 7 дней (проверьте путь перед запуском!)
+find data/exports -type f -name 'edits-*.jsonl' -mtime +7 -print -delete
+```
+
+```sql
+-- Удалить завершённые джобы старше 30 дней
+DELETE FROM export_jobs
+WHERE status IN ('done', 'failed')
+  AND finished_at < now() - interval '30 days';
+```
+
+Джоба не переживает рестарт процесса: зависшие `running` можно пометить
+вручную (`UPDATE export_jobs SET status='failed', error='stale' WHERE ...`)
+— автоматическое восстановление/очередь arq запланированы в KI-053.
 
 ---
 

@@ -548,6 +548,15 @@
   `test_admin_exports.py` (11). Остаток: checksum/размер, фоновая задача
   «>5 с»/подписанные ссылки — KI-050 (аудит `dataset.export` закрыт в
   итерации 29).
+- **Статус итерации 31 (KI-050 закрыт):** `POST /v1/admin/exports/jobs`
+  (202) → BackgroundTasks пишет NDJSON в `EXPORT_DIR` (по умолчанию
+  `data/exports/`, вне web-root); таблица `export_jobs` (queued/running/
+  done/failed, снимок фильтров, `rows_exported`, `file_size`, `sha256`);
+  `GET /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/download` (409 пока не
+  готово, 410 если файл вне EXPORT_DIR); в админке — форма «Создать
+  экспорт» с поллингом и кнопкой «Скачать». Создание — только
+  admin/legacy (auditor read-only). Подписанные ссылки не входили в
+  DoD; ограничение «джоба не переживает рестарт» — KI-053.
 - **Что (полная постановка):** страница Export в админке и `GET
   /v1/admin/exports/edits.jsonl` (streaming): фильтры по дате, уровню,
   модели, `human_edited`; схема JSONL; опциональное вырезание PII;
@@ -749,7 +758,19 @@
   в панели комментария (RU/EN), API-хелпер с refresh. Тесты:
   `tests/unit/test_pdf_export.py`,
   `tests/integration/test_commentary_pdf.py`, `web/src/api.pdf.test.ts`.
-  DOCX и диаграмма доски — не входили в DoD, остаются на будущее.
+  DOCX остаётся на будущее.
+### [x] T-107b. Диаграмма доски в PDF (итерация 31)
+- **Зависит от:** T-107
+- **Статус итерации 31:** `app/export/board.py` — `chess.svg.board()` →
+  PNG через `cairosvg`; `select_diagrams` выбирает финальную позицию и
+  до двух критических моментов (`blunder`/`mistake` по `|delta_cp|`) с
+  подсветкой последнего хода. PDF вставляет PNG через `fpdf2` (82 мм,
+  подпись), pypdf видит image-XObject. При отсутствии
+  `cairosvg`/`libcairo2` — graceful degradation: PDF без картинки, не
+  500 (`render_board_png → None`). В `Dockerfile`/CI добавлен
+  `libcairo2`; dependency `cairosvg>=2.7`. Тесты:
+  `tests/unit/test_pdf_board.py` (9), интеграционный контракт
+  доступности рендерера в `test_commentary_pdf.py`.
 ### [x] T-108. Кэш результатов движка по `fen_hash` (итерация 30)
 - **Зависит от:** T-008, T-030
 - **Статус итерации 30:** миграция `19bf1fdc2a73` — таблица
@@ -781,6 +802,16 @@
   Grafana/Tempo-дашборды и алерты аномалий остаются отдельным шагом
   (T-113); в итерации 29 визуализация сделана внутри админки без
   внешнего OTel-бэкенда.
+- **Статус итерации 31 (T-109b):** полноценный стек
+  `docker-compose.observability.yml` — `otel-collector` (OTLP gRPC/HTTP,
+  spanmetrics-коннектор), `tempo`, `prometheus`, `grafana`.
+  `app/observability.py` при `OTEL_ENABLED=true` экспортирует спаны и
+  OTLP-метрики (`llm.calls/tokens/cost/latency`) в коллектор; HTTP-спан
+  `http_request` получает `http.route`/`http.response.status_code` для
+  spanmetrics. Дашборд `deploy/grafana/dashboards/chessannotator-
+  observability.json` (p95/p99 для `/v1/commentary` и `/v1/analyze`,
+  5xx error rate, tokens/cost) провижинится автоматически; datasource
+  Tempo — для трейсов. Алерты/Alertmanager по-прежнему T-113.
 - **T-110.** Pen-test и security review.
 - **T-111.** Multi-tenant организации и RBAC (роли `owner/admin/editor/
   viewer`, изоляция данных по `org_id`).

@@ -1773,3 +1773,92 @@ T-031b/T-034b закрыты в объёме MVP; заведены KI-049/KI-050
 - **T-108 остаток:** метрики cache hit/miss в админке/OTel, Redis hot-слой.
 - **T-032b:** Redis hot-слой semantic cache и метрики.
 - **KI-049/KI-052/KI-050:** планировщик FinOps, партиционирование `llm_calls`, фоновая выгрузка датасета.
+
+---
+
+## Итерация 31 — Observability Stack & PDF Board Diagram (T-109b, T-107b, KI-050)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ завершена. T-107b, T-109b закрыты; KI-050 закрыт,
+добавлен KI-053.
+**Отчёт:** `docs/development/reports/v0.8.0/ITERATION-31.md`
+
+### Что сделано
+
+- [x] **T-107b, диаграмма доски в PDF.** `app/export/board.py`:
+  `chess.svg.board()` → PNG через `cairosvg`; финальная позиция + до
+  двух критических моментов (`blunder`/`mistake` по `|delta_cp|`) с
+  подсветкой последнего хода. PDF вставляет PNG (82 мм, подпись),
+  pypdf видит image-XObject. Без `cairosvg`/`libcairo2` — graceful
+  degradation (PDF без картинки, не 500). `libcairo2` добавлен в
+  `Dockerfile` и CI; `cairosvg>=2.7` — production-зависимость.
+- [x] **T-109b, observability-стек.** `docker-compose.observability.yml`:
+  `otel-collector` (OTLP + spanmetrics), `tempo`, `prometheus`,
+  `grafana` (порты loopback, provisioning datasource'ов и дашборда).
+  `app/observability.py` экспортирует OTLP-метрики
+  `llm.calls/llm.tokens/llm.cost.usd/llm.latency`; HTTP-спан несёт
+  `http.route`/`http.response.status_code`; нативная телеметрия
+  FastAPI 0.162 отключена, чтобы не дублировать спаны. Дашборд
+  `chessannotator-observability` (9 панелей): p95/p99 для
+  `/v1/commentary` и `/v1/analyze`, 5xx error rate, стоимость, токены,
+  LLM-латентность по моделям.
+- [x] **KI-050, фоновая выгрузка датасета.** Миграция `b0c9d2f13425`
+  (`export_jobs`), `POST /v1/admin/exports/jobs` (202) →
+  BackgroundTasks → NDJSON в `EXPORT_DIR` (вне web-root) →
+  `GET /jobs/{id}/download`; статусы queued/running/done/failed,
+  checksum/размер/rows, атомарная запись, аудит `dataset.export` с
+  `job_id`. В админке — форма «Создать экспорт», поллинг и кнопка
+  «Скачать»; создание только admin/legacy, auditor read-only.
+- [x] **Документация:** SPEC §4/§5/§10, ARCHITECTURE §2/§4/§5/§5.1,
+  GETTING_STARTED §6.2/§8.11/§9.3, USER_GUIDE (диаграммы, §7.9),
+  DESIGN_ADMIN_AND_OPS §5.4/§6.4, README, TODO, CHANGELOG,
+  KNOWN_ISSUES, этот отчёт.
+
+### Метрики
+
+- **Backend-тесты:** **724 passed, 1 skipped, 1 xfailed** (68 файлов;
+  +28 к итерации 30), **252.64 с**, exit 0. Skip — нет cairo на
+  Windows-dev; xfail — маркер KI-012.
+- **Новые тесты:** диаграммы — 9 (8+skip), фоновые выгрузки — 9,
+  OTLP-метрики — 5, HTTP-спан — 3, PDF integration — +1, схема — +1.
+- **Frontend-тесты:** **46 passed** (7 файлов); typecheck 0;
+  build 6.74 с (JS 465.21 КБ / gzip 146.45, CSS 14.29 КБ / gzip 3.77).
+- **E2E mocked:** **10 passed** (5 сценариев × chromium/mobile), 5.6 с.
+  Локально — через `vite preview` из-за sandbox-ограничения esbuild
+  (см. отчёт §5); CI использует `pnpm dev`.
+- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 81 файл.
+- **Alembic:** 12 ревизий, head `b0c9d2f13425`; upgrade + `alembic
+  check` + roundtrip `downgrade base → upgrade head` — чистые;
+  16 доменных таблиц.
+- **Observability smoke:** 4/4 контейнера healthy; Grafana — 9 панелей,
+  datasources Prometheus/Tempo; Prometheus targets 4/4 up; p95
+  `/v1/analyze` = **242.5 мс**; OTLP-метрики `llm_calls_total=1`,
+  `llm_tokens_total=1801`, `llm_cost_usd_total=0.000957`; Tempo хранит
+  трейс (`X-Trace-Id` → 1 span).
+- **PDF smoke (Docker, cairo):** PNG 33 533 Б, PDF 77 952 Б, 1 страница,
+  1 image; pypdf извлёк «Позиции на доске», «Финальная позиция»,
+  игроков и комментарий. Docker image `chessannotator:iter31` собирается,
+  `import app.main` и `cairosvg_available()=True`.
+- **KI:** 53 записи, 25 Open, 28 Closed (KI-050 закрыт, +KI-053).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Джоба переживает рестарт / arq-очередь | MVP на BackgroundTasks; очередь, recovery и retention файлов — отдельный шаг | KI-053 |
+| Подписанные ссылки на скачивание | Не входили в DoD; доступ по JWT/cookie админки | — |
+| Диаграммы со стрелками/вариантами, ориентация по игроку | Объём T-107b — финальная позиция + 2 критических | — |
+| Production-профиль observability (S3/HA/TLS/SSO) | Dev/staging-стек; алерты — T-113 | T-113 |
+| Реальный LoRA-прогон (KI-030) | Нет GPU | KI-030 |
+
+### Что дальше
+
+- **KI-053:** перевести фоновые выгрузки на `arq` (Redis-очередь),
+  добавить recovery зависших `running`, retention `EXPORT_DIR`/
+  `export_jobs`, подписанные ссылки.
+- **T-113:** Alertmanager-алерты по стоимости/latency/error rate на
+  основе дашборда и метрик.
+- **T-107b остаток:** стрелки/варианты на диаграммах, диаграммы по
+  фазам, кэш PNG.
+- **T-109b остаток:** production-профиль Tempo/Prometheus (S3,
+  remote write), datasource'ы с TLS/SSO.

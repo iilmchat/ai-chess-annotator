@@ -207,6 +207,12 @@ semantic_cache(id, fen_hash, fen_embedding vector(768), level,
 engine_cache(id, fen_hash, engine_version, depth, multipv,
              lines JSONB, created_at)
 
+-- Фоновые выгрузки датасета (KI-050, итерация 31)
+export_jobs(id, status VARCHAR(16) CHECK (queued|running|done|failed),
+            actor, filters JSONB, file_path TEXT, file_size BIGINT,
+            sha256, rows_exported INT DEFAULT 0, error TEXT,
+            created_at, started_at, finished_at)
+
 -- LLM-as-judge (T-039, итерация 22)
 llm_evaluations(id, model, level, accuracy_score, usefulness_score,
                 style_score, created_at)
@@ -225,7 +231,8 @@ llm_evaluations(id, model, level, accuracy_score, usefulness_score,
 `annotated_games USING ivfflat (embedding vector_cosine_ops)`,
 `retrieval_cache(fen_hash)`, `engine_cache(fen_hash, engine_version, depth,
 multipv)` — уникальный ключ кэша движка + `engine_cache(created_at)` для
-чистки по TTL.
+чистки по TTL; `export_jobs(created_at)` — список последних джоб,
+`export_jobs(status, created_at)` — поиск выполняющихся.
 
 ---
 
@@ -238,7 +245,11 @@ multipv)` — уникальный ключ кэша движка + `engine_cach
 | `POST` | `/v1/chat` | Чат по партии: `{analysis_id, message}` → ответ LLM с проверкой вариантов. |
 | `GET` | `/v1/games/{id}` | Метаданные партии и сохранённые комментарии. |
 | `PATCH` | `/v1/commentaries/{id}` | Правка комментария (human-in-the-loop). |
-| `GET` | `/v1/commentaries/{id}/export/pdf` | PDF-экспорт комментария: шапка партии, ходы, текст; `Content-Disposition: attachment` (T-107). |
+| `GET` | `/v1/commentaries/{id}/export/pdf` | PDF-экспорт комментария: шапка партии, ходы, текст; диаграмма финальной позиции и критических моментов при доступном `cairosvg` (T-107/T-107b); `Content-Disposition: attachment`. |
+| `GET` | `/v1/admin/exports/edits.jsonl` | Streaming-выгрузка датасета правок в NDJSON (admin/auditor, JWT или cookie админки). |
+| `POST` | `/v1/admin/exports/jobs` | Создать фоновую выгрузку (202): фильтры как у стрима; только admin/legacy (KI-050). |
+| `GET` | `/v1/admin/exports/jobs[/{id}]` | Список/статус джоб выгрузки (`queued/running/done/failed`, download_url). |
+| `GET` | `/v1/admin/exports/jobs/{id}/download` | Скачать готовый JSONL (409 — не готово, 410 — файл вне `EXPORT_DIR`). |
 | `POST` | `/v1/ingest` | Загрузка аннотированных партий в RAG (админ). |
 | `GET` | `/v1/health` | Healthcheck движка, БД, LLM. |
 
@@ -369,7 +380,11 @@ admin/auditor. Чтение/запись партий, ходов,
   HTTP-запроса до вызова LLM, валидатора и RAG; OTel-спаны с экспортом
   OTLP; durable-запись `llm_calls` (`model`, `tokens_in/out`,
   `cost_usd`, `latency_ms`, `cache_hit`, `status`); дашборды p50/p95,
-  error rate и стоимости; PII в трейсы не попадает.
+  error rate и стоимости; PII в трейсы не попадает. Стек —
+  `docker-compose.observability.yml`: OTel Collector → Tempo (трейсы) и
+  Prometheus (метрики) → Grafana (провижининг datasource'ов и дашборда
+  `chessannotator-observability`); HTTP-спан несёт `http.route` и
+  `http.status_code` для spanmetrics.
 - **FinOps**: контроль стоимости и токенов на пользователя/IP/глобально
   (день/месяц), бюджеты в `system_settings`, ответ `429` при исчерпании,
   учёт `cost_usd` по прайсу модели, алерты 80/100% бюджета и отчёт

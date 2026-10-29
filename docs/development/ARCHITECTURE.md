@@ -33,7 +33,8 @@
 | :--- | :--- |
 | `app/ingestion/` | PGN/FEN → `ParsedGame`, ECO, фазы, повторы |
 | `app/engine/` | async UCI-клиент Stockfish, пул, классификация, Policy, валидатор; `engine_cache` (T-108) |
-| `app/export/` | PDF-экспорт комментария: fpdf2 + TTF-шрифт, шапка/ходы/текст (T-107) |
+| `app/export/` | PDF-экспорт комментария: fpdf2 + TTF-шрифт, шапка/ходы/текст; `board.py` — SVG доски → PNG через cairosvg с graceful degradation (T-107/T-107b) |
+| `app/dataset/` | dataset-экспорт: `records.py` — общая выборка JSONL (фильтры/keyset/сборка записи), `jobs.py` — фоновая выгрузка `export_jobs` (KI-050) |
 | `app/motifs/` | эвристики мотивов (слабые поля, линии, вилки, мат и т.д.) |
 | `app/llm/` | OpenAI-совместимый клиент, фабрика по уровню, пакет фактов, прогрев |
 | `app/prompts/` | системные промпты `beginner`/`club`/`gm`: `.txt` — seed/fallback, таблица `prompts` — источник истины, in-memory кэш |
@@ -47,6 +48,8 @@
 | `app/rag/` | ingest аннотированных партий, эмбеддинги, retrieval, контекст |
 | `app/admin.py` | starlette-admin: JWT/legacy-аутентификация, RBAC, read-only views, аудит и экспорт |
 | `app/llmops_dashboard.py` | LLMOps-дашборд `/admin/llmops`: p50/p95/p99, error rate, tokens/cost, cache hit rate, топ-5 пользователей |
+| `app/observability.py` | OTel: TracerProvider/MeterProvider, OTLP-экспорт спанов и метрик `llm.*`; `app/tracing.py` — W3C trace-context, HTTP-спан с `http.route`/статусом для spanmetrics |
+| `deploy/` | конфиги observability-стека: `otel-collector`, `tempo`, `prometheus`, `grafana` (datasources + дашборд) |
 | `app/api/v1/` | `analyze`, `games`, `commentary`, `chat`, `ingest`, `health`, `admin/exports` |
 | `app/db/` | SQLAlchemy-модели, сессии, Alembic-миграции |
 
@@ -108,7 +111,11 @@ PATCH /v1/commentaries/{id}
 | POST | `/v1/commentary` | `analysis_id` + level → комментарий |
 | POST | `/v1/commentary/stream` | SSE: `meta`/`delta`/`done`/`error` |
 | PATCH | `/v1/commentaries/{id}` | ручная правка + `edits` |
-| GET | `/v1/commentaries/{id}/export/pdf` | PDF комментария (T-107) |
+| GET | `/v1/commentaries/{id}/export/pdf` | PDF комментария + диаграммы доски (T-107/T-107b) |
+| GET | `/v1/admin/exports/edits.jsonl` | streaming NDJSON датасета (admin/auditor) |
+| POST | `/v1/admin/exports/jobs` | фоновая выгрузка (202, admin/legacy) |
+| GET | `/v1/admin/exports/jobs/{id}` | статус джобы |
+| GET | `/v1/admin/exports/jobs/{id}/download` | готовый JSONL (409/410) |
 | POST | `/v1/chat` | вопрос по `analysis_id` |
 | POST | `/v1/chat/stream` | SSE-ответ чата |
 | POST | `/v1/ingest` | PGN → `annotated_games` (`X-Admin-Token`) |
@@ -119,10 +126,10 @@ PATCH /v1/commentaries/{id}
 
 ## 5. База данных
 
-15 таблиц: `users`, `games`, `moves`, `motifs`, `annotated_games`,
+16 таблиц: `users`, `games`, `moves`, `motifs`, `annotated_games`,
 `retrieval_cache`, `commentaries`, `edits`, `prompts`, `audit_logs`,
 `semantic_cache`, `llm_evaluations`, `llm_calls`, `usage_daily`,
-`engine_cache`. Основное:
+`engine_cache`, `export_jobs`. Основное:
 
 - `moves` — SAN/FEN/eval/best/delta/class/multipv;
 - `motifs` — тип, описание, важность, FK на ход;
@@ -130,9 +137,28 @@ PATCH /v1/commentaries/{id}
 - `annotated_games` — RAG: PGN, метаданные, аннотация, `vector(768)`
   (LM Studio nomic-embed);
 - `commentaries` — текст, модель, токены, `validated`, `human_edited`;
-- `edits` — пары «оригинал → правка» (датасет).
+- `edits` — пары «оригинал → правка» (датасет);
+- `export_jobs` — фоновые выгрузки: статус, снимок фильтров, путь к
+  JSONL в `EXPORT_DIR`, размер/sha256, число строк (KI-050).
 
-Миграция — `d2e3f4a5b6c7`; `alembic check` без дрейфа.
+Миграция — `b0c9d2f13425` (head); `alembic check` без дрейфа.
+
+## 5.1. Observability
+
+```text
+app (OTel SDK) --OTLP/HTTP--> otel-collector --gRPC--> tempo (трейсы)
+                                   |--spanmetrics--> :8890 --\
+                                   |--OTLP metrics--> :8889 --> prometheus --> grafana
+```
+
+Стек поднимается `docker-compose.observability.yml` (Grafana :3000,
+Prometheus :9090, Tempo :3200, collector :4317/:4318). Дашборд
+`deploy/grafana/dashboards/chessannotator-observability.json` провижинится
+автоматически: latency p95/p99 `/v1/commentary` и `/v1/analyze`, error
+rate 5xx, стоимость и токены LLM. HTTP-спан `http_request` несёт
+`http.route` (полный, с префиксом) и `http.response.status_code`; при
+`OTEL_ENABLED=true` спаны и метрики уходят в коллектор, при `false` —
+no-op.
 
 ## 6. Frontend
 

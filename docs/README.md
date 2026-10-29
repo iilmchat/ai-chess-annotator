@@ -58,6 +58,7 @@
 | [reports/iteration-14/](development/reports/iteration-14/) | Отчёты итерации 14 — LLM-eval, Docker production, документация MVP |
 | [reports/iteration-15/](development/reports/iteration-15/) | Отчёт итерации 15 — синхронизация UI и SSE |
 | [reports/v0.1.0/](development/reports/v0.1.0/) | Отчёты итераций 16–24 (админка, кэш, auth; `ITERATION-24.md` — JWT и изоляция данных) |
+| [reports/v0.8.0/](development/reports/v0.8.0/) | Отчёт итерации 31 — observability-стек, диаграмма доски в PDF, фоновая выгрузка (T-107b/T-109b/KI-050) |
 | [reports/LLM_EVAL.md](development/reports/LLM_EVAL.md) | LLM-as-judge: средние оценки по трём шкалам (T-023) |
 
 ### Состояние проекта

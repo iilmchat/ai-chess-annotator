@@ -8,6 +8,38 @@
 
 ### Added
 
+- **Диаграмма доски в PDF (T-107b, итерация 31):** `app/export/board.py`
+  — `chess.svg.board()` → PNG через `cairosvg`; финальная позиция и до
+  двух критических моментов (`blunder`/`mistake` по `|delta_cp|`) с
+  подсветкой последнего хода. PDF вставляет PNG (`fpdf2`, 82 мм, подпись),
+  pypdf видит image-XObject. Graceful degradation: без
+  `cairosvg`/`libcairo2` PDF генерируется без картинки, а не 500.
+  В `Dockerfile`/CI добавлен `libcairo2`; dependency `cairosvg>=2.7`.
+- **Observability-стек Grafana + Tempo + Prometheus (T-109b, итерация 31):**
+  `docker-compose.observability.yml` — `otel-collector` (OTLP gRPC/HTTP,
+  spanmetrics-коннектор), `tempo`, `prometheus`, `grafana` (порты только
+  на loopback). `app/observability.py` при `OTEL_ENABLED=true`
+  экспортирует спаны и OTLP-метрики `llm.calls/llm.tokens/llm.cost.usd/
+  llm.latency`; HTTP-спан получает `http.route`/`http.status_code` для
+  spanmetrics. Провижининг datasource'ов и дашборда
+  `deploy/grafana/dashboards/chessannotator-observability.json` (p95/p99
+  для `/v1/commentary` и `/v1/analyze`, 5xx error rate, tokens/cost)
+  автоматический. Новые настройки `OTEL_METRICS_ENABLED`,
+  `OTEL_METRICS_INTERVAL_MS`; в Dockerfile/CI — `libcairo2`.
+- **Фоновая выгрузка датасета (KI-050, итерация 31):** миграция
+  `b0c9d2f13425` — таблица `export_jobs` (`status`
+  queued/running/done/failed, снимок `filters` JSONB, `actor`,
+  `file_path`, `file_size`, `sha256`, `rows_exported`, `error`,
+  таймстемпы); `POST /v1/admin/exports/jobs` (202) + `GET /jobs`,
+  `GET /jobs/{id}`, `GET /jobs/{id}/download` (409 — не готово,
+  410 — файл вне `EXPORT_DIR`). BackgroundTasks пишет NDJSON в
+  `EXPORT_DIR` (`data/exports/`, вне web-root) батчами через
+  `asyncio.to_thread`, атомарно переименовывает файл, считает sha256 и
+  пишет аудит `dataset.export` с `job_id`/`background=true`. В админке —
+  форма «Создать экспорт» с поллингом и кнопкой «Скачать»; создание
+  только admin/legacy, auditor read-only. Общая выборка вынесена в
+  `app/dataset/records.py`. Новые настройки `EXPORT_DIR`,
+  `EXPORT_JOBS_PAGE_SIZE`.
 - **PDF-экспорт комментария (T-107, итерация 30):**
   `GET /v1/commentaries/{id}/export/pdf` — серверный PDF (`fpdf2` + TTF-
   шрифт с кириллицей): шапка (игроки, турнир, дата, результат, уровень,

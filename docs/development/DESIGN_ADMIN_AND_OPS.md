@@ -683,6 +683,14 @@ T-028/T-029/T-034/T-035 без второго фреймворка
 - Очередь задач, прогресс, checksum, размер, скачивание по подписанной
   ссылке.
 - История экспортов и аудит.
+- **Реализовано в итерации 31 (KI-050):** таблица `export_jobs`
+  (queued/running/done/failed, снимок фильтров, `file_path`, `file_size`,
+  `sha256`, `rows_exported`, `error`); `POST /v1/admin/exports/jobs` →
+  BackgroundTasks → NDJSON в `EXPORT_DIR` (вне web-root) → `GET
+  /jobs/{id}/download` (409 пока не готово, 410 если файл вне каталога).
+  В админке — форма «Создать экспорт», поллинг и кнопка «Скачать»;
+  создание только admin/legacy (auditor read-only). Подписанные ссылки
+  не реализованы (доступ по JWT/cookie), очередь arq — KI-053.
 
 ### 5.5. Кастомные страницы
 
@@ -759,6 +767,17 @@ TTL, аудит).
   `llm_latency_ms` (histogram), `llm_tokens_total{direction}`,
   `llm_cost_usd_total`, `llm_cache_hits_total`,
   `guardrail_blocks_total`.
+- **Реализовано в итерации 31 (T-109b):**
+  `docker-compose.observability.yml` — `otel-collector` (contrib 0.111,
+  OTLP gRPC/HTTP + spanmetrics-коннектор), `tempo` (локальные блоки),
+  `prometheus` (скрейпит `:8889` метрики приложения и `:8890`
+  spanmetrics), `grafana` (datasource'ы + дашборд провижинятся).
+  `app.observability.configure_metrics` экспортирует
+  `llm.calls`/`llm.tokens`/`llm.cost.usd`/`llm.latency` по OTLP; HTTP-спан
+  несёт `http.route` (полный путь с префиксом) и
+  `http.response.status_code`, поэтому p95/p99 и error rate считаются по
+  маршрутам. Метрика стоимости — `llm_cost_usd_total` (единица пустая,
+  иначе Prometheus добавляет `_USD`). Алерты — §6.5 (T-113).
 
 ### 6.5. SLO и алерты
 
