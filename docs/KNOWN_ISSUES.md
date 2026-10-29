@@ -64,9 +64,11 @@
 | KI-043 | **Closed** | Low | auth, security | User-enumeration по таймингу `/auth/login`. **Закрыт в итерации 27:** dummy-Argon2id для несуществующего email, медианы 55.4/54.8 мс |
 | KI-044 | Open | Low | dataset, export | v2-экспорт: `load_analyses` на каждую правку (N+1 при нескольких правках одной партии) |
 | KI-045 | **Closed** | Low | admin, security | RBAC внутри `/admin`. **Закрыт в итерации 27:** auditor строго read-only (guard + role-aware hooks), admin — PromptAdmin edit |
-| KI-046 | Open | Low | observability, llm | Неполный охват `llm_calls`: warmup не обёрнут контекстом, `commentary_id` NULL (id после INSERT), `cache_hit` не заполняется semantic-cache-путём |
-| KI-047 | Open | Low | observability | Необработанные 500 идут без `X-Trace-Id` (Starlette `ServerErrorMiddleware` вне пользовательских middleware) |
-| KI-048 | Open | Low | db, observability | `llm_calls` без retention/партиционирования и durable-агрегатов (DESIGN §4.4 план: 90 дней, партиции по месяцу, `usage_daily`) |
+| KI-046 | **Closed** | Low | observability, llm | Неполный охват `llm_calls`: warmup, `commentary_id`, `cache_hit`. **Закрыт в итерации 28:** warmup-контекст, UPDATE `commentary_id` после commit (sync+SSE), `cache_hit=true` для semantic cache |
+| KI-047 | **Closed** | Low | observability | Необработанные 500 без `X-Trace-Id`. **Закрыт в итерации 28:** app-level handler `Exception` → 500 + `X-Trace-Id` из `request.state` |
+| KI-048 | Open | Low | db, observability | `llm_calls` без retention/партиционирования; `usage_daily` добавлен в итерации 28, но 90-дневного удержания и партиций по месяцу нет |
+| KI-049 | Open | Low | finops, db | Durable-upsert `usage_daily` — fire-and-forget: при падении процесса между Redis-инкрементом и INSERT дельта теряется; месячная агрегация — ручной скрипт без планировщика |
+| KI-050 | Open | Low | admin, api | Экспорт `edits.jsonl` v2 собирает пакет фактов на каждую строку (медленно на больших объёмах); cookie-сессия админки разбирается вручную (дублирует internals SessionMiddleware); факт выгрузки не пишется в `audit_logs` |
 
 Всего: **48** (Open: 25, Closed: 23). KI-001…009 — итерация 1 (T-006); KI-010…012 — итерация 2 (T-007); KI-013, KI-014 — итерация 3 (T-008); KI-014 закрыт, KI-015…018 — итерация 4 (T-009); KI-018 закрыт, KI-019, KI-020 — итерация 5 (T-010/T-011); KI-020 закрыт, KI-021, KI-022 — итерация 6 (T-012/T-013); KI-022 закрыт, KI-023, KI-024 — итерация 7 (T-014/T-015); KI-025, KI-026 — итерация 9 (T-017); KI-027…029 — итерация 12 (T-021b/T-022); KI-008, KI-009, KI-024…028 закрыты, KI-030 — итерация 14 (T-023); KI-021 закрыт, KI-031, KI-032 — итерация 17 (T-029/T-031); KI-031/KI-032 закрыты, KI-033 — итерация 18 (T-033/T-035); KI-033 закрыт, KI-034 — итерация 19 (T-032); KI-035 — итерация 20 (T-036); KI-035 закрыт, KI-036…038 — итерация 24 (T-041); KI-030 (прогресс без обучения) и KI-039/KI-040 — итерация 25 (T-104/T-036b); KI-036, KI-037, KI-038, KI-039 закрыты, +KI-041…045 — итерация 26; **KI-043 и KI-045 закрыты, +KI-046…048 — итерация 27**.
 
@@ -1259,14 +1261,13 @@ X-Admin-Token/парольная сессия — как admin. Остаток: 
 
 ---
 
-## KI-046 · Open · Low · observability, llm
+## KI-046 · Closed · Low · observability, llm
 
 **Симптом.** Durable-таблица `llm_calls` (T-030, итерация 27) покрывает не
 все вызовы/поля: (1) прогрев локальной модели при старте
 (`warmup_local_llm`) не оборачивается в `llm_call_context(operation=
 "warmup")`, поэтому в `llm_calls` не попадает; (2) `commentary_id` всегда
-NULL — комментарий генерируется до INSERT, id ещё неизвестен
-(буферизация телеметрии до коммита из DESIGN §4.4 не реализована);
+NULL — комментарий генерируется до INSERT, id ещё неизвестен;
 (3) `cache_hit` для ответов semantic cache не выставляется (recorder
 всегда получает False от LLM-клиента — кэш отдаёт ответ без вызова LLM).
 
@@ -1274,20 +1275,25 @@ NULL — комментарий генерируется до INSERT, id ещё 
 trace_id, admin view); warmup/связка с commentary_id/cache_hit — сервисные
 доработки за пределами LLM-клиента.
 
-**Обход / текущее поведение.** Охват — все реальные вызовы
-`complete`/`stream_generate` из commentary/chat (sync и SSE); warmup
-виден в structlog/OTel, но не в `llm_calls`. `cache_hit` в семантическом
-кэше можно посчитать по журналу `semantic_cache` (пока только там).
+**Решение (итерация 28, T-030/KI-046).**
+* warmup обёрнут в `llm_call_context(operation="warmup")` → строка
+  `operation=warmup` с provider/model/tokens/status;
+* `app.llm.calls.attach_commentary_id()` после commit комментария делает
+  best-effort UPDATE `llm_calls` по текущему `trace_id` (sync и SSE);
+* cache-hit пути commentary/chat (sync+stream) вызывают
+  `record_cache_hit()` → строка `cache_hit=true`, `provider="cache"`,
+  `tokens=0`, `cost=0`, `latency_ms` = время lookup;
+* всё покрыто тестами `test_llm_calls.py`, `test_llm_calls_api.py`,
+  `test_warmup.py`; live-smoke: warmup-row `operation=warmup`, status=ok,
+  tokens 16/4.
 
-**План закрытия.** Обернуть warmup в `llm_call_context(operation="warmup")`;
-буферизовать `_LlmCallRecord` до INSERT комментария и проставлять
-`commentary_id` (или писать отдельным UPDATE-best-effort); в
-semantic-cache-пути писать запись `llm_calls` с `cache_hit=true` и
-`tokens_*=0`/latency кэша (или отдельная метрика `cache_hits`).
+**Остаток.** Для semantic-cache-строки `operation` берётся из контекста
+вызова (commentary/chat), отдельной метрики hit/miss в `llm_calls` нет —
+по полю `cache_hit` их можно считать SQL-агрегатом.
 
 ---
 
-## KI-047 · Open · Low · observability
+## KI-047 · Closed · Low · observability
 
 **Симптом.** Необработанные исключения (не `AppError`) в эндпоинте дают
 500 **без** заголовка `X-Trace-Id`: в Starlette `ServerErrorMiddleware`
@@ -1299,13 +1305,18 @@ semantic-cache-пути писать запись `llm_calls` с `cache_hit=true
 `TraceMiddleware`; `ServerErrorMiddleware` формирует собственный ответ
 раньше.
 
-**Обход / текущее поведение.** `trace_id` для такого запроса всё равно
-есть в structlog (упавший трейс можно найти по логам), но клиент не
-получает идентификатор для поддержки.
+**Решение (итерация 28).** App-level handler
+`app.add_exception_handler(Exception, _unhandled_error_handler)`:
+читает `request.state.trace_id` (его выставил TraceMiddleware до входа в
+приложение), возвращает `500 {"detail": "Internal Server Error",
+"code": "internal_error"}` с заголовком `X-Trace-Id`, пишет
+`unhandled_exception` в structlog (path/method/trace_id/тип, без текста
+исключения). `AppError` продолжает обрабатываться отдельным handler'ом.
+Тест: `test_tracing.py::test_unhandled_500_has_trace_id_header`.
 
-**План закрытия.** App-level exception handler (или внешний
-error-handling middleware) с добавлением `X-Trace-Id` и корреляцией в
-ответе 500; тест на необработанное исключение.
+**Остаток.** Если исключение произошло до `TraceMiddleware` (например, в
+самом первом middleware), `trace_id` может отсутствовать — тогда
+заголовок не выставляется (handler не падает).
 
 ---
 
@@ -1313,18 +1324,70 @@ error-handling middleware) с добавлением `X-Trace-Id` и корре�
 
 **Симптом.** `llm_calls` (T-030) — обычная append-only таблица без
 партиционирования/retention: при росте трафика она будет расти
-неограниченно, нет 90-дневного удержания и durable-агрегатов
-(`usage_daily`), хотя DESIGN §4.4 это предусматривает. Индексы
-BRIN/DESC уже есть, что сглаживает чтение «последних вызовов».
+неограниченно, нет 90-дневного удержания. Durable-агрегат `usage_daily`
+добавлен в итерации 28 (T-031b), но партиций/retention по-прежнему нет.
+Индексы BRIN/DESC уже есть, что сглаживает чтение «последних вызовов».
 
-**Причина.** Для MVP (итерация 27) осознанно выбрана непартиционированная
-таблица: партиционирование требует изменения ключа уникальности
-(`trace_id, span_id, created_at`) и фоновой ротации; агрегаты — T-031b.
+**Причина.** Для MVP осознанно выбрана непартиционированная таблица:
+партиционирование требует изменения ключа уникальности
+(`trace_id, span_id, created_at`) и фоновой ротации.
 
 **Обход / текущее поведение.** Админ-view с page_size 25 и BRIN-индекс;
-объём данных на dev/тестовых прогонах мал. При необходимости — ручная
-чистка `DELETE ... WHERE created_at < now() - interval '90 days'`.
+объём данных на dev/тестовых прогонах мал. `scripts/aggregate_usage.py
+--retention-days N` чистит `usage_daily`, но не `llm_calls`; для
+`llm_calls` — ручная чистка `DELETE ... WHERE created_at < now() - interval
+'90 days'`.
 
 **План закрытия.** Партиционирование по месяцу `created_at` (pg_partman
-или cron-миграция), retention 90 дней, материализованные агрегаты
-`usage_daily` для дашбордов p50/p95/error rate/cost (T-109).
+или cron-миграция), retention 90 дней, материализованные агрегаты для
+дашбордов p50/p95/error rate/cost (T-109).
+
+---
+
+## KI-049 · Open · Low · finops, db
+
+**Симптом.** Durable-агрегат `usage_daily` пишется из
+`record_token_usage` в фоне (`asyncio.create_task`). Если процесс упадёт
+между Redis-`INCRBY` и INSERT/COMMIT, дельта расхода не попадёт в БД;
+после рестарта Redis-ключ потеряется, и `/v1/users/me/usage` покажет
+заниженный расход. Месячная агрегация — ручной
+`scripts/aggregate_usage.py` (нет планировщика/cron).
+
+**Причина.** Осознанный выбор итерации 28: горячий путь LLM не должен
+ждать PostgreSQL, а Redis остаётся источником 429; durable-слой —
+best-effort (как и `llm_calls`).
+
+**Обход / текущее поведение.** `used = max(redis, usage_daily)` в
+`/usage`, поэтому при наличии durable-строки показатель не «откатывается
+вниз»; потеря возможна только для последней дельты при жёстком падении.
+Скрипт можно запускать cron'ом (месячный отчёт + retention).
+
+**План закрытия.** Outbox/очередь (Redis Stream/ARQ): сначала durable
+INSERT, затем Redis-инкремент (или at-least-once ретраи); cron/Temporal
+для `aggregate_usage.py` и алертов 80/100% (T-031b остаток).
+
+---
+
+## KI-050 · Open · Low · admin, api
+
+**Симптом.** Экспорт `GET /v1/admin/exports/edits.jsonl` в схеме v2
+строит пакет фактов на каждую правку (`load_analyses` + `build_fact_package`),
+поэтому на десятках тысяч строк выгрузка будет заметно медленной (хотя
+память не растёт — keyset-батчи). Cookie-сессия `admin_session`
+разбирается функцией `decode_admin_session`, дублирующей internals
+`SessionMiddleware` (риск при мажорном апдейте Starlette). Факт выгрузки
+не пишется в `audit_logs`; checksum/размер и фоновая задача «>5 с» (из
+T-034) не реализованы.
+
+**Причина.** DoD итерации 28 — рабочий UI-экспорт с фильтрами и защитой
+ролей; большие выгрузки, аудит и подписанные ссылки — отдельный шаг.
+
+**Обход / текущее поведение.** v1-схема (`schema_version=1`) не требует
+анализа и работает быстро; v2-выгрузку можно ограничить фильтрами
+(date/level). Cookie-парсинг покрыт тестами (включая login-flow).
+
+**План закрытия.** Материализовать датасет v2 инкрементально (таблица
+`dataset_rows`/кеш пакетов фактов) или фоновая задача с ссылкой на
+скачивание; писать `audit_logs action=dataset.export`; при переходе на
+новую версию Starlette — использовать публичный API сессий или
+собственный подписанный токен для кнопки.

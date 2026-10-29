@@ -1530,3 +1530,86 @@ RULES §2.18)
 - **T-109:** OTel-дашборды (p95 latency, error rate, tokens/cost) в
   Grafana/Tempo по `llm_calls`/спанам.
 - **KI-030/T-104b:** LoRA на GPU (`schema_version=2`) + eval.
+
+## Итерация 28 — FinOps Durable и Admin Export (T-031b, T-034b, KI-046, KI-047)
+
+**Дата:** 2026-10-29. **Статус:** ✅ завершена. KI-046/KI-047 закрыты;
+T-031b/T-034b закрыты в объёме MVP; заведены KI-049/KI-050.
+
+### Задачи
+
+- [x] **T-031b, durable `usage_daily`.** Миграция `e9f0a1b2c3d4` (head):
+  subject_type/subject_key/day, tokens_in/out, cost_usd, requests,
+  `UNIQUE(subject_type, subject_key, day)`, индексы `(day, subject_type)`
+  и `(subject_type, subject_key, day)`, CHECK ≥ 0. Модель `UsageDaily`.
+- [x] **T-031b, upsert.** `record_token_usage(..., cost_usd=)` после
+  Redis-инкремента best-effort upsert-ит дельту в фоне (отдельная
+  SessionLocal, `ON CONFLICT DO UPDATE`: токены/стоимость прибавляются,
+  `requests+1`); `wait_for_pending_usage_upserts()` для тестов; сбой БД —
+  только warning.
+- [x] **T-031b, `/usage` и месячный скрипт.** `/v1/users/me/usage`:
+  Redis + durable fallback (`used = max(redis, db)` при обоих источниках,
+  DB при пустом/недоступном Redis); `scripts/aggregate_usage.py`
+  (`--month`, `--json`, `--retention-days`, `--no-cleanup`, exit 0/2).
+- [x] **KI-046, охват `llm_calls`.** Warmup в `llm_call_context
+  (operation="warmup")`; `attach_commentary_id()` после commit
+  комментария (sync+SSE) обновляет `commentary_id`; cache-hit
+  commentary/chat пишут `cache_hit=true`, `provider="cache"`,
+  `tokens/cost=0`, latency lookup.
+- [x] **KI-047, `X-Trace-Id` на 500.** App-level `Exception` handler:
+  500 `{"detail": "Internal Server Error", "code": "internal_error"}` +
+  `X-Trace-Id` из `request.state.trace_id`; structlog
+  `unhandled_exception`; `AppError` не затронут.
+- [x] **T-034b, экспорт в админке.** `GET /v1/admin/exports/edits.jsonl`:
+  NDJSON-стрим keyset-батчами, `Content-Disposition`;
+  JWT admin/auditor (user 403, без кредов 401) + cookie `admin_session`;
+  фильтры date_from/date_to/level/human_edited/schema_version (1|2);
+  v2 — пакет фактов из `scripts/export_dataset`, v1 — legacy.
+  Страница `/admin/exports/dataset` (`DatasetExportView`) с формой.
+- [x] **Документация:** README (статус/таблицы/FinOps/Observability/
+  KI), `KNOWN_ISSUES` (KI-046/047 → Closed, +KI-049/050),
+  `TODO` (T-031b/T-034b → `[x]`), `CHANGELOG`, `RELEASES`,
+  `ITERATION-28.md`.
+
+### Метрики
+
+- **Backend-тесты:** **641 passed, 1 skipped, 1 xfailed** (56 файлов;
+  +49 к итерации 27), **362.04 с**, exit 0. Skip — нет
+  `DEEPSEEK_API_KEY`, xfail — KI-012.
+- **Frontend-тесты:** **42 passed** (6 файлов); typecheck 0; build 6.92 с
+  (JS 464.31 КБ / gzip 146.15, CSS 14.29 КБ / gzip 3.77).
+- **E2E mocked:** **10 passed** (5 сценариев × chromium/mobile).
+- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 72 файла.
+- **Alembic:** head `e9f0a1b2c3d4`; upgrade/downgrade-цикл и
+  `alembic check` — чистые (14 таблиц, 10 ревизий).
+- **FinOps smoke:** реальный `/v1/chat` (LM Studio) → `usage_daily`
+  `user:212` tokens 818/44, requests 1; после удаления Redis-ключа
+  `/usage` вернул `used_tokens=862` из БД; `aggregate_usage.py --json` —
+  month 2026-10, tokens 2442/588, requests 2.
+- **Админ-экспорт smoke:** JWT admin/auditor → 200 NDJSON (1 строка v2,
+  `schema_version=2`, `user` начинается с «# Партия»), user → 403,
+  без кредов → 401; cookie-сессия после `/admin/login` → 200;
+  страница `/admin/exports/dataset` → 200 (admin/auditor);
+  `Content-Disposition: attachment; filename="edits.jsonl"`,
+  `Content-Type: application/x-ndjson`, `X-Trace-Id` присутствует.
+- **KI:** 50 записей, 25 Open, 25 Closed.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Месячные лимиты/алерты 80/100%, reserve/reconcile, дашборд расходов | MVP T-031b закрывает durable-учёт и fallback; лимиты/алерты — отдельный шаг | KI-049, T-109 |
+| Планировщик месячной агрегации/retention | Скрипт есть (`aggregate_usage.py`), cron/Temporal — инфраструктура | KI-049 |
+| Retention/партиционирование `llm_calls` | Требует изменения уникального ключа и фоновой ротации | KI-048 |
+| Фоновая выгрузка >5 с, checksum/размер, аудит выгрузки | DoD итерации — рабочий UI-экспорт с фильтрами; большие объёмы — отдельно | KI-050 |
+| Реальный LoRA-прогон (KI-030) | Нет GPU; schema v2 готова | KI-030 |
+
+### Что дальше
+
+- **KI-049:** outbox/ARQ для durable-upsert (at-least-once), cron-агрегация
+  и алерты 80/100%.
+- **KI-048/KI-050:** партиционирование/retention `llm_calls`; аудит и
+  фоновая выгрузка датасета.
+- **T-109:** OTel-дашборды (p95 latency, error rate, tokens/cost) в
+  Grafana/Tempo по `llm_calls`/спанам.
+- **KI-030/T-104b:** LoRA на GPU (`schema_version=2`) + eval.

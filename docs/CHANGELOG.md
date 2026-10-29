@@ -8,6 +8,32 @@
 
 ### Added
 
+- **FinOps durable-агрегаты `usage_daily` (T-031b, итерация 28):**
+  миграция `e9f0a1b2c3d4` — таблица `usage_daily` (subject_type/
+  subject_key/day, tokens_in/out, cost_usd, requests,
+  UNIQUE(subject_type, subject_key, day), индексы `(day, subject_type)` и
+  `(subject_type, subject_key, day)`, CHECK ≥ 0). `record_token_usage`
+  после Redis-инкремента best-effort upsert-ит дельту в фоне
+  (`ON CONFLICT DO UPDATE`, отдельная сессия, `wait_for_pending_usage_upserts`);
+  `/v1/users/me/usage` — Redis + durable fallback (`used = max(redis, db)`);
+  `scripts/aggregate_usage.py` — месячные суммы по дням/типам, `--json`,
+  `--retention-days` (90 по умолчанию), `--no-cleanup`. Тесты:
+  `tests/unit/test_finops_durable.py`, `tests/integration/test_usage_daily.py`.
+- **JSONL-экспорт датасета в админке (T-034b, итерация 28):**
+  `GET /v1/admin/exports/edits.jsonl` — streaming NDJSON с
+  `Content-Disposition`, keyset-батчами (без роста памяти); фильтры
+  `date_from/date_to`, `level`, `human_edited`, `schema_version` (1|2);
+  v2 переиспользует `scripts/export_dataset` (system-промпт + пакет
+  фактов, пропуск проблемных записей), v1 — legacy original→edited.
+  Авторизация: JWT admin/auditor (user → 403) **и** cookie-сессия
+  `admin_session` (кнопка из админки); страница `/admin/exports/dataset`
+  (`DatasetExportView`, меню «Экспорт датасета») с формой фильтров.
+  Тесты: `tests/integration/test_admin_exports.py`.
+- **KI-046 закрыт (итерация 28):** warmup обёрнут в
+  `llm_call_context(operation="warmup")`; `attach_commentary_id()` после
+  commit комментария заполняет `commentary_id` в `llm_calls` (sync и SSE);
+  cache-hit пути commentary/chat пишут строку `cache_hit=true`,
+  `provider="cache"`, `tokens=0`, `cost=0`, latency кэша.
 - **LLMOps: durable `llm_calls` и сквозной `trace_id` (T-030, итерация 27):**
   миграция `d8e9f0a1b2c3` — таблица `llm_calls` по DESIGN §4.4
   (trace_id/span_id, request_id, actor_id/game_id/commentary_id,
@@ -296,6 +322,20 @@
   больше не считает одиночную клетку (`e1`) ходом.
 - `games` получила `analysis_level` и `analysis_time_ms`; `AnalyzeResponse`
   отдаёт `analysis_level`.
+
+### Fixed
+
+- **KI-047 (итерация 28):** необработанные исключения (500) теперь
+  возвращают заголовок `X-Trace-Id`: app-level handler `Exception`
+  читает `request.state.trace_id` (его выставляет `TraceMiddleware` до
+  входа в приложение) и отдаёт
+  `{"detail": "Internal Server Error", "code": "internal_error"}`;
+  structlog пишет `unhandled_exception` (path/method/trace_id/тип без
+  текста исключения). Доменные `AppError` продолжают обрабатываться
+  отдельным handler'ом. Тест:
+  `test_tracing.py::test_unhandled_500_has_trace_id_header`.
+- **KI-046 (итерация 28):** неполный охват `llm_calls` — см. Added
+  (warmup/commentary_id/cache_hit).
 
 ## [0.1.0] — 2026-10-28
 

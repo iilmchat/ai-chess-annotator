@@ -437,16 +437,28 @@
   по прайсу модели; админ может менять лимит; дашборд расходов.
 - **Оценка:** 3
 
-### [ ] T-031b. FinOps: durable-агрегаты, месячные бюджеты, дашборд
+### [x] T-031b. FinOps: durable-агрегаты (итерация 28, MVP)
 - **Зависит от:** T-031, T-035
-- **Что:** `usage_daily` (upsert из Redis), лимиты на пользователя/IP/
-  глобально и на месяц, reserve/reconcile по фактическим токенам,
-  настройка лимитов в `system_settings`/админке, алерты 80/100%,
+- **Статус итерации 28:** миграция `e9f0a1b2c3d4` — таблица `usage_daily`
+  (`subject_type/subject_key/day`, tokens_in/out, cost_usd, requests,
+  UNIQUE(subject_type, subject_key, day), индексы день+тип и субъект+день);
+  `record_token_usage` делает best-effort upsert (`ON CONFLICT DO UPDATE`,
+  фоновая задача + отдельная сессия, `wait_for_pending_usage_upserts`);
+  `/v1/users/me/usage` — Redis + DB fallback (`used = max(redis, db)`);
+  `scripts/aggregate_usage.py` — месячные суммы, `--json`,
+  `--retention-days` (90 по умолчанию), `--no-cleanup`. Тесты:
+  `test_finops_durable.py` (20), `test_usage_daily.py` (5).
+  Остаток: месячные лимиты/алерты 80/100%, reserve/reconcile,
+  настройка лимитов в админке, дашборд расходов, планировщик агрегации
+  (KI-049), партиционирование/retention `llm_calls` (KI-048).
+- **Что (полная постановка):** `usage_daily` (upsert из Redis), лимиты на
+  пользователя/IP/глобально и на месяц, reserve/reconcile по фактическим
+  токенам, настройка лимитов в `system_settings`/админке, алерты 80/100%,
   дашборд расходов; резолвинг тира из JWT, а не из `X-User-Tier`
   (KI-031); точные `X-Token-Budget-*` в успешных ответах.
-- **DoD:** счётчики переживают рестарт Redis; суммарные списания не
-  превышают лимит при гонке; тир нельзя подделать заголовком; дашборд
-  стоимости.
+- **DoD (MVP):** счётчики переживают рестарт Redis; `/usage` отдаёт
+  durable-данные; месячный скрипт и retention работают; тесты на upsert и
+  fallback. Дашборд/алерты — T-109/T-031c.
 - **Оценка:** 3
 
 ### [x] T-032. Semantic Cache (итерация 19)
@@ -516,6 +528,28 @@
   ≥20 атак + 50 легальных вопросов (detection ≥95%, FP ≤5%).
 - **DoD:** все поверхности (chat/style/stream) защищены; корпус в CI;
   false positive ≤5%; события и метрики доступны.
+- **Оценка:** 2
+
+### [x] T-034b. Dataset Export в Admin UI (итерация 28)
+- **Зависит от:** T-034, T-028
+- **Статус итерации 28:** `GET {api_prefix}/admin/exports/edits.jsonl` —
+  NDJSON-стрим (keyset-батчи), `Content-Disposition: attachment;
+  filename="edits.jsonl"`; авторизация JWT admin/auditor (user → 403,
+  без кредов → 401) **и** cookie-сессия `admin_session` (кнопка из
+  админки); фильтры `date_from/date_to` (по `edits.created_at`),
+  `level`, `human_edited`, `schema_version` (1|2, default 2);
+  v2 переиспользует `scripts/export_dataset` (system-промпт + пакет
+  фактов, пропуск no_game/invalid_pgn/no_analysis), v1 — legacy
+  original→edited. Страница `/admin/exports/dataset`
+  (`DatasetExportView`, меню «Экспорт датасета») с формой фильтров и
+  кнопкой скачивания; доступна admin/auditor. Тесты:
+  `test_admin_exports.py` (11). Остаток: `audit_logs` факта выгрузки,
+  checksum/размер, фоновая задача «>5 с»/подписанные ссылки — KI-050.
+- **Что (полная постановка):** страница Export в админке и `GET
+  /v1/admin/exports/edits.jsonl` (streaming): фильтры по дате, уровню,
+  модели, `human_edited`; схема JSONL; опциональное вырезание PII;
+  checksum, размер, `audit_logs`; лимит строк и фоновая задача для
+  больших выгрузок.
 - **Оценка:** 2
 
 ### [~] T-034. Dataset Export (частично, итерация 19)

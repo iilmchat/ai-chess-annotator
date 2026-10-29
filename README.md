@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-592_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-641_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-42_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -246,18 +246,18 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP; качество LLM ниже 7/10 — KI-030) |
-| Итерация | **27 — LLMOps Observability и Security Fixes (T-030/T-030b, KI-043, KI-045)**; итерации 1–26 закрыты |
-| Backend-тесты | **592 passed, 1 skipped, 1 xfailed** (53 файла; skip — нет `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
+| Итерация | **28 — FinOps Durable и Admin Export (T-031b, T-034b, KI-046, KI-047)**; итерации 1–27 закрыты |
+| Backend-тесты | **641 passed, 1 skipped, 1 xfailed** (56 файлов; skip — нет `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
 | Frontend-тесты | **42 passed** (6 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
-| Таблиц в БД | **13** (9 ревизий, head `d8e9f0a1b2c3`; + `llm_calls` — durable-история вызовов LLM: trace_id/span_id, токены/стоимость/латентность/статус, prompt_slug/version) |
+| Таблиц в БД | **14** (10 ревизий, head `e9f0a1b2c3d4`; `llm_calls` — durable-история вызовов LLM: trace_id/span_id, токены/стоимость/латентность/статус, prompt_slug/version; `usage_daily` — durable FinOps-агрегат по субъекту/дню) |
 | Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
 | Engine | Stockfish 17 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; пул из 4 процессов |
-| API | `POST /auth/register|login|refresh|logout`, `GET /auth/me`; защищённые JWT: `POST /v1/analyze`, `GET /v1/games`, `GET /v1/games/{id}`, `GET /v1/users/me/usage`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, `POST /v1/chat`, SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest; `/admin` (starlette-admin: RAG/комментарии/правки/аудит/LLM-evals + редактируемые промпты; вход по JWT admin/auditor) |
+| API | `POST /auth/register|login|refresh|logout`, `GET /auth/me`; защищённые JWT: `POST /v1/analyze`, `GET /v1/games`, `GET /v1/games/{id}`, `GET /v1/users/me/usage`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, `POST /v1/chat`, SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest; `GET /v1/admin/exports/edits.jsonl` (JSONL-экспорт для LoRA, JWT admin/auditor или cookie админки); `/admin` (starlette-admin: RAG/комментарии/правки/аудит/LLM-evals + редактируемые промпты + страница «Экспорт датасета»; вход по JWT admin/auditor) |
 | Auth | JWT access 15 мин + refresh 7 дней (python-jose); refresh — HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`, `Secure` в prod), `/auth/logout` + Redis-denylist, ротация отзывает прежний jti; пароли **Argon2id** (argon2-cffi), legacy bcrypt перехешируется при входе; dummy-Argon2id для несуществующего email (timing-safe login); роли `user/admin/auditor`; access на фронтенде только в памяти, `credentials: include`, single-flight refresh; изоляция партий по `games.user_id`; `/admin` — JWT admin/auditor, auditor read-only; ограничения — KI-041, KI-042 |
 | LLM | `beginner`/`club` → LM Studio (`qwen/qwen3-4b-2507`), `gm` → DeepSeek (`deepseek-chat`); таймауты, ретраи, токены, прогрев; локальный комментарий 15–120 с |
 | Prompts/Validator | Промпты 3 уровней в таблице `prompts` (seed из `.txt`, версия, редактирование в админке, hot-reload кэша); пакет фактов: `club` — топ-3 без PV, `gm` — до 10 с PV; валидатор SAN с retry |
-| FinOps | Дневные лимиты токенов в Redis: `usage:{date}:user:{id}` для JWT-пользователя (tier из роли: admin/auditor → pro, user → free), анонимно — `usage:{date}:ip:{ip}`/`PRO_IPS`; `429 token_budget_exceeded` + `X-RateLimit-Reset`; `cost_usd` по ценам из конфига |
+| FinOps | Redis — горячий счётчик дневного бюджета: `usage:{date}:user:{id}` для JWT-пользователя (tier из роли: admin/auditor → pro, user → free), анонимно — `usage:{date}:ip:{ip}`/`PRO_IPS`; `429 token_budget_exceeded` + `X-RateLimit-Reset`; `cost_usd` по ценам из конфига; **durable `usage_daily`** (T-031b): best-effort upsert токенов/стоимости/запросов по `subject_type+subject_key+day`, `/v1/users/me/usage` — Redis + DB fallback (`max(redis, db)`), `scripts/aggregate_usage.py` — месячные суммы и retention 90 дней |
 | Security | Guardrails чата: NFKC, control/zero-width/bidi, лимит 2000, 7 RU/EN-эвристик, `422 prompt_injection` + аудит; в sysprompt — запрет раскрывать инструкции |
 | Audit | Append-only `audit_logs` с hash-chain, advisory-lock, триггером `UPDATE/DELETE/TRUNCATE`; аудит промптов (атомарно с правкой), правок комментариев и инъекций; read-only view + страница проверки целостности |
 | Semantic cache | `semantic_cache` (vector 768, HNSW): exact `fen_hash+level+prompt_hash`, semantic cosine < 0.05, TTL 30 дней; `/commentary`, `/chat` и SSE; второй запрос — 0.030 с |
@@ -273,8 +273,8 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Policy | `choose_recommended_move`: gm — топ-1, club — альтернатива при разнице < 20 cp, beginner — фильтр раннего ферзя и зевков |
 | LLM-eval | 5 партий × club/gm, 3 шкалы; база **5.19/10** (9 из 10); после итерации 16 `club` — **4.40/10** (было 3.83), отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md); ниже 7/10 — KI-030 |
 | Streaming | SSE `/v1/commentary/stream` и `/v1/chat/stream`: `meta`/`delta`/`done`/`error`, финальная SAN-валидация; UI печатает постепенно |
-| Observability | **LLMOps (T-030):** durable `llm_calls` (provider/model/level, tokens/cost/latency/cache_hit/status, prompt_slug/version, actor/game) — запись best-effort после `complete`/`stream_generate`, не блокирует ответ; W3C `traceparent` → `trace_id` в `request.state`, contextvars, structlog, заголовок **`X-Trace-Id`** и OTel-спанах (`http_request` + вложенные `llm_*`); спаны `validator.validate` и `rag.retrieve`; OTel-экспорт `console`/`otlp`, admin-view `llm_calls`; ограничения — KI-046…048 |
-| KI-реестр | **48** записей: 25 Open, 23 Closed (в итерации 27 закрыты KI-043, KI-045; добавлены KI-046…048; KI-030 остаётся Open) |
+| Observability | **LLMOps (T-030):** durable `llm_calls` (provider/model/level, tokens/cost/latency/cache_hit/status, prompt_slug/version, actor/game/commentary) — запись best-effort после `complete`/`stream_generate` + warmup, `cache_hit=true` для semantic cache; W3C `traceparent` → `trace_id` в `request.state`, contextvars, structlog, заголовок **`X-Trace-Id`** (в т.ч. на необработанных 500 — KI-047) и OTel-спанах (`http_request` + вложенные `llm_*`); спаны `validator.validate` и `rag.retrieve`; OTel-экспорт `console`/`otlp`, admin-view `llm_calls`; ограничения — KI-048…050 |
+| KI-реестр | **50** записей: 25 Open, 25 Closed (в итерации 28 закрыты KI-046, KI-047; добавлены KI-049, KI-050; KI-030 остаётся Open) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, Playwright E2E, docker build; pip + pnpm store cache |
 | Docker | multi-stage образ (Node → Python + SPA), `docker-compose.prod.yml`, loopback-порты БД/Redis; публикация в GHCR — T-027 |
 
