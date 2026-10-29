@@ -17,6 +17,7 @@ import structlog
 
 from app.config import Settings, get_settings
 from app.llm.base import BaseLLMClient
+from app.llm.calls import llm_call_context
 from app.llm.factory import get_llm_client
 
 __all__ = ["WARMUP_PROMPT", "warmup_local_llm"]
@@ -50,7 +51,11 @@ async def warmup_local_llm(
     try:
         if llm is None:
             llm = get_llm_client("club", cfg)
-        await llm.generate(WARMUP_PROMPT)
+        # KI-046: прогрев — тоже вызов LLM и должен попадать в `llm_calls`
+        # (operation="warmup"). HTTP-контекста здесь нет — recorder сам
+        # сгенерирует trace_id (fallback).
+        with llm_call_context(operation="warmup"):
+            await llm.generate(WARMUP_PROMPT)
     except Exception as exc:
         logger.warning(
             "llm_warmup_failed", error=str(exc), provider=getattr(llm, "provider", None)

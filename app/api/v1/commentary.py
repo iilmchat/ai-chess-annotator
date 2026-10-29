@@ -27,7 +27,7 @@ from app.commentary import RagContextBuilder, edit_commentary, generate_commenta
 from app.commentary.streaming import stream_commentary
 from app.db.models import Commentary, Level, User
 from app.db.session import get_session
-from app.llm.calls import llm_call_context, stream_in_call_context
+from app.llm.calls import attach_commentary_id, llm_call_context, stream_in_call_context
 
 router = APIRouter(tags=["commentary"])
 
@@ -144,6 +144,9 @@ async def create_commentary(
     )
     session.add(row)
     await session.commit()
+    # KI-046: id комментария появился — привязываем записи llm_calls этого
+    # trace (best-effort, фоновая задача; ответ не ждёт UPDATE-а).
+    attach_commentary_id(row.id)
 
     return CommentaryResponse(
         commentary_id=row.id,

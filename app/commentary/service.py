@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import cast
@@ -39,6 +40,7 @@ from app.engine.validator import extract_moves_from_text, validate_moves
 from app.errors import LLMValidationError, NotFoundError
 from app.ingestion import ParsedGame, parse_pgn
 from app.llm import BaseLLMClient, LLMUsage, get_llm_client
+from app.llm.calls import record_cache_hit
 from app.llm.prompts import build_fact_package
 from app.motifs.models import Motif
 from app.prompts import load_system_prompt
@@ -236,6 +238,7 @@ async def generate_commentary(
         level, model, system_prompt, style=style
     )
     position_fen = commentary_position_fen(parsed, analyses)
+    lookup_started = time.perf_counter()
     hit = await lookup(
         session,
         fen=position_fen,
@@ -243,7 +246,10 @@ async def generate_commentary(
         prompt_hash_value=prompt_hash_value,
         settings=cfg,
     )
+    lookup_ms = int((time.perf_counter() - lookup_started) * 1000)
     if hit is not None:
+        # KI-046: cache-hit — тоже запись в llm_calls (0 токенов, 0 стоимости).
+        record_cache_hit(latency_ms=lookup_ms)
         return GeneratedCommentary(
             text=hit.text,
             usage=cache_usage(),

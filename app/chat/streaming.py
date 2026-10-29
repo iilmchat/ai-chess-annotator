@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 
 import structlog
@@ -30,6 +31,7 @@ from app.engine.validator import extract_moves_from_text, validate_moves
 from app.errors import AppError
 from app.ingestion import parse_pgn
 from app.llm import BaseLLMClient, get_llm_client
+from app.llm.calls import record_cache_hit
 from app.llm.prompts import build_fact_package
 from app.llm.tokens import estimate_tokens
 from app.security.guardrails import sanitize_user_input
@@ -80,6 +82,7 @@ async def stream_chat(
             history=history_text,
         )
         position_fen = chat_position_fen(parsed)
+        lookup_started = time.perf_counter()
         hit = await lookup(
             session,
             fen=position_fen,
@@ -87,7 +90,10 @@ async def stream_chat(
             prompt_hash_value=prompt_hash_value,
             settings=cfg,
         )
+        lookup_ms = int((time.perf_counter() - lookup_started) * 1000)
         if hit is not None:
+            # KI-046: cache-hit в чате — тоже строка llm_calls (operation=chat).
+            record_cache_hit(latency_ms=lookup_ms)
             yield sse_event("meta", model="semantic-cache", level=level)
             for chunk in chunk_text(hit.text):
                 yield sse_event("delta", text=chunk)

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 
 import structlog
@@ -35,6 +36,7 @@ from app.errors import AppError
 from app.finops import compute_cost_usd, prices_for_level
 from app.ingestion import parse_pgn
 from app.llm import BaseLLMClient, get_llm_client
+from app.llm.calls import attach_commentary_id, record_cache_hit
 from app.llm.prompts import build_fact_package
 from app.llm.tokens import estimate_tokens
 from app.prompts import load_system_prompt
@@ -89,6 +91,7 @@ async def stream_commentary(
             level, model, system_prompt, style=style
         )
         position_fen = commentary_position_fen(parsed, analyses)
+        lookup_started = time.perf_counter()
         hit = await lookup(
             session,
             fen=position_fen,
@@ -96,7 +99,11 @@ async def stream_commentary(
             prompt_hash_value=prompt_hash_value,
             settings=cfg,
         )
+        lookup_ms = int((time.perf_counter() - lookup_started) * 1000)
         if hit is not None:
+            # KI-046: cache-hit фиксируется в llm_calls и привязывается к
+            # созданному комментарию (attach после commit, когда есть id).
+            record_cache_hit(latency_ms=lookup_ms)
             row = Commentary(
                 game_id=game.id,
                 user_id=user_id,
@@ -111,6 +118,7 @@ async def stream_commentary(
             session.add(row)
             await session.flush()
             await session.commit()
+            attach_commentary_id(row.id)
             yield sse_event("meta", model="semantic-cache", level=level)
             for chunk in chunk_text(hit.text):
                 yield sse_event("delta", text=chunk)
@@ -185,6 +193,9 @@ async def stream_commentary(
         )
         session.add(row)
         await session.commit()
+        # KI-046: id появился — привязываем уже записанные вызовы LLM
+        # (ошибки attach не влияют на стрим, задача фоновая).
+        attach_commentary_id(row.id)
         yield sse_event(
             "done",
             commentary_id=row.id,

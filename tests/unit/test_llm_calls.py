@@ -1,9 +1,13 @@
-"""Recorder `llm_calls` (T-030): контекст вызова и фоновая запись.
+"""Recorder `llm_calls` (T-030, KI-046): контекст вызова и фоновая запись.
 
 БД не нужна: `SessionLocal` подменяется фейковой фабрикой сессий, а
 `_persist_call` в тестах «no-op» подменяется явно. Проверяем scoping
 contextvar-ов, метрики/статусы, prompt_version из `prompts.version`,
 trace/span-идентификаторы и fire-and-forget (запись не блокирует вызов).
+
+KI-046: cache-hit пишется как вызов (`provider="cache"`, `cache_hit=True`),
+`attach_commentary_id` обновляет строки текущего trace; вне trace —
+no-op.
 """
 
 from __future__ import annotations
@@ -18,8 +22,10 @@ import pytest
 from app.db.models import Level, LlmCall
 from app.llm import calls
 from app.llm.calls import (
+    attach_commentary_id,
     current_call_context,
     llm_call_context,
+    record_cache_hit,
     record_llm_call,
     stream_in_call_context,
     wait_for_pending_llm_calls,
@@ -28,12 +34,13 @@ from app.tracing import TraceContext, trace_context
 
 
 class FakeSession:
-    """Минимальная async-сессия: scalar/add/commit."""
+    """Минимальная async-сессия: scalar/add/commit/execute."""
 
     def __init__(self, *, prompt_version: int | None = 1) -> None:
         self.added: list[LlmCall] = []
         self.prompt_version = prompt_version
         self.scalar_calls = 0
+        self.statements: list[Any] = []
 
     async def __aenter__(self) -> FakeSession:
         return self
@@ -50,6 +57,14 @@ class FakeSession:
 
     async def commit(self) -> None:
         return None
+
+    async def execute(self, statement: Any) -> Any:
+        self.statements.append(statement)
+
+        class _Result:
+            rowcount = 1
+
+        return _Result()
 
 
 class FakeSessionFactory:
@@ -310,3 +325,79 @@ async def test_persist_failure_is_logged_not_raised(
             await wait_for_pending_llm_calls()
 
     assert len(session.added) == 1  # строка поставлена, commit упал — не упало
+
+
+# --- KI-046: cache-hit и привязка commentary_id ----------------------------
+
+
+async def test_record_cache_hit_writes_cache_row(
+    fake_session: FakeSession,
+) -> None:
+    with trace_context(_trace_context()):
+        with llm_call_context(operation="commentary", actor_id=5, game_id=11):
+            record_cache_hit(latency_ms=3)
+            await wait_for_pending_llm_calls()
+
+    assert len(fake_session.added) == 1
+    row = fake_session.added[0]
+    assert row.operation == "commentary"
+    assert row.actor_id == 5
+    assert row.game_id == 11
+    assert row.provider == "cache"
+    assert row.model == "semantic-cache"
+    assert row.tokens_in == 0
+    assert row.tokens_out == 0
+    assert row.cost_usd == Decimal("0")
+    assert row.latency_ms == 3
+    assert row.cache_hit is True
+    assert row.status == "ok"
+    assert row.level is None
+    assert row.prompt_slug is None
+
+
+async def test_record_cache_hit_uses_chat_context(
+    fake_session: FakeSession,
+) -> None:
+    with trace_context(_trace_context()):
+        with llm_call_context(
+            operation="chat", actor_id=7, game_id=9, prompt_slug="gm"
+        ):
+            record_cache_hit(latency_ms=1)
+            await wait_for_pending_llm_calls()
+
+    row = fake_session.added[0]
+    assert row.operation == "chat"
+    assert row.prompt_slug == "gm"
+
+
+async def test_attach_commentary_id_updates_trace_rows(
+    fake_session: FakeSession,
+) -> None:
+    context = _trace_context()
+    with trace_context(context):
+        with llm_call_context(operation="commentary", actor_id=1, game_id=2):
+            record_llm_call(
+                provider="lmstudio", model="m", status="ok", latency_ms=1
+            )
+            await wait_for_pending_llm_calls()
+            attach_commentary_id(77)
+            await wait_for_pending_llm_calls()
+
+    assert len(fake_session.statements) == 2
+    params = [statement.compile().params for statement in fake_session.statements]
+    assert all(item["commentary_id"] == 77 for item in params)
+    assert all(item["trace_id_1"] == context.trace_id for item in params)
+    # Первый UPDATE — точечно по последнему span_id recorder-а, второй —
+    # добивает остальные NULL-строки trace (retry/stream).
+    assert params[0]["span_id_1"] == fake_session.added[0].span_id
+    assert "span_id_1" not in params[1]
+
+
+async def test_attach_commentary_id_is_noop_outside_trace(
+    fake_session: FakeSession,
+) -> None:
+    attach_commentary_id(5)
+    await wait_for_pending_llm_calls()
+
+    assert fake_session.statements == []
+

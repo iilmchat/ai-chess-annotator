@@ -15,6 +15,16 @@
 
 Вне HTTP-запроса и вне `llm_call_context` записей нет: юнит-тесты клиента
 и служебные скрипты не должны ходить в БД.
+
+KI-046 — полный охват LLMOps:
+
+* **warmup** — прогрев модели тоже пишется (`operation="warmup"`), чтобы
+  стартовые вызовы не выпадали из учёта;
+* **attach_commentary_id** — после INSERT комментария `llm_calls` этого
+  trace получает `commentary_id` (иначе связь «метрика → комментарий»
+  терялась: id появляется после вызова LLM);
+* **record_cache_hit** — попадание в semantic cache фиксируется как
+  отдельный вызов (`provider="cache"`, `cache_hit=True`, 0 токенов/стоимости).
 """
 
 from __future__ import annotations
@@ -30,7 +40,7 @@ from typing import Literal
 from uuid import UUID
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Level, LlmCall, Prompt
@@ -40,8 +50,10 @@ from app.tracing import current_request_id, current_trace_id, new_trace_context
 __all__ = [
     "CallStatus",
     "LlmCallContext",
+    "attach_commentary_id",
     "current_call_context",
     "llm_call_context",
+    "record_cache_hit",
     "record_llm_call",
     "stream_in_call_context",
     "wait_for_pending_llm_calls",
@@ -64,6 +76,16 @@ _current_call: ContextVar[LlmCallContext | None] = ContextVar(
 
 #: Ссылки на фоновые задачи: без них GC может отменить запись.
 _pending: set[asyncio.Task[None]] = set()
+
+#: Последний trace/span, записанный recorder-ом в текущем контексте (KI-046).
+#: Нужны `attach_commentary_id`, чтобы найти строки `llm_calls` этого запроса
+#: (trace_id из HTTP-middleware, а span_id — на случай отсутствия HTTP).
+_last_trace_id: ContextVar[UUID | None] = ContextVar(
+    "llm_call_last_trace_id", default=None
+)
+_last_span_id: ContextVar[str | None] = ContextVar(
+    "llm_call_last_span_id", default=None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +263,10 @@ def record_llm_call(
         )
         _pending.add(task)
         task.add_done_callback(_pending.discard)
+        # KI-046: запоминаем последний trace/span — по ним attach_commentary_id
+        # найдёт строки этого вызова (в т.ч. вне HTTP, где trace генерируется).
+        _last_trace_id.set(record.trace_id)
+        _last_span_id.set(record.span_id)
     except Exception as exc:  # best-effort: LLMOps не ломает запрос
         logger.warning("llm_call_schedule_failed", error=str(exc))
 
@@ -250,11 +276,136 @@ async def wait_for_pending_llm_calls(timeout_s: float = 2.0) -> None:
 
     Без этого фоновые задачи могут быть отменены при закрытии event loop
     (TestClient), и тест не увидит строку в БД.
+
+    Задача-вызыватель исключается: `attach_commentary_id` тоже живёт в
+    `_pending` и ждёт записи изнутри себя (иначе был бы self-deadlock).
     """
-    tasks = [task for task in list(_pending) if not task.done()]
+    current = asyncio.current_task()
+    tasks = [
+        task
+        for task in list(_pending)
+        if task is not current and not task.done()
+    ]
     if not tasks:
         return
     await asyncio.wait(tasks, timeout=timeout_s)
+
+
+def record_cache_hit(
+    *,
+    latency_ms: int,
+    provider: str = "cache",
+    model: str = "semantic-cache",
+) -> None:
+    """Записать попадание в semantic cache как «вызов» LLM (KI-046).
+
+    Кэш-ответ не идёт через LLM-клиент, поэтому без этой записи такие
+    запросы полностью выпадали бы из `llm_calls`. Метрики:
+    ``provider="cache"``, ``model="semantic-cache"``, 0 токенов/стоимости,
+    ``status="ok"``, ``cache_hit=True``. Контекст (operation, actor_id,
+    game_id, prompt_slug/version) берётся из текущего
+    :func:`llm_call_context`, trace_id — из HTTP-контекста (или fallback
+    recorder-а). `latency_ms` — время lookup кэша, замеряет вызывающий.
+    """
+    record_llm_call(
+        provider=provider,
+        model=model,
+        status="ok",
+        latency_ms=latency_ms,
+        tokens_in=0,
+        tokens_out=0,
+        cost_usd=0.0,
+        cache_hit=True,
+    )
+
+
+def attach_commentary_id(commentary_id: int) -> None:
+    """Привязать записи `llm_calls` текущего trace к созданному комментарию.
+
+    `commentary_id` появляется только после INSERT `commentaries`, то есть
+    позже вызова LLM. Хелпер запускает фоновую задачу: дождаться INSERT-ов
+    recorder-а этого trace (запись тоже fire-and-forget) и выполнить
+    ``UPDATE llm_calls SET commentary_id = ... WHERE trace_id = ... AND
+    commentary_id IS NULL``.
+
+    Почему «все NULL-строки трейса», а не одна: в одном запросе бывает
+    несколько вызовов (retry комментария, stream). Последний `span_id`,
+    сохранённый recorder-ом в contextvar, используется для точечного
+    UPDATE-а, второй проход добивает остальные NULL-строки. Вне
+    trace-контекста (скрипты/юнит-тесты) — no-op; ошибки только логируются.
+    """
+    try:
+        trace_id = _current_trace_uuid()
+        if trace_id is None:
+            return
+        task = asyncio.create_task(
+            _attach_commentary_id(trace_id, commentary_id),
+            name=f"llm-call-attach-{commentary_id}",
+        )
+        _pending.add(task)
+        task.add_done_callback(_pending.discard)
+    except Exception as exc:  # best-effort: LLMOps не ломает запрос
+        logger.warning("llm_call_attach_schedule_failed", error=str(exc))
+
+
+def _current_trace_uuid() -> UUID | None:
+    """Trace id текущего запроса либо последний trace, записанный recorder-ом."""
+    trace_id = current_trace_id()
+    if trace_id is not None:
+        try:
+            return UUID(trace_id)
+        except ValueError:
+            return None
+    return _last_trace_id.get()
+
+
+async def _attach_commentary_id(trace_id: UUID, commentary_id: int) -> None:
+    """Дождаться INSERT-ов и проставить commentary_id (best-effort)."""
+    try:
+        # Recorder пишет INSERT-ы в отдельных задачах: дождёмся их, иначе
+        # UPDATE увидит пустую таблицу и комментарий останется без метрик.
+        await wait_for_pending_llm_calls()
+        async with SessionLocal() as session:
+            # 1) точечно — последний вызов этого trace (contextvar recorder-а);
+            last_span_id = _last_span_id.get()
+            updated = 0
+            if last_span_id is not None:
+                result = await session.execute(
+                    update(LlmCall)
+                    .where(
+                        LlmCall.trace_id == trace_id,
+                        LlmCall.span_id == last_span_id,
+                        LlmCall.commentary_id.is_(None),
+                    )
+                    .values(commentary_id=commentary_id)
+                )
+                updated += int(getattr(result, "rowcount", 0) or 0)
+            # 2) добиваем остальные NULL-строки трейса (retry/stream — у них
+            # свои span_id, но комментарий у всего запроса один).
+            result = await session.execute(
+                update(LlmCall)
+                .where(
+                    LlmCall.trace_id == trace_id,
+                    LlmCall.commentary_id.is_(None),
+                )
+                .values(commentary_id=commentary_id)
+            )
+            updated += int(getattr(result, "rowcount", 0) or 0)
+            await session.commit()
+        logger.info(
+            "llm_call_commentary_attached",
+            trace_id=str(trace_id),
+            commentary_id=commentary_id,
+            span_id=last_span_id,
+            rows=updated,
+        )
+    except Exception as exc:
+        logger.warning(
+            "llm_call_attach_failed",
+            error=str(exc),
+            commentary_id=commentary_id,
+            trace_id=str(trace_id),
+        )
 
 
 async def _persist_call(record: _LlmCallRecord) -> None:

@@ -16,6 +16,7 @@ FastAPI-приложение, PostgreSQL, Stockfish для `/v1/analyze`. Про
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -24,13 +25,15 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
-from app.db.models import Game, Level, LlmCall, Prompt
+from app.db.models import Game, Level, LlmCall, Prompt, SemanticCache
 from app.llm import OpenAICompatibleClient
+from app.llm.calls import wait_for_pending_llm_calls
+from app.llm.warmup import warmup_local_llm
 from app.main import create_app
 
 SHORT_PGN = (
@@ -408,3 +411,388 @@ def test_chat_stream_writes_llm_call_row(
         assert row.tokens_out > 0
     finally:
         asyncio.run(_cleanup([trace_id], analysis_id, http_client))
+
+
+# --- KI-046: warmup, commentary_id, cache_hit ------------------------------
+
+
+def _cache_client() -> TestClient:
+    """TestClient с включённым semantic cache (эмбеддер — hash)."""
+    settings = get_settings().model_copy(
+        update={
+            "rate_limit_enabled": False,
+            "token_budget_enabled": False,
+            "llm_warmup_enabled": False,
+            "semantic_cache_enabled": True,
+            "embedding_provider": "hash",
+            "prompt_pubsub_enabled": False,
+            "otel_enabled": False,
+        }
+    )
+    return TestClient(create_app(settings))
+
+
+async def _wait_for_attached(
+    trace_id: UUID, commentary_id: int, *, timeout_s: float = 5.0
+) -> list[LlmCall]:
+    """Дождаться фонового `attach_commentary_id` (UPDATE идёт после INSERT-а)."""
+    engine = create_async_engine(
+        get_settings().database_url, poolclass=NullPool
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    deadline = time.monotonic() + timeout_s
+    try:
+        while True:
+            async with factory() as session:
+                rows = list(
+                    (
+                        await session.scalars(
+                            select(LlmCall)
+                            .where(LlmCall.trace_id == trace_id)
+                            .order_by(LlmCall.id)
+                        )
+                    ).all()
+                )
+            if rows and all(row.commentary_id == commentary_id for row in rows):
+                return rows
+            if time.monotonic() >= deadline:
+                return rows
+            await asyncio.sleep(0.05)
+    finally:
+        await engine.dispose()
+
+
+async def _warmup_rows() -> list[LlmCall]:
+    engine = create_async_engine(
+        get_settings().database_url, poolclass=NullPool
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            return list(
+                (
+                    await session.scalars(
+                        select(LlmCall)
+                        .where(
+                            LlmCall.operation == "warmup",
+                            LlmCall.provider == "fake",
+                            LlmCall.model == FAKE_MODEL,
+                        )
+                        .order_by(LlmCall.id)
+                    )
+                ).all()
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _delete_llm_call_ids(ids: list[int]) -> None:
+    if not ids:
+        return
+    engine = create_async_engine(
+        get_settings().database_url, poolclass=NullPool
+    )
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                delete(LlmCall).where(LlmCall.id.in_(ids))
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _max_cache_id() -> int:
+    engine = create_async_engine(
+        get_settings().database_url, poolclass=NullPool
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            value = await session.scalar(
+                select(func.coalesce(func.max(SemanticCache.id), 0))
+            )
+            return int(value or 0)
+    finally:
+        await engine.dispose()
+
+
+async def _delete_cache_after(cache_id: int) -> None:
+    """Убрать записи semantic cache, созданные тестом (id > отметки)."""
+    engine = create_async_engine(
+        get_settings().database_url, poolclass=NullPool
+    )
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                delete(SemanticCache).where(SemanticCache.id > cache_id)
+            )
+    finally:
+        await engine.dispose()
+
+
+def _commentary_id_from_sse(body: str) -> int:
+    match = re.search(r'"commentary_id":\s*(\d+)', body)
+    assert match is not None, f"в SSE нет commentary_id: {body[-500:]}"
+    return int(match.group(1))
+
+
+def test_warmup_writes_llm_call_row() -> None:
+    """KI-046: прогрев LLM пишется в llm_calls с operation=warmup."""
+    requests: list[httpx.Request] = []
+    llm, http_client = _mock_llm(_completion_handler(requests))
+    rows: list[LlmCall] = []
+
+    async def run_warmup() -> bool:
+        ok = await warmup_local_llm(client=llm)
+        await wait_for_pending_llm_calls()
+        return ok
+
+    try:
+        assert asyncio.run(run_warmup()) is True
+        assert len(requests) == 1
+        rows = asyncio.run(_warmup_rows())
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.operation == "warmup"
+        assert row.provider == "fake"
+        assert row.model == FAKE_MODEL
+        assert row.status == "ok"
+        assert row.tokens_in == FAKE_TOKENS_IN
+        assert row.tokens_out == FAKE_TOKENS_OUT
+        assert row.actor_id is None
+        assert row.game_id is None
+        assert row.commentary_id is None
+        assert row.cache_hit is False
+        assert row.level is None
+        assert row.prompt_slug is None
+        # Вне HTTP trace id сгенерирован recorder-ом (fallback, UUID v4).
+        assert row.trace_id.version == 4
+    finally:
+        asyncio.run(_delete_llm_call_ids([row.id for row in rows]))
+        asyncio.run(http_client.aclose())
+
+
+def test_commentary_sync_attaches_commentary_id(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KI-046: sync-комментарий → llm_calls.commentary_id == id комментария."""
+    requests: list[httpx.Request] = []
+    llm, http_client = _mock_llm(_completion_handler(requests))
+    monkeypatch.setattr(
+        "app.commentary.service.get_llm_client", lambda level, cfg: llm
+    )
+    analysis_id = _analyze(client)
+    trace_hex = uuid4().hex
+    trace_id = UUID(hex=trace_hex)
+    try:
+        response = client.post(
+            "/v1/commentary",
+            json={"analysis_id": analysis_id, "level": "club"},
+            headers={"traceparent": f"00-{trace_hex}-0123456789abcdef-01"},
+        )
+        assert response.status_code == 200, response.text
+        commentary_id = int(response.json()["commentary_id"])
+        rows = asyncio.run(_wait_for_attached(trace_id, commentary_id))
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.operation == "commentary"
+        assert row.commentary_id == commentary_id
+        assert row.game_id == analysis_id
+        assert row.actor_id is not None
+    finally:
+        asyncio.run(_cleanup([trace_id], analysis_id, http_client))
+
+
+def test_commentary_stream_attaches_commentary_id(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KI-046: stream-комментарий → commentary_id проставляется после commit."""
+    requests: list[httpx.Request] = []
+    llm, http_client = _mock_llm(_stream_handler(requests))
+    monkeypatch.setattr(
+        "app.commentary.streaming.get_llm_client", lambda level, cfg: llm
+    )
+    analysis_id = _analyze(client)
+    trace_hex = uuid4().hex
+    trace_id = UUID(hex=trace_hex)
+    try:
+        response = client.post(
+            "/v1/commentary/stream",
+            json={"analysis_id": analysis_id, "level": "club"},
+            headers={"traceparent": f"00-{trace_hex}-aaaaaaaaaaaaaaaa-01"},
+        )
+        assert response.status_code == 200, response.text
+        assert "done" in response.text
+        commentary_id = _commentary_id_from_sse(response.text)
+        rows = asyncio.run(_wait_for_attached(trace_id, commentary_id))
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.operation == "commentary"
+        assert row.commentary_id == commentary_id
+        assert row.game_id == analysis_id
+    finally:
+        asyncio.run(_cleanup([trace_id], analysis_id, http_client))
+
+
+def test_cache_hit_commentary_writes_llm_call_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KI-046: cache-hit комментария — строка llm_calls с cache_hit=True."""
+    requests: list[httpx.Request] = []
+    llm, http_client = _mock_llm(_completion_handler(requests))
+    monkeypatch.setattr(
+        "app.commentary.service.get_llm_client", lambda level, cfg: llm
+    )
+    cache_mark = asyncio.run(_max_cache_id())
+    with _cache_client() as client:
+        analysis_id = _analyze(client)
+        first_hex, second_hex = uuid4().hex, uuid4().hex
+        first_trace = UUID(hex=first_hex)
+        second_trace = UUID(hex=second_hex)
+        try:
+            first = client.post(
+                "/v1/commentary",
+                json={"analysis_id": analysis_id, "level": "club"},
+                headers={"traceparent": f"00-{first_hex}-0123456789abcdef-01"},
+            )
+            assert first.status_code == 200, first.text
+            assert len(requests) == 1
+
+            second = client.post(
+                "/v1/commentary",
+                json={"analysis_id": analysis_id, "level": "club"},
+                headers={"traceparent": f"00-{second_hex}-aaaaaaaaaaaaaaaa-01"},
+            )
+            assert second.status_code == 200, second.text
+            assert len(requests) == 1, "второй запрос должен прийти из кэша"
+            commentary_id = int(second.json()["commentary_id"])
+
+            rows = asyncio.run(_wait_for_attached(second_trace, commentary_id))
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.trace_id == second_trace
+            assert row.operation == "commentary"
+            assert row.game_id == analysis_id
+            assert row.commentary_id == commentary_id
+            assert row.cache_hit is True
+            assert row.provider == "cache"
+            assert row.model == "semantic-cache"
+            assert row.tokens_in == 0
+            assert row.tokens_out == 0
+            assert float(row.cost_usd) == 0.0
+            assert row.status == "ok"
+            assert row.prompt_slug == "club"
+            assert row.prompt_version == asyncio.run(_prompt_version("club"))
+            assert row.latency_ms >= 0
+        finally:
+            asyncio.run(
+                _cleanup([first_trace, second_trace], analysis_id, http_client)
+            )
+            asyncio.run(_delete_cache_after(cache_mark))
+
+
+def test_cache_hit_chat_writes_llm_call_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KI-046: cache-hit чата — строка llm_calls (operation=chat)."""
+    requests: list[httpx.Request] = []
+    llm, http_client = _mock_llm(_completion_handler(requests))
+    monkeypatch.setattr(
+        "app.chat.service.get_llm_client", lambda level, cfg: llm
+    )
+    cache_mark = asyncio.run(_max_cache_id())
+    with _cache_client() as client:
+        analysis_id = _analyze(client)
+        first_hex, second_hex = uuid4().hex, uuid4().hex
+        first_trace = UUID(hex=first_hex)
+        second_trace = UUID(hex=second_hex)
+        body = dict(CHAT_BODY, analysis_id=analysis_id)
+        try:
+            _chat(
+                client,
+                analysis_id,
+                {"traceparent": f"00-{first_hex}-0123456789abcdef-01"},
+            )
+            assert len(requests) == 1
+
+            second = client.post(
+                "/v1/chat",
+                json=body,
+                headers={"traceparent": f"00-{second_hex}-aaaaaaaaaaaaaaaa-01"},
+            )
+            assert second.status_code == 200, second.text
+            assert len(requests) == 1, "второй вопрос должен прийти из кэша"
+
+            rows = asyncio.run(_wait_for_calls(second_trace))
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.trace_id == second_trace
+            assert row.operation == "chat"
+            assert row.game_id == analysis_id
+            assert row.cache_hit is True
+            assert row.provider == "cache"
+            assert row.model == "semantic-cache"
+            assert row.tokens_in == 0
+            assert row.tokens_out == 0
+            assert row.status == "ok"
+            assert row.prompt_slug == "club"
+            assert row.prompt_version == asyncio.run(_prompt_version("club"))
+        finally:
+            asyncio.run(
+                _cleanup([first_trace, second_trace], analysis_id, http_client)
+            )
+            asyncio.run(_delete_cache_after(cache_mark))
+
+
+def test_stream_cache_hit_writes_cache_row_and_attaches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KI-046: cache-hit в SSE-комментарии — cache_hit=True и commentary_id."""
+    requests: list[httpx.Request] = []
+    llm, http_client = _mock_llm(_completion_handler(requests))
+    monkeypatch.setattr(
+        "app.commentary.service.get_llm_client", lambda level, cfg: llm
+    )
+    cache_mark = asyncio.run(_max_cache_id())
+    with _cache_client() as client:
+        analysis_id = _analyze(client)
+        first_hex, second_hex = uuid4().hex, uuid4().hex
+        first_trace = UUID(hex=first_hex)
+        second_trace = UUID(hex=second_hex)
+        try:
+            # Seed: sync-комментарий с реальным (мок) LLM кладёт ответ в кэш.
+            seed = client.post(
+                "/v1/commentary",
+                json={"analysis_id": analysis_id, "level": "club"},
+                headers={"traceparent": f"00-{first_hex}-0123456789abcdef-01"},
+            )
+            assert seed.status_code == 200, seed.text
+            assert len(requests) == 1
+
+            streamed = client.post(
+                "/v1/commentary/stream",
+                json={"analysis_id": analysis_id, "level": "club"},
+                headers={"traceparent": f"00-{second_hex}-aaaaaaaaaaaaaaaa-01"},
+            )
+            assert streamed.status_code == 200, streamed.text
+            assert "done" in streamed.text
+            commentary_id = _commentary_id_from_sse(streamed.text)
+
+            rows = asyncio.run(_wait_for_attached(second_trace, commentary_id))
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.operation == "commentary"
+            assert row.commentary_id == commentary_id
+            assert row.cache_hit is True
+            assert row.provider == "cache"
+            assert row.model == "semantic-cache"
+            assert row.tokens_in == 0
+            assert row.tokens_out == 0
+        finally:
+            asyncio.run(
+                _cleanup([first_trace, second_trace], analysis_id, http_client)
+            )
+            asyncio.run(_delete_cache_after(cache_mark))
+
