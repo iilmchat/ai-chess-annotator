@@ -41,7 +41,10 @@ from app.auth.cookies import (
 )
 from app.auth.denylist import (
     denylist_key,
+    global_revocation_key,
     is_refresh_token_revoked,
+    is_token_globally_revoked,
+    revoke_all_refresh_tokens,
     revoke_refresh_token,
 )
 from app.auth.passwords import (
@@ -59,6 +62,7 @@ from app.auth.tokens import (
 )
 from app.config import Settings
 from app.db.models import AdminRole, Level, User
+from app.email import MockEmailSender
 from app.errors import AuthError, UserExistsError
 
 PASSWORD = "correct horse battery staple"
@@ -421,6 +425,53 @@ def test_denylist_check_is_fail_open_when_redis_unavailable() -> None:
     assert asyncio.run(is_refresh_token_revoked(client, "abc123")) is False
 
 
+def test_global_revocation_key_prefix() -> None:
+    assert global_revocation_key(42) == "revoked_before:42"
+
+
+def test_revoke_all_refresh_tokens_sets_ms_marker() -> None:
+    client = AsyncMock()
+    now = datetime(2026, 10, 29, 12, 0, 0, 123000, tzinfo=UTC)
+
+    revoked = asyncio.run(
+        revoke_all_refresh_tokens(client, 42, ttl_s=3600, now=now)
+    )
+
+    assert revoked is True
+    key, ttl, value = client.setex.await_args.args
+    assert key == "revoked_before:42"
+    assert ttl == 3600
+    assert value == str(int(now.timestamp() * 1000))
+
+
+def test_global_revocation_compares_issue_time() -> None:
+    client = AsyncMock()
+    marker = datetime(2026, 10, 29, 12, 0, 0, tzinfo=UTC)
+    client.get.return_value = str(int(marker.timestamp() * 1000))
+
+    before = marker - timedelta(milliseconds=1)
+    after = marker + timedelta(milliseconds=1)
+    assert asyncio.run(
+        is_token_globally_revoked(client, 42, before)
+    ) is True
+    assert asyncio.run(
+        is_token_globally_revoked(client, 42, after)
+    ) is False
+    assert asyncio.run(
+        is_token_globally_revoked(client, 42, None)
+    ) is False
+
+
+def test_global_revocation_is_fail_open() -> None:
+    client = AsyncMock()
+    client.get.side_effect = RuntimeError("redis down")
+    assert asyncio.run(
+        is_token_globally_revoked(
+            client, 42, datetime.now(UTC) - timedelta(seconds=1)
+        )
+    ) is False
+
+
 # --- Токены ---------------------------------------------------------------
 
 
@@ -600,7 +651,9 @@ def test_register_maps_unique_race_to_email_taken() -> None:
     request = RegisterRequest(email=GOOD_EMAIL, password=PASSWORD)
 
     with pytest.raises(UserExistsError) as excinfo:
-        asyncio.run(register(request, session))  # type: ignore[arg-type]
+        asyncio.run(
+            register(request, session, _settings(), MockEmailSender())
+        )  # type: ignore[arg-type]
 
     assert excinfo.value.code == "email_taken"
     assert session.rolled_back is True

@@ -119,6 +119,21 @@ def _login(client: TestClient, email: str) -> tuple[str, int]:
     return body["access_token"], int(body["user"]["id"])
 
 
+def _verify_email(client: TestClient, email: str) -> None:
+    """KI-041: пройти по ссылке подтверждения из mock-письма."""
+    sender = client.app.state.email_sender
+    messages = [
+        message
+        for message in sender.outbox
+        if message.to == email and message.kind == "verify_email"
+    ]
+    assert messages, f"нет письма подтверждения для {email}"
+    response = client.get(
+        "/auth/verify-email", params={"token": messages[-1].token}
+    )
+    assert response.status_code == 200, response.text
+
+
 @dataclass(frozen=True, slots=True)
 class IsolationEnv:
     """Общие для модуля пользователи, токены и seeded-записи."""
@@ -148,6 +163,7 @@ def env() -> Iterator[IsolationEnv]:
     with TestClient(create_app(_settings())) as client:
         for email in emails:
             _register(client, email)
+            _verify_email(client, email)
         # Роль нельзя выбрать при регистрации — повышаем напрямую в БД.
         asyncio.run(_promote_admin(email_admin))
 

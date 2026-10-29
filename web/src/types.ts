@@ -10,6 +10,8 @@ export interface AuthUser {
   level: Level;
   role: UserRole;
   is_active: boolean;
+  //: KI-041: подтверждён ли email (генерация недоступна без него).
+  is_verified: boolean;
   created_at: string;
 }
 

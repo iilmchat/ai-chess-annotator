@@ -141,6 +141,15 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=sql_text("true")
     )
+    #: KI-041: email подтверждён. Регистрация создаёт `False`; legacy-
+    #: пользователи/админы из миграции и прямых ORM-вставок — `True`
+    #: (server_default), чтобы старые учётки не потеряли доступ.
+    is_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=sql_text("true"),
+    )
     #: bcrypt-хеш; NULL — вход по паролю не настроен (SSO/служебный аккаунт).
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(

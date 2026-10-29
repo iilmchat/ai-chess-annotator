@@ -18,6 +18,7 @@ const REFRESHED: RefreshResponse = {
     level: "club",
     role: "user",
     is_active: true,
+    is_verified: true,
     created_at: "2026-10-29T10:00:00Z",
   },
 };
@@ -28,6 +29,7 @@ const USER: AuthUser = {
   level: "club",
   role: "user",
   is_active: true,
+  is_verified: true,
   created_at: "2026-10-29T10:00:00Z",
 };
 

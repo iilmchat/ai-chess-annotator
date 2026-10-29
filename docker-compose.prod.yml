@@ -21,6 +21,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chess_dev_password}
       REDIS_URL: redis://redis:6379/0
       STOCKFISH_PATH: /usr/bin/stockfish
+      # KI-053: общий каталог с воркером (файлы выгрузок).
+      EXPORT_DIR: /app/data/exports
       # LM Studio на хосте (если используется локальная LLM). Не берём
       # VLLM_BASE_URL из dev-.env: там 127.0.0.1 указывает на контейнер.
       VLLM_BASE_URL: ${PROD_VLLM_BASE_URL:-http://host.docker.internal:8034/v1}
@@ -28,6 +30,8 @@ services:
       WORKERS: ${WORKERS:-1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - prod_export_data:/app/data
     ports:
       # Наружу смотрит только reverse-proxy; API — на loopback.
       - "127.0.0.1:${API_PORT:-8000}:8000"
@@ -43,6 +47,35 @@ services:
       sh -c "alembic upgrade head &&
              exec uvicorn app.main:app --host 0.0.0.0 --port 8000
              --workers $${WORKERS:-1}"
+
+  # KI-053: arq-воркер фоновых выгрузок. Тот же образ и env, что у app;
+  # общий volume для готовых JSONL (EXPORT_DIR).
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      APP_ENV: prod
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-chessannotator}
+      POSTGRES_USER: ${POSTGRES_USER:-chess}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chess_dev_password}
+      REDIS_URL: redis://redis:6379/0
+      EXPORT_DIR: /app/data/exports
+    volumes:
+      - prod_export_data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    command: ["arq", "worker.WorkerSettings"]
 
   postgres:
     image: pgvector/pgvector:pg17
@@ -80,3 +113,4 @@ services:
 volumes:
   prod_pg_data:
   prod_redis_data:
+  prod_export_data:

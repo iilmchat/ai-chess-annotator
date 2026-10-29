@@ -71,12 +71,28 @@ class Settings(BaseSettings):
     #: DejaVuSans в системных каталогах Windows/Linux/macOS.
     pdf_font_path: str | None = None
 
-    # Фоновая выгрузка датасета (KI-050)
+    # Фоновая выгрузка датасета (KI-050, KI-053)
     #: Каталог готовых JSONL-файлов; вне web-root (`web/dist`), поэтому
     #: файлы не раздаются статикой — только через download-эндпоинт.
     export_dir: str = "data/exports"
     #: Сколько последних джоб показывать в админке.
     export_jobs_page_size: int = 20
+    #: Имя очереди arq (KI-053); тесты используют уникальное имя.
+    arq_queue_name: str = "arq:queue"
+    #: `running`-джобы старше N минут при старте API/воркера → `failed`.
+    export_job_stale_minutes: int = 15
+
+    # Email / верификация (KI-041)
+    #: Базовый URL API для ссылок в письмах (без завершающего `/`).
+    app_base_url: str = "http://localhost:8000"
+    #: `mock` — лог в structlog; SMTP-реализация появится отдельным шагом.
+    email_sender: str = "mock"
+    email_from: str = "noreply@chessannotator.local"
+    #: Время жизни ссылки подтверждения email.
+    email_verification_ttl_hours: int = 24
+    #: Время жизни ссылки сброса пароля.
+    password_reset_ttl_min: int = 30
+
 
     # Engine
     stockfish_path: str = "/usr/bin/stockfish"

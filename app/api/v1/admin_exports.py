@@ -41,7 +41,7 @@ from datetime import date, datetime
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, Path, Query, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,8 +55,8 @@ from app.dataset.jobs import (
     create_export_job,
     get_export_job,
     list_export_jobs,
+    mark_export_job_failed,
     resolve_export_path,
-    run_export_job,
 )
 from app.dataset.records import ExportFilters, ExportLevel, iter_export_records
 from app.db.models import AdminRole, ExportJob, ExportJobStatus, User
@@ -65,6 +65,7 @@ from app.errors import (
     AuthError,
     ExportJobFileMissingError,
     ExportJobNotReadyError,
+    ExportQueueUnavailableError,
     ForbiddenError,
     NotFoundError,
 )
@@ -303,12 +304,17 @@ async def export_edits_jsonl(
 )
 async def create_export_job_endpoint(
     payload: ExportJobCreateRequest,
-    background_tasks: BackgroundTasks,
+    request: Request,
     _actor: Annotated[str, Depends(_require_export_writer)],
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ExportJobResponse:
-    """Создать фоновую выгрузку; файл появится в `EXPORT_DIR` (202)."""
+    """Создать фоновую выгрузку и поставить её в очередь arq (202).
+
+    Очередь — Redis; API не выполняет выгрузку сам (KI-053). Если Redis
+    недоступен, джоба помечается ``failed`` и клиент получает 503
+    ``export_queue_unavailable`` — статус не остаётся «вечно queued».
+    """
     filters = ExportFilters(
         date_from=payload.date_from,
         date_to=payload.date_to,
@@ -317,11 +323,32 @@ async def create_export_job_endpoint(
         schema_version=payload.schema_version,
     )
     job = await create_export_job(session, actor=_actor, filters=filters)
-    background_tasks.add_task(run_export_job, job.id, settings)
+    pool = getattr(request.app.state, "arq_pool", None)
+    if pool is None:
+        await mark_export_job_failed(job.id, "очередь arq недоступна")
+        raise ExportQueueUnavailableError(
+            "Очередь фоновых задач недоступна (Redis/arq)"
+        )
+    try:
+        # _job_id делает постановку идемпотентной при повторе HTTP-запроса.
+        queued = await pool.enqueue_job(
+            "run_export_job", job.id, _job_id=f"export-job:{job.id}"
+        )
+    except Exception as exc:
+        await mark_export_job_failed(
+            job.id, f"не удалось поставить в очередь: {exc}"
+        )
+        logger.warning(
+            "dataset_export_enqueue_failed", job_id=job.id, error=str(exc)
+        )
+        raise ExportQueueUnavailableError(
+            "Не удалось поставить задачу в очередь"
+        ) from exc
     logger.info(
         "dataset_export_job_created",
         job_id=job.id,
         actor=_actor,
+        queued=queued is not None,
         **filters.to_dict(),
     )
     return _job_response(job, settings)

@@ -26,7 +26,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.audit import actor_from_request, append_audit, hash_text
 from app.auth.access import get_accessible_commentary, get_accessible_game
-from app.auth.deps import get_current_user
+from app.auth.deps import get_current_user, get_current_verified_user
 from app.commentary import RagContextBuilder, edit_commentary, generate_commentary
 from app.commentary.streaming import stream_commentary
 from app.config import Settings, get_settings
@@ -117,7 +117,7 @@ async def create_commentary(
     payload: CommentaryRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_verified_user)],
 ) -> CommentaryResponse:
     """Сгенерировать комментарий и сохранить его в БД.
 
@@ -179,7 +179,7 @@ async def create_commentary_stream(
     payload: CommentaryRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_verified_user)],
 ) -> EventSourceResponse:
     """Стримить комментарий через SSE (T-032).
 

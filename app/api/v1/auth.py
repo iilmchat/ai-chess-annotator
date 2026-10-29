@@ -4,21 +4,31 @@
 `app/auth/`. Роутер монтируется в `app/main.py` с префиксом `/auth` (вне
 `/v1`, как в постановке).
 
-Схема работы (T-028 + KI-036/KI-037):
+Схема работы (T-028 + KI-036/KI-037/KI-041):
 
-* `POST /auth/register` — создаёт пользователя; пароль хранится Argon2id-хешем
-  (`$argon2id$`);
+* `POST /auth/register` — создаёт пользователя (`is_verified=false`) и
+  отправляет письмо со ссылкой подтверждения (MockEmailSender;
+  `$argon2id$`-хеш пароля);
+* `GET /auth/verify-email` — валидирует `email_verify` JWT и ставит
+  `is_verified=true`;
 * `POST /auth/login` — проверяет email/пароль, обновляет `last_login_at`,
   при необходимости **перехеширует** legacy bcrypt → Argon2id в той же
   транзакции; для неизвестного email всё равно выполняет Argon2 verify по
   dummy-хешу (KI-043, timing attack), возвращает access-токен в JSON, а
   refresh — в HttpOnly-cookie;
 * `POST /auth/refresh` — принимает refresh из cookie (fallback — тело JSON для
-  curl/не-браузерных клиентов), проверяет Redis-denylist, **ротирует** cookie
-  и выдаёт новый access; новый refresh получает новый `jti`;
+  curl/не-браузерных клиентов), проверяет Redis-denylist и глобальный
+  отзыв (`revoked_before:<user_id>`), **ротирует** cookie и выдаёт новый
+  access; новый refresh получает новый `jti`;
 * `POST /auth/logout` — серверный отзыв refresh (jti → Redis denylist) и
   очистка cookie; 204 в любом случае (битый токен/недоступный Redis — не
   ошибка клиента, см. `app/auth/denylist.py`);
+* `POST /auth/logout-all` — `revoked_before:<user_id>` + очистка cookie:
+  все refresh, выпущенные раньше, перестают работать (KI-041);
+* `POST /auth/forgot-password` — письмо со ссылкой сброса (202 всегда,
+  без раскрытия существования email);
+* `POST /auth/reset-password` — меняет хеш, отзывает старые refresh и
+  делает токен одноразовым;
 * `GET /auth/me` — профиль по access-токену.
 
 Хеширование/проверка Argon2id — CPU-дорогая операция, поэтому в event loop
@@ -33,14 +43,19 @@ from typing import Annotated, Any, Literal, cast
 
 import redis.asyncio as aioredis
 import structlog
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.cookies import clear_refresh_cookie, set_refresh_cookie
-from app.auth.denylist import is_refresh_token_revoked, revoke_refresh_token
+from app.auth.denylist import (
+    is_refresh_token_revoked,
+    is_token_globally_revoked,
+    revoke_all_refresh_tokens,
+    revoke_refresh_token,
+)
 from app.auth.deps import get_current_user
 from app.auth.passwords import (
     DUMMY_PASSWORD_HASH,
@@ -50,10 +65,22 @@ from app.auth.passwords import (
     verify_and_update,
     verify_password,
 )
-from app.auth.tokens import create_access_token, create_refresh_token, decode_token
+from app.auth.tokens import (
+    create_access_token,
+    create_email_verification_token,
+    create_password_reset_token,
+    create_refresh_token,
+    decode_token,
+)
 from app.config import Settings, get_settings
 from app.db.models import AdminRole, Level, User
 from app.db.session import get_session
+from app.email import (
+    EmailSender,
+    get_email_sender,
+    password_reset_message,
+    verification_message,
+)
 from app.errors import AuthError, ForbiddenError, UserExistsError
 
 router = APIRouter(tags=["auth"])
@@ -72,6 +99,8 @@ class UserProfile(BaseModel):
     level: Level
     role: AdminRole
     is_active: bool
+    #: KI-041: подтверждён ли email (генерация доступна только true).
+    is_verified: bool
     created_at: datetime
 
 
@@ -125,6 +154,41 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=1)
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Тело `POST /auth/forgot-password`."""
+
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _normalize_email(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+
+class ResetPasswordRequest(BaseModel):
+    """Тело `POST /auth/reset-password`."""
+
+    token: str = Field(min_length=1)
+    new_password: str = Field(
+        min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH
+    )
+
+
+class MessageResponse(BaseModel):
+    """Нейтральный ответ (не раскрывает существование email)."""
+
+    detail: str
+
+
+class EmailVerificationResponse(BaseModel):
+    """Результат `GET /auth/verify-email`."""
+
+    email: str
+    is_verified: bool
+
+
 def _to_profile(user: User) -> UserProfile:
     """Преобразовать ORM-пользователя в публичный профиль."""
     return UserProfile(
@@ -133,6 +197,7 @@ def _to_profile(user: User) -> UserProfile:
         level=user.level,
         role=user.role,
         is_active=user.is_active,
+        is_verified=bool(user.is_verified),
         created_at=user.created_at,
     )
 
@@ -191,8 +256,15 @@ def _submitted_refresh_token(
 async def register(
     payload: RegisterRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> UserProfile:
-    """Создать пользователя и вернуть его профиль (201).
+    """Создать пользователя, отправить письмо подтверждения (201).
+
+    Пользователь создаётся с ``is_verified=False`` (KI-041): `/v1/analyze`
+    и `/v1/commentary` вернут 403 `email_not_verified` до перехода по
+    ссылке. Ссылка уходит через `MockEmailSender` (structlog) и содержит
+    короткоживущий JWT типа ``email_verify``.
 
     Raises:
         UserExistsError: email уже занят (→ HTTP 409, код `email_taken`).
@@ -209,6 +281,7 @@ async def register(
         level=Level.club,
         role=AdminRole.user,
         is_active=True,
+        is_verified=False,
         password_hash=password_hash,
     )
     session.add(user)
@@ -222,6 +295,17 @@ async def register(
             "Пользователь с таким email уже зарегистрирован"
         ) from None
     await session.refresh(user)
+    token = create_email_verification_token(user, settings)
+    try:
+        await sender.send(
+            verification_message(settings, to=user.email, token=token)
+        )
+    except Exception as exc:  # письмо не должно отменять регистрацию
+        logger.warning(
+            "email_verification_send_failed",
+            user_id=user.id,
+            error=str(exc),
+        )
     return _to_profile(user)
 
 
@@ -311,6 +395,12 @@ async def refresh(
         # Отозванный (logout) refresh не должен давать новую пару.
         if await is_refresh_token_revoked(redis_client, claims.jti):
             raise AuthError("Refresh-токен отозван")
+        # KI-041: logout-all/сброс пароля инвалидируют все refresh,
+        # выпущенные до момента отзыва.
+        if await is_token_globally_revoked(
+            redis_client, claims.user_id, claims.issued_at
+        ):
+            raise AuthError("Сессия завершена на всех устройствах")
     user = await session.get(User, claims.user_id)
     if user is None or not user.is_active:
         raise AuthError("Пользователь не найден или отключён")
@@ -352,6 +442,176 @@ async def logout(
         redis_client = _redis_client(request)
         if claims is not None and redis_client is not None:
             await revoke_refresh_token(redis_client, claims)
+    clear_refresh_cookie(response, settings)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+def _global_revocation_ttl_s(settings: Settings) -> int:
+    """TTL маркера global revocation — не меньше жизни refresh-токена."""
+    return settings.refresh_token_ttl_days * 24 * 60 * 60 + 60
+
+
+@router.get(
+    "/verify-email",
+    response_model=EmailVerificationResponse,
+    summary="Подтвердить email по токену из письма",
+)
+async def verify_email(
+    token: Annotated[str, Query(min_length=1)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> EmailVerificationResponse:
+    """Валидировать `email_verify` JWT и выставить `is_verified=True`.
+
+    Повторный переход по ссылке идемпотентен (200, уже подтверждён).
+
+    Raises:
+        AuthError: токен битый/просрочен/не того типа или пользователя нет/
+            он отключён (→ HTTP 401).
+    """
+    claims = decode_token(token, settings, expected_type="email_verify")
+    user = await session.get(User, claims.user_id)
+    if user is None or not user.is_active:
+        raise AuthError("Пользователь не найден или отключён")
+    if not user.is_verified:
+        user.is_verified = True
+        await session.commit()
+        logger.info("email_verified", user_id=user.id)
+    return EmailVerificationResponse(
+        email=user.email, is_verified=bool(user.is_verified)
+    )
+
+
+@router.post(
+    "/forgot-password",
+    response_model=MessageResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Запросить письмо со ссылкой сброса пароля",
+)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    sender: Annotated[EmailSender, Depends(get_email_sender)],
+) -> MessageResponse:
+    """Отправить ссылку сброса, не раскрывая существование email (202).
+
+    Ответ одинаков для зарегистрированного и неизвестного адреса — иначе
+    endpoint стал бы оракулом перечисления пользователей. Для неизвестного
+    email письмо не отправляется, но ответ тот же.
+    """
+    user = await session.scalar(
+        select(User).where(User.email == payload.email)
+    )
+    if user is not None:
+        token = create_password_reset_token(user, settings)
+        try:
+            await sender.send(
+                password_reset_message(settings, to=user.email, token=token)
+            )
+        except Exception as exc:  # не раскрываем сбой отправителя клиенту
+            logger.warning(
+                "password_reset_send_failed",
+                user_id=user.id,
+                error=str(exc),
+            )
+        logger.info("password_reset_requested", user_id=user.id)
+    else:
+        logger.info("password_reset_unknown_email")
+    return MessageResponse(
+        detail=(
+            "Если email зарегистрирован, письмо со ссылкой сброса "
+            "отправлено"
+        )
+    )
+
+
+@router.post(
+    "/reset-password",
+    response_model=MessageResponse,
+    summary="Сбросить пароль по токену из письма",
+)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> MessageResponse:
+    """Сменить пароль и глобально отозвать refresh-токены.
+
+    Токен сброса одноразовый: после успешной смены в Redis пишется
+    `revoked_before:<user_id>`, и повторное использование того же токена
+    отклоняется (его `issued_at` уже не позже маркера). Cookie текущей
+    сессии очищается — нужен повторный вход с новым паролем.
+
+    Raises:
+        AuthError: токен битый/просрочен/не того типа/уже использован или
+            пользователь отключён (→ HTTP 401).
+    """
+    claims = decode_token(
+        payload.token, settings, expected_type="password_reset"
+    )
+    user = await session.get(User, claims.user_id)
+    if user is None or not user.is_active:
+        raise AuthError("Пользователь не найден или отключён")
+    redis_client = _redis_client(request)
+    if (
+        redis_client is not None
+        and settings.refresh_denylist_enabled
+        and await is_token_globally_revoked(
+            redis_client, user.id, claims.issued_at
+        )
+    ):
+        raise AuthError("Ссылка сброса уже использована")
+    user.password_hash = await asyncio.to_thread(
+        hash_password, payload.new_password
+    )
+    await session.commit()
+    if redis_client is not None and settings.refresh_denylist_enabled:
+        await revoke_all_refresh_tokens(
+            redis_client,
+            user.id,
+            ttl_s=_global_revocation_ttl_s(settings),
+        )
+    clear_refresh_cookie(response, settings)
+    logger.info("password_reset_completed", user_id=user.id)
+    return MessageResponse(
+        detail="Пароль обновлён; войдите заново на всех устройствах"
+    )
+
+
+@router.post(
+    "/logout-all",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Выйти со всех устройств (отозвать все refresh-токены)",
+)
+async def logout_all(
+    request: Request,
+    response: Response,
+    user: Annotated[User, Depends(get_current_user)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> Response:
+    """Глобально отозвать refresh-токены пользователя (KI-041).
+
+    В Redis пишется `revoked_before:<user_id>` (Unix-ms); `/auth/refresh`
+    отклоняет токены с `issued_at` не позже этого момента. Текущая
+    refresh-cookie очищается. Недоступный Redis — fail-open (204 +
+    warning), как у обычного logout.
+
+    Raises:
+        AuthError: нет/битый access-токен (→ HTTP 401).
+    """
+    redis_client = _redis_client(request)
+    revoked = False
+    if redis_client is not None and settings.refresh_denylist_enabled:
+        revoked = await revoke_all_refresh_tokens(
+            redis_client,
+            user.id,
+            ttl_s=_global_revocation_ttl_s(settings),
+        )
+    logger.info("logout_all", user_id=user.id, revoked=revoked)
     clear_refresh_cookie(response, settings)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response

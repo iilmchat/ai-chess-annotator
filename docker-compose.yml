@@ -31,6 +31,34 @@ services:
       timeout: 3s
       retries: 20
 
+  # KI-053: arq-воркер фоновых выгрузок. Backend на хосте кладёт задачи
+  # в тот же Redis (host `127.0.0.1:${REDIS_PORT}`), воркер забирает их
+  # из контейнера. Файлы — общий bind-mount `./data`.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    command: ["arq", "worker.WorkerSettings"]
+    env_file: .env
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-chessannotator}
+      POSTGRES_USER: ${POSTGRES_USER:-chess}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chess_dev_password}
+      REDIS_URL: redis://redis:6379/0
+      EXPORT_DIR: /app/data/exports
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   # Опционально: изолированный Stockfish как UCI-over-TCP.
   # Backend по умолчанию использует локальный бинарник.
   stockfish:

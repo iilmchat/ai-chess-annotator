@@ -151,6 +151,21 @@ def _login(client: TestClient, email: str) -> str:
     return str(response.json()["access_token"])
 
 
+def _verify_email(client: TestClient, email: str) -> None:
+    """KI-041: подтвердить email (иначе /v1/analyze вернёт 403)."""
+    sender = client.app.state.email_sender
+    messages = [
+        message
+        for message in sender.outbox
+        if message.to == email and message.kind == "verify_email"
+    ]
+    assert messages, f"нет письма подтверждения для {email}"
+    response = client.get(
+        "/auth/verify-email", params={"token": messages[-1].token}
+    )
+    assert response.status_code == 200, response.text
+
+
 @dataclass(frozen=True, slots=True)
 class BudgetEnv:
     client: TestClient
@@ -169,6 +184,8 @@ def env() -> Iterator[BudgetEnv]:
     with TestClient(create_app(_settings())) as client:
         user_a_id = _register(client, email_a)
         user_b_id = _register(client, email_b)
+        _verify_email(client, email_a)
+        _verify_email(client, email_b)
         token_a = _login(client, email_a)
         token_b = _login(client, email_b)
         try:

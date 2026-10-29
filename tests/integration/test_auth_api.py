@@ -49,7 +49,15 @@ COOKIE_NAME = "refresh_token"
 #: Значение по умолчанию `refresh_token_ttl_days` в секундах (Max-Age cookie).
 REFRESH_MAX_AGE_S = 7 * 24 * 60 * 60
 
-PROFILE_KEYS = {"id", "email", "level", "role", "is_active", "created_at"}
+PROFILE_KEYS = {
+    "id",
+    "email",
+    "level",
+    "role",
+    "is_active",
+    "is_verified",
+    "created_at",
+}
 ACCESS_RESPONSE_KEYS = {"access_token", "token_type", "expires_in", "user"}
 
 #: Готовый legacy bcrypt-хеш `PASSWORD` (cost 12) из БД итерации 24.
@@ -294,6 +302,8 @@ def test_register_returns_profile_and_lowercases_email() -> None:
         assert body["level"] == "club"
         assert body["role"] == "user"
         assert body["is_active"] is True
+        # KI-041: регистрация создаёт неподтверждённого пользователя.
+        assert body["is_verified"] is False
         assert datetime.fromisoformat(body["created_at"]) is not None
 
         password_hash, _, _ = asyncio.run(_read_user(email.lower()))

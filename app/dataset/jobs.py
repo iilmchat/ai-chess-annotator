@@ -1,21 +1,22 @@
-"""Фоновая выгрузка датасета LoRA (KI-050, итерация 31).
+"""Фоновая выгрузка датасета LoRA (KI-050, KI-053).
 
 Зачем: на больших объёмах `GET /v1/admin/exports/edits.jsonl` держит
 HTTP-соединение и браузер в ожидании стрима. Джоба делает то же самое в
 фоне:
 
 1. `create_export_job` пишет строку `export_jobs` со статусом ``queued``;
-2. `run_export_job` (BackgroundTasks) переводит её в ``running``, пишет
-   JSONL во временный файл в `EXPORT_DIR` (вне web-root), считает sha256 и
-   размер, затем атомарно переименовывает и ставит ``done``;
+2. API ставит задачу в очередь arq (KI-053), воркер вызывает
+   `run_export_job`: ``running`` → JSONL во временный файл в `EXPORT_DIR`
+   → sha256/размер → атомарное переименование → ``done``;
 3. при ошибке — ``failed`` + текст ошибки (обрезанный), файл не остаётся;
-4. в `audit_logs` пишется `dataset.export` с `job_id`, фильтрами и числом
+4. `recover_stale_export_jobs` при старте API/воркера переводит зависшие
+   ``running`` (старше `EXPORT_JOB_STALE_MINUTES`) в ``failed``;
+5. в `audit_logs` пишется `dataset.export` с `job_id`, фильтрами и числом
    строк — как у streaming-экспорта (KI-050).
 
 Запись в файл идёт батчами через `asyncio.to_thread`, чтобы не блокировать
-event loop (RULES §3.1). Джоба не переживает рестарт процесса: упавший
-воркер оставит строку в ``running`` — это ограничение зафиксировано в
-отчёте итерации (очередь arq/повторный запуск — следующий шаг).
+event loop (RULES §3.1). Очередь — arq/Redis; повторный запуск
+идемпотентен: `run_export_job` выходит, если статус уже не ``queued``.
 """
 
 from __future__ import annotations
@@ -24,12 +25,12 @@ import asyncio
 import hashlib
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import append_audit
@@ -50,6 +51,8 @@ __all__ = [
     "export_file_path",
     "get_export_job",
     "list_export_jobs",
+    "mark_export_job_failed",
+    "recover_stale_export_jobs",
     "resolve_export_path",
     "run_export_job",
 ]
@@ -143,14 +146,74 @@ async def list_export_jobs(
     return list(rows)
 
 
+async def mark_export_job_failed(job_id: int, error: str) -> None:
+    """Пометить джобу ``failed`` (например, очередь недоступна).
+
+    Не перезаписывает уже завершённую джобу: обновляются только
+    ``queued``/``running``.
+    """
+    await _update_job_failed(job_id, error)
+
+
+async def recover_stale_export_jobs(
+    settings: Settings | None = None,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Перевести зависшие ``running``-джобы в ``failed`` (KI-053).
+
+    Воркер мог умереть между `running` и `done`; без recovery строка
+    навсегда осталась бы «выполняется». Порог — `EXPORT_JOB_STALE_MINUTES`
+    (15 по умолчанию), точка отсчёта — `started_at` (или `created_at`,
+    если старт не записался). Возвращает число обновлённых строк.
+    """
+    cfg = settings or get_settings()
+    current = now or datetime.now(UTC)
+    cutoff = current - timedelta(minutes=cfg.export_job_stale_minutes)
+    try:
+        async with SessionLocal() as session:
+            result = await session.execute(
+                update(ExportJob)
+                .where(
+                    ExportJob.status == ExportJobStatus.running.value,
+                    or_(
+                        ExportJob.started_at < cutoff,
+                        and_(
+                            ExportJob.started_at.is_(None),
+                            ExportJob.created_at < cutoff,
+                        ),
+                    ),
+                )
+                .values(
+                    status=ExportJobStatus.failed.value,
+                    error=(
+                        "stale: running дольше "
+                        f"{cfg.export_job_stale_minutes} мин"
+                    ),
+                    finished_at=current,
+                )
+            )
+            await session.commit()
+            recovered = int(getattr(result, "rowcount", 0) or 0)
+    except Exception as exc:  # recovery не должен блокировать старт
+        logger.warning("export_jobs_recovery_failed", error=str(exc))
+        return 0
+    if recovered:
+        logger.warning("export_jobs_recovered", count=recovered)
+    else:
+        logger.info("export_jobs_recovery", count=0)
+    return recovered
+
+
 async def run_export_job(
     job_id: int, settings: Settings | None = None
 ) -> None:
     """Выполнить джобу: JSONL → файл, обновить статус и аудит.
 
-    Вызывается через FastAPI BackgroundTasks после ответа `POST /jobs`.
-    Все ошибки ловятся: джоба помечается ``failed``, исключение наружу не
-    летит (иначе оно уронило бы фоновую задачу ASGI).
+    Вызывается arq-воркером (`app.worker.run_export_job`). Все ошибки
+    ловятся: джоба помечается ``failed``, исключение наружу не летит
+    (иначе arq повторял бы задачу и писал повторно). Повторный вызов для
+    уже завершённой джобы — no-op по статусу.
     """
     cfg = settings or get_settings()
     trace = new_trace_context()
@@ -272,15 +335,30 @@ async def _write_jsonl(
 
 
 async def _mark_failed(job_id: int, exc: Exception) -> None:
-    """Перевести джобу в ``failed`` (best-effort, отдельная сессия)."""
+    """Перевести джобу в ``failed`` по исключению (best-effort)."""
+    await _update_job_failed(
+        job_id, f"{type(exc).__name__}: {exc}"
+    )
+
+
+async def _update_job_failed(job_id: int, error: str) -> None:
+    """UPDATE ``queued``/``running`` → ``failed`` в отдельной сессии."""
     try:
         async with SessionLocal() as session:
             await session.execute(
                 update(ExportJob)
-                .where(ExportJob.id == job_id)
+                .where(
+                    ExportJob.id == job_id,
+                    ExportJob.status.in_(
+                        (
+                            ExportJobStatus.queued.value,
+                            ExportJobStatus.running.value,
+                        )
+                    ),
+                )
                 .values(
                     status=ExportJobStatus.failed.value,
-                    error=f"{type(exc).__name__}: {exc}"[:_MAX_ERROR_CHARS],
+                    error=error[:_MAX_ERROR_CHARS],
                     finished_at=datetime.now(UTC),
                 )
             )

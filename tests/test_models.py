@@ -59,6 +59,14 @@ def test_metadata_contains_exactly_spec_tables() -> None:
     assert set(Base.metadata.tables) == SPEC_TABLES
 
 
+def test_users_have_email_verification_flag() -> None:
+    """KI-041: `users.is_verified` NOT NULL, legacy-строки — true."""
+    users = Base.metadata.tables["users"]
+    column = users.c.is_verified
+    assert column.nullable is False
+    assert column.server_default is not None
+
+
 def test_engine_cache_table_has_unique_key_and_ttl_index() -> None:
     """T-108: ключ кэша — позиция + версия движка + depth/multipv."""
     table = Base.metadata.tables["engine_cache"]

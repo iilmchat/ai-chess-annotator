@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.deps import get_current_user
+from app.auth.deps import get_current_verified_user
 from app.db.models import Game, Level, Move, User
 from app.db.models import Motif as MotifRow
 from app.db.session import get_session
@@ -122,7 +122,7 @@ async def analyze(
     payload: AnalyzeRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
-    user: Annotated[User, Depends(get_current_user)],
+    user: Annotated[User, Depends(get_current_verified_user)],
 ) -> AnalyzeResponse:
     """Разобрать PGN, оценить ходы движком и сохранить партию.
 

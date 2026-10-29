@@ -16,9 +16,14 @@ from app.auth.tokens import TokenPayload, decode_token
 from app.config import Settings, get_settings
 from app.db.models import AdminRole, User
 from app.db.session import get_session
-from app.errors import AuthError, ForbiddenError
+from app.errors import AuthError, EmailNotVerifiedError, ForbiddenError
 
-__all__ = ["get_current_user", "get_current_user_optional", "require_admin"]
+__all__ = [
+    "get_current_user",
+    "get_current_user_optional",
+    "get_current_verified_user",
+    "require_admin",
+]
 
 #: auto_error=False: сами решаем, что вернуть (401 с нашим `code`).
 _bearer = HTTPBearer(auto_error=False, description="JWT access token")
@@ -83,4 +88,28 @@ async def require_admin(
     """
     if user.role != AdminRole.admin:
         raise ForbiddenError("Требуются права администратора")
+    return user
+
+
+async def get_current_verified_user(
+    user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Пользователь с подтверждённым email (KI-041).
+
+    Генерация (`/v1/analyze`, `/v1/commentary`) закрыта для
+    ``is_verified=False``. ``admin``/``auditor`` пропускаются: это
+    служебные учётки, которые создаются админом/скриптом, а не
+    саморегистрацией. ``None`` (тестовый seam до flush) трактуется как
+    «не False» — реальная колонка NOT NULL, так что это только тесты.
+
+    Raises:
+        EmailNotVerifiedError: email не подтверждён (→ HTTP 403,
+            код `email_not_verified`).
+    """
+    if user.role in {AdminRole.admin, AdminRole.auditor}:
+        return user
+    if getattr(user, "is_verified", None) is False:
+        raise EmailNotVerifiedError(
+            "Подтвердите email, чтобы пользоваться анализом и комментариями"
+        )
     return user

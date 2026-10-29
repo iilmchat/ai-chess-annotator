@@ -37,6 +37,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY app ./app
+COPY worker.py ./worker.py
 
 RUN pip install --upgrade pip \
  && pip install .

@@ -24,12 +24,15 @@ import json
 import re
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
+import redis.asyncio as aioredis
+from arq.connections import RedisSettings
+from arq.worker import Worker
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -37,6 +40,7 @@ from sqlalchemy.pool import NullPool
 
 from app.auth.tokens import create_access_token
 from app.config import Settings, get_settings
+from app.dataset.jobs import recover_stale_export_jobs
 from app.db.models import (
     AdminRole,
     AuditLog,
@@ -50,6 +54,7 @@ from app.db.models import (
 )
 from app.ingestion import parse_pgn
 from app.main import create_app
+from app.worker import WorkerSettings, run_export_job
 
 PGN = "1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5"
 COMMENTARY_TEXT = "Комментарий для выгрузки."
@@ -75,9 +80,27 @@ def _db_available() -> bool:
     return True
 
 
-pytestmark = pytest.mark.skipif(
-    not _db_available(), reason="PostgreSQL недоступен"
-)
+def _redis_available() -> bool:
+    async def ping() -> None:
+        client = aioredis.from_url(  # type: ignore[no-untyped-call]
+            get_settings().redis_url
+        )
+        try:
+            await client.ping()
+        finally:
+            await client.aclose()
+
+    try:
+        asyncio.run(ping())
+    except Exception:
+        return False
+    return True
+
+
+pytestmark = [
+    pytest.mark.skipif(not _db_available(), reason="PostgreSQL недоступен"),
+    pytest.mark.skipif(not _redis_available(), reason="Redis/arq недоступен"),
+]
 
 
 def _db_url() -> str:
@@ -259,6 +282,33 @@ def _await_job_status(job_id: int, status: str, timeout_s: float = 5.0) -> Expor
         time.sleep(0.05)
 
 
+async def _run_worker(settings: Settings) -> None:
+    """Burst-воркер arq: обработать очередь и завершиться (KI-053)."""
+    worker = Worker(
+        [run_export_job],
+        redis_settings=RedisSettings.from_dsn(settings.redis_url),
+        queue_name=settings.arq_queue_name,
+        burst=True,
+        handle_signals=False,
+        ctx={"settings": settings},
+        max_tries=1,
+        keep_result=60,
+    )
+    await worker.async_run()
+
+
+def _drain_queue(client: TestClient, settings: Settings) -> None:
+    """Обработать очередь в event loop приложения (TestClient portal).
+
+    Нельзя запускать `asyncio.run`: глобальный `SessionLocal`/asyncpg-пул
+    уже привязан к loop-у TestClient, и воркер в новом loop получил бы
+    «Future attached to a different loop».
+    """
+    portal = client.portal
+    assert portal is not None
+    portal.call(_run_worker, settings)
+
+
 @pytest.fixture()
 def settings(tmp_path: Path) -> Settings:
     return get_settings().model_copy(
@@ -275,6 +325,8 @@ def settings(tmp_path: Path) -> Settings:
             "engine_cache_enabled": False,
             "test_auth_bypass": False,
             "export_dir": str(tmp_path / "exports"),
+            # Уникальная очередь: тесты не видят чужие задачи в общем Redis.
+            "arq_queue_name": f"arq:test:{uuid4().hex}",
         }
     )
 
@@ -380,6 +432,7 @@ def test_create_job_runs_and_downloads(
     assert body["download_url"] is None
     job_id = body["id"]
 
+    _drain_queue(client, settings)
     job = _await_job_status(job_id, "done")
     assert job.rows_exported == 1
     assert job.error is None
@@ -431,6 +484,7 @@ def test_create_job_empty_dataset_produces_empty_file(
     )
     assert response.status_code == 202, response.text
     job_id = response.json()["id"]
+    _drain_queue(client, settings)
     job = _await_job_status(job_id, "done")
     assert job.rows_exported == 0
     assert job.file_size == 0
@@ -450,6 +504,7 @@ def test_job_list_contains_created_job(
 ) -> None:
     headers = _bearer(settings, users, "admin")
     job_id = _create_job(client, headers).json()["id"]
+    _drain_queue(client, settings)
     _await_job_status(job_id, "done")
     response = client.get("/v1/admin/exports/jobs", headers=headers)
     assert response.status_code == 200
@@ -466,6 +521,7 @@ def test_auditor_cannot_create_but_can_download(
 ) -> None:
     admin_headers = _bearer(settings, users, "admin")
     job_id = _create_job(client, admin_headers).json()["id"]
+    _drain_queue(client, settings)
     _await_job_status(job_id, "done")
 
     auditor_headers = _bearer(settings, users, "auditor")
@@ -579,6 +635,7 @@ def test_job_writes_audit_record(
     job_id = _create_job(
         client, _bearer(settings, users, "admin"), level="club"
     ).json()["id"]
+    _drain_queue(client, settings)
     _await_job_status(job_id, "done")
 
     deadline = time.monotonic() + 5.0
@@ -619,6 +676,7 @@ def test_admin_cookie_session_can_create_and_download(
     )
     assert response.status_code == 202, response.text
     job_id = response.json()["id"]
+    _drain_queue(client, settings)
     job = _await_job_status(job_id, "done")
     assert job.rows_exported == 1
 
@@ -627,3 +685,68 @@ def test_admin_cookie_session_can_create_and_download(
     record = json.loads(download.content.decode("utf-8").strip())
     assert record["schema_version"] == 1
     assert record["messages"][2]["content"] == EDITED_TEXT
+
+
+# --- KI-053: arq-воркер и recovery ---------------------------------------
+
+
+def test_worker_settings_registers_export_task() -> None:
+    """arq CLI/Docker находит задачу и настройки в `worker.WorkerSettings`."""
+    assert run_export_job in WorkerSettings.functions
+    assert WorkerSettings.redis_settings is not None
+    assert WorkerSettings.queue_name == get_settings().arq_queue_name
+    assert WorkerSettings.on_startup is not None
+
+
+def test_recover_stale_running_job_marks_failed(
+    client: TestClient, settings: Settings, jobs_cleanup: int
+) -> None:
+    """Зависшая running-джоба старше 15 минут → failed (KI-053)."""
+    started = datetime.now(UTC) - timedelta(minutes=20)
+    job_id = asyncio.run(
+        _insert_job(
+            status="running",
+            actor="jwt:stale@example.com",
+            filters={},
+            started_at=started,
+        )
+    )
+    portal = client.portal
+    assert portal is not None
+    recovered = portal.call(recover_stale_export_jobs, settings)
+    assert recovered >= 1
+    job = _await_job_status(job_id, "failed")
+    assert job.error is not None
+    assert job.error.startswith("stale:")
+    assert job.finished_at is not None
+
+
+def test_queue_unavailable_marks_job_failed(
+    client: TestClient,
+    settings: Settings,
+    users: dict[str, str],
+    jobs_cleanup: int,
+) -> None:
+    """Redis/arq недоступны: 503 + джоба failed, а не вечный queued."""
+    client.app.state.arq_pool = None
+    response = _create_job(client, _bearer(settings, users, "admin"))
+    assert response.status_code == 503
+    assert response.json()["code"] == "export_queue_unavailable"
+
+    async def latest() -> ExportJob:
+        engine = create_async_engine(_db_url(), poolclass=NullPool)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as session:
+                job = await session.scalar(
+                    select(ExportJob).order_by(ExportJob.id.desc()).limit(1)
+                )
+                assert job is not None
+                return job
+        finally:
+            await engine.dispose()
+
+    job = asyncio.run(latest())
+    assert job.status == "failed"
+    assert job.error is not None
+

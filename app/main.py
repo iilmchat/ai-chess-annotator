@@ -16,6 +16,7 @@ from typing import Any
 
 import redis.asyncio as aioredis
 import structlog
+from arq.connections import ArqRedis, RedisSettings, create_pool
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -36,8 +37,10 @@ from app.api.v1 import (
 )
 from app.cache import cleanup_expired_cache
 from app.config import Settings, get_settings
+from app.dataset.jobs import recover_stale_export_jobs
 from app.db.session import SessionLocal
 from app.db.session import engine as db_engine
+from app.email import create_email_sender
 from app.engine.cache import EngineCache
 from app.engine.pool import EnginePool
 from app.errors import AppError, EngineError
@@ -69,6 +72,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.telemetry_provider = configure_telemetry(cfg)
         # T-109b: OTLP-метрики LLM для Grafana (тот же признак OTEL_ENABLED).
         app.state.metrics_provider = configure_metrics(cfg)
+        # KI-041: отправка писем (mock в dev/CI; SMTP — отдельным шагом).
+        app.state.email_sender = create_email_sender(cfg)
         # T-108: кэш результатов Stockfish; выключается ENGINE_CACHE_ENABLED.
         engine_cache: EngineCache | None = (
             EngineCache(cfg) if cfg.engine_cache_enabled else None
@@ -79,6 +84,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             cfg.redis_url, decode_responses=True
         )
         app.state.redis = redis_client
+        # KI-053: пул arq для постановки фоновых задач. Недоступный Redis
+        # не блокирует старт API: эндпоинт вернёт 503 export_queue_unavailable.
+        arq_pool: ArqRedis | None = None
+        try:
+            arq_pool = await create_pool(
+                RedisSettings.from_dsn(cfg.redis_url),
+                default_queue_name=cfg.arq_queue_name,
+            )
+        except Exception as exc:
+            logger.warning("arq_pool_unavailable", error=str(exc))
+        app.state.arq_pool = arq_pool
         # T-029: сид/прогрев промптов из БД. Сбой БД не блокирует старт —
         # load_system_prompt в этом случае падает обратно на .txt-файлы.
         async with SessionLocal() as prompt_session:
@@ -105,6 +121,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 logger.info("engine_cache_cleanup", deleted=deleted_engine)
             except Exception as exc:
                 logger.warning("engine_cache_cleanup_failed", error=str(exc))
+        # KI-053: recovery зависших running-джоб при старте API.
+        await recover_stale_export_jobs(cfg)
         app.state.rag_context_builder = make_rag_context_builder(cfg)
         app.state.rate_limiter = (
             RedisRateLimiter(
@@ -159,6 +177,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 with suppress(asyncio.CancelledError):
                     await prompt_updates_task
             await app.state.engine_pool.aclose()
+            if arq_pool is not None:
+                await arq_pool.aclose()
             await redis_client.aclose()
             # Закрываем пул соединений БД внутри текущего event loop: иначе
             # соединения asyncpg остаются привязанными к закрытому циклу
@@ -210,6 +230,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # T-028: защита от перебора паролей на /auth/*.
             ("POST", "/auth/login"),
             ("POST", "/auth/register"),
+            # KI-041: перебор токенов/спам писем.
+            ("POST", "/auth/forgot-password"),
+            ("POST", "/auth/reset-password"),
+            ("POST", "/auth/logout-all"),
+            ("GET", "/auth/verify-email"),
             ("POST", f"{cfg.api_prefix}/analyze"),
             ("POST", f"{cfg.api_prefix}/commentary"),
             ("POST", f"{cfg.api_prefix}/commentary/stream"),

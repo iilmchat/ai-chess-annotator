@@ -16,12 +16,15 @@ from __future__ import annotations
 __all__ = [
     "AppError",
     "AuthError",
+    "EmailDeliveryError",
+    "EmailNotVerifiedError",
     "EmbeddingError",
     "EngineError",
     "EngineNotFoundError",
     "EngineTimeoutError",
     "ExportJobFileMissingError",
     "ExportJobNotReadyError",
+    "ExportQueueUnavailableError",
     "ForbiddenError",
     "InvalidFenError",
     "InvalidLevelError",
@@ -155,6 +158,20 @@ class ForbiddenError(AppError):
     http_status = 403
 
 
+class EmailNotVerifiedError(ForbiddenError):
+    """Email не подтверждён — доступ к генерации закрыт (KI-041)."""
+
+    code = "email_not_verified"
+    http_status = 403
+
+
+class EmailDeliveryError(AppError):
+    """Не удалось отправить письмо (нет поддерживаемого sender-а/SMTP)."""
+
+    code = "email_delivery_failed"
+    http_status = 503
+
+
 class UserExistsError(AppError):
     """Регистрация на уже занятый email (T-028) — 409."""
 
@@ -199,3 +216,10 @@ class ExportJobFileMissingError(AppError):
 
     code = "export_job_file_missing"
     http_status = 410
+
+
+class ExportQueueUnavailableError(AppError):
+    """Очередь arq/Redis недоступна — джобу не удалось поставить (KI-053)."""
+
+    code = "export_queue_unavailable"
+    http_status = 503
