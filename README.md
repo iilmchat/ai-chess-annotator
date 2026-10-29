@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-286_passed-brightgreen.svg)](docs/development/RELEASES.md)
-[![Frontend tests](https://img.shields.io/badge/frontend_tests-20_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-435_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Frontend tests](https://img.shields.io/badge/frontend_tests-36_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
 > **Ассистент-комментатор шахматных партий.** Загрузите PGN — получите
@@ -239,8 +239,8 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP; качество LLM ниже 7/10 — KI-030) |
-| Итерация | **24 — JWT-авторизация и изоляция данных (T-041, KI-035)**; итерации 1–23 закрыты |
-| Backend-тесты | **382 passed, 1 skipped, 1 xfailed** (48 файлов; skip — нет `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
+| Итерация | **25 — LoRA-пайплайн и Playwright E2E (T-104, T-036b)**; итерации 1–24 закрыты |
+| Backend-тесты | **435 passed, 1 skipped, 1 xfailed** (48 файлов; skip — нет `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
 | Frontend-тесты | **36 passed** (6 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **12** (8 ревизий, head `c7d8e9f0a1b2`; `users.role/password_hash`, `commentaries.user_id`, `edits.user_id`) |
@@ -254,7 +254,8 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Security | Guardrails чата: NFKC, control/zero-width/bidi, лимит 2000, 7 RU/EN-эвристик, `422 prompt_injection` + аудит; в sysprompt — запрет раскрывать инструкции |
 | Audit | Append-only `audit_logs` с hash-chain, advisory-lock, триггером `UPDATE/DELETE/TRUNCATE`; аудит промптов (атомарно с правкой), правок комментариев и инъекций; read-only view + страница проверки целостности |
 | Semantic cache | `semantic_cache` (vector 768, HNSW): exact `fen_hash+level+prompt_hash`, semantic cosine < 0.05, TTL 30 дней; `/commentary`, `/chat` и SSE; второй запрос — 0.030 с |
-| LoRA | `scripts/export_dataset.py` (JSONL), `scripts/train_lora.py` (QLoRA-каркас, `--dry-run`), `LORA_ADAPTER_PATH` → adapter basename для vLLM |
+| LoRA | `scripts/export_dataset.py` (JSONL `system→user→assistant`), `scripts/train_lora.py` (реальный SFT: peft/transformers, QLoRA 4-bit, r=16/alpha=32/q_proj,v_proj, маскирование лосса на assistant, `--dry-run`/`--check-env`), `LORA_ADAPTER_PATH` → adapter basename для vLLM (только для существующего адаптера); инструкция — [LORA_TRAINING.md](docs/development/reports/LORA_TRAINING.md); обучение на GPU не выполнялось (нет CUDA, KI-030 Open) |
+| E2E | Playwright 1.64.1: 5 сценариев (`auth`, `analyze`, `commentary`, `history`, `limits`) × chromium/mobile; mocked-режим 10 passed, real-backend 5 passed (chromium); CI job `e2e` + trace/screenshot при падении; ограничение — KI-040 |
 | Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `PATCH` пишет правку в `edits` |
 | Chat | `POST /v1/chat`: вопрос → контекст анализа → LLM → валидатор → `{reply, tokens_used}` |
 | Frontend | React 19 + Vite + React Router: главная, `/history`, `/analysis/:id`; `react-chessboard` 5.12.1, FEN из PGN через `chess.js`, RU/EN, Zustand + sessionStorage; история чата сохраняется и уходит в LLM; комментарий/чат стримятся постепенно |
@@ -266,8 +267,8 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | LLM-eval | 5 партий × club/gm, 3 шкалы; база **5.19/10** (9 из 10); после итерации 16 `club` — **4.40/10** (было 3.83), отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md); ниже 7/10 — KI-030 |
 | Streaming | SSE `/v1/commentary/stream` и `/v1/chat/stream`: `meta`/`delta`/`done`/`error`, финальная SAN-валидация; UI печатает постепенно |
 | Observability | OTel-спаны `llm_generate`/`llm_stream` (`llm.model`, `llm.level`, `tokens_in/out`, `cost_usd`); `OTEL_ENABLED=true`, экспорт `console`/`otlp` |
-| KI-реестр | **38** записей: 21 Open, 17 Closed (KI-035 закрыт в итерации 24; открыты KI-036…038 по auth-ограничениям) |
-| CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, docker build; pip + pnpm store cache |
+| KI-реестр | **40** записей: 23 Open, 17 Closed (в итерации 25 добавлены KI-039 — SFT-цель LoRA, KI-040 — E2E на моках в CI; KI-030 остаётся Open) |
+| CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, Playwright E2E, docker build; pip + pnpm store cache |
 | Docker | multi-stage образ (Node → Python + SPA), `docker-compose.prod.yml`, loopback-порты БД/Redis; публикация в GHCR — T-027 |
 
 ---

@@ -1,7 +1,8 @@
-# Тестовые фикстуры PGN
+# Тестовые фикстуры
 
-Две фикстуры одной и той же партии (Гукеш — Каймер, Прага 2024) — под разные
-задачи тестов.
+Две PGN-фикстуры одной и той же партии (Гукеш — Каймер, Прага 2024) — под
+разные задачи тестов, плюс аннотированные партии для RAG и синтетический
+JSONL для LoRA.
 
 ## `example.pgn` — «реальная» партия
 
@@ -55,4 +56,20 @@
   `scripts/ingest_pgn.py --file tests/fixtures/rag_sample.pgn --limit 2`.
 - **Инварианты:** ровно 3 партии, у каждой есть ходы и хотя бы один
   комментарий; `annotated_games.embedding` после ingest — 768 измерений.
+
+## `lora_sample.jsonl` — синтетический датасет для LoRA (T-104)
+
+4 записи в схеме SFT `system → user → assistant` (`schema_version=1`,
+`level="club"`). `system` — сокращённый `app/prompts/club.txt`,
+`user` — «исходный комментарий», `assistant` — «правка редактора»
+(синтетические, не из реальных `edits`).
+
+- **Зачем:** офлайн-проверка пайплайна без GPU и БД:
+  `python scripts/train_lora.py --dry-run --dataset tests/fixtures/lora_sample.jsonl`
+  и unit-тесты `tests/unit/test_train_lora.py` / `test_dataset_export.py`.
+- **Инварианты:** все 4 записи валидны по строгой схеме; порядок ролей
+  `system→user→assistant`; непустой `content`; `schema_version=1`.
+- **Почему не из БД:** реальный экспорт делает
+  `scripts/export_dataset.py --level club` (нужны PostgreSQL и `edits`);
+  фикстура детерминирована и коммитится.
 

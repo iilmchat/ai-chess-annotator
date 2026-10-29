@@ -1251,3 +1251,89 @@ T-032b (cache hot-layer).
 - **T-028:** RBAC внутри `/admin` (admin vs auditor), серверные сессии в
   Redis, мягкое удаление RAG.
 - **T-036b:** Playwright e2e (login → анализ → комментарий).
+
+---
+
+## Итерация 25 — LoRA Fine-tuning и Playwright E2E (T-104, T-036b)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ завершена в объёме DoD; **KI-030 остаётся Open** (GPU нет,
+обучение не выполнялось); заведены KI-039 и KI-040.
+**Отчёт:** `docs/development/reports/v0.3.0/ITERATION-25.md` (7 разделов,
+RULES §2.18)
+
+### Что сделано
+
+- [x] **T-104, реальный LoRA-пайплайн.** `scripts/train_lora.py` —
+  настоящий SFT на `peft`/`transformers`: QLoRA 4-bit
+  (`--load-in-4bit`/`--no-4bit`), r=16, `lora_alpha=32`,
+  `target_modules=["q_proj","v_proj"]`, 3 эпохи, lr=2e-4,
+  gradient checkpointing, маскирование `labels=-100` на
+  system/user/служебных токенах (обучается только assistant),
+  right-padding-коллатор. `--dry-run` (без torch), `--check-env`,
+  понятные `SystemExit` для «нет зависимостей», «нет CUDA», «нет/пуст/
+  невалиден датасета», CUDA OOM. `--output-dir` по умолчанию —
+  `models/lora-club-v1`.
+- [x] **Датасет и валидация.** `scripts/export_dataset.py` пишет строгую
+  схему `system → user → assistant` (system — `app/prompts/<level>.txt`);
+  валидатор проверяет порядок ролей, непустой content, `schema_version=1`,
+  лимиты. Синтетическая фикстура `tests/fixtures/lora_sample.jsonl` для
+  офлайн-прогона.
+- [x] **Конфиг/фабрика.** `Settings.lora_model` отдаёт basename адаптера
+  только если путь существует (файл или каталог с `adapter_config.json`),
+  иначе базовую `VLLM_MODEL`; `lora_adapter_available`/`lora_adapter_dir`;
+  `app/llm/factory.py` логирует `llm_lora_adapter_enabled`/`unavailable`;
+  `gm` не изменён.
+- [x] **Документация.** `docs/development/reports/LORA_TRAINING.md`:
+  prerequisites, экспорт, схема, гиперпараметры, dry-run с фактическим
+  выводом, RunPod/Colab, стоимость, сохранение адаптера, vLLM
+  `--lora-modules`, eval `evaluate_llm.py`, ограничения (KI-030/KI-039).
+  Обновлены `.env.example`, `.gitignore` (`models/`).
+- [x] **T-036b, Playwright E2E.** `@playwright/test` 1.64.1;
+  `web/playwright.config.ts` (projects `chromium` + `mobile`, baseURL
+  `http://127.0.0.1:5173`, webServer Vite, trace on-first-retry,
+  screenshot only-on-failure, video retain-on-failure). 5 сценариев в
+  `web/e2e/`: `auth`, `analyze`, `commentary` (SSE + PATCH), `history`,
+  `limits`; page.route-моки API по контрактам `web/src/api.ts`; реальный
+  backend-режим `E2E_REAL_BACKEND=1`. Скрипты `test:e2e`/`test:e2e:ui`;
+  vitest исключает `e2e/**`; CI-job `e2e` + `upload-artifact` при
+  падении (trace/screenshot).
+- [x] **Документация итерации:** `KNOWN_ISSUES` (KI-030 — прогресс без
+  обучения, +KI-039/KI-040), `CHANGELOG`, `README`, `TODO` (T-104,
+  T-036b), `RELEASES`, `tests/fixtures/README.md`, отчёт
+  `ITERATION-25.md`.
+
+### Метрики
+
+- **Backend-тесты:** **435 passed, 1 skipped, 1 xfailed** (48 файлов;
+  +53 к итерации 24), 256.59 с, exit 0. Skip — нет `DEEPSEEK_API_KEY`,
+  xfail — KI-012. LoRA-набор: 60 тестов (было 7).
+- **Frontend-тесты:** **36 passed** (6 файлов).
+- **E2E:** mocked — **10 passed** (5 сценариев × chromium/mobile, 10.5 с);
+  real backend — **5 passed** (chromium, 1.4 мин; commentary 1.3 мин).
+- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 67 файлов.
+- **Сборка фронтенда:** 99 модулей, 6.33 с; JS 465.15 КБ (gzip 146.41),
+  CSS 14.29 КБ (gzip 3.77), dist 480 186 B.
+- **T-104 CLI:** `--dry-run` exit 0 (4 записи, club=4, ~880 токенов,
+  r=16/alpha=32/q_proj,v_proj); реальный запуск без torch → exit 1 с
+  инструкцией; `--check-env` exit 0.
+- **KI:** 40 записей, 23 Open, 17 Closed.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Реальное обучение LoRA и замер прироста качества | На машине нет NVIDIA GPU/CUDA, `torch`/`peft` не установлены; DoD T-104 допускает каркас + инструкцию + dry-run | KI-030, LORA_TRAINING.md |
+| SFT-пара «факты → комментарий» | `edits` хранит только original→edited; нужен `schema_version=2`/сохранение пакета фактов | KI-039 |
+| Реальный backend в CI для E2E | Нужны Postgres/Redis/Stockfish/LLM; real-режим проверен локально | KI-040 |
+| Typecheck для `web/e2e/**` | `tsconfig` включает только `src`; Playwright транспилирует без tsc | OBS в отчёте |
+
+### Что дальше
+
+- **KI-030/T-104b:** решить дизайн SFT-пары (KI-039), обучить LoRA на
+  RunPod/Colab, прогнать `evaluate_llm.py` на 10–20 партиях (baseline
+  `club` 4.40/10), сравнить `factual_accuracy`/`usefulness`.
+- **KI-040:** real-backend E2E в отдельном CI-job/nightly (docker compose +
+  stub-LLM) либо на self-hosted runner с GPU.
+- **T-039b:** графики/фильтры LLM-evals в админке.
+- **KI-037/KI-038:** отзыв refresh, httpOnly cookie, per-user бюджеты.

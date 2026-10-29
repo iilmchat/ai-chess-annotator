@@ -595,10 +595,16 @@
 - **Статус:** выполнено (итерация 24); ограничения — KI-036…038
   (bcrypt-pin, нет отзыва refresh/2FA, бюджеты пока по IP).
 
-### [ ] T-036b. E2E браузерных сценариев
+### [x] T-036b. E2E браузерных сценариев (итерация 25)
 - **Что:** Playwright: загрузка PGN → анализ → комментарий; `/history` →
   `/analysis/:id`; mobile viewport; usage-badge.
 - **DoD:** 5 сценариев в CI; скриншоты/видео при падении.
+- **Статус:** выполнено (итерация 25): `@playwright/test` 1.64.1,
+  `web/playwright.config.ts` (projects chromium + mobile), 5 spec в
+  `web/e2e/`, скрипт `test:e2e`, CI-job `e2e` + `upload-artifact` при
+  падении (trace/screenshot/video). Mocked-режим — 10 passed; real-backend
+  (chromium) — 5 passed. Ограничение: в CI по умолчанию page.route-моки,
+  реальный backend в CI не поднимается — KI-040.
 
 ### [ ] T-039b. LLM evals: графики и фильтры
 - **Что:** фильтры по модели/уровню/дате, средние по шкалам, график
@@ -611,9 +617,17 @@
   уровня.
 - **T-102.** Lichess Studies / открытые базы как источник RAG.
 - **T-103.** Лицензия ChessBase Mega Database 2026.
-- **[x] T-104.** LoRA-каркас на `edits`: `scripts/export_dataset.py`,
-  `scripts/train_lora.py` (`--dry-run`), `LORA_ADAPTER_PATH` в
-  конфиге/фабрике; реальное обучение — на GPU/в облаке.
+- **[x] T-104.** LoRA-пайплайн на `edits` (итерация 25):
+  `scripts/export_dataset.py` (схема `system → user → assistant`),
+  `scripts/train_lora.py` (реальный SFT на peft/transformers: QLoRA 4-bit,
+  r=16, alpha=32, q_proj/v_proj, 3 эпохи, lr=2e-4, маскирование лосса на
+  assistant; `--dry-run`, `--check-env`, понятные ошибки без GPU),
+  `LORA_ADAPTER_PATH` в конфиге/фабрике (адаптер учитывается только если
+  путь существует), `docs/development/reports/LORA_TRAINING.md` (GPU
+  RunPod/Colab, стоимость, vLLM `--lora-modules`, оценка).
+  **Реальное обучение не выполнялось** — на машине нет GPU/CUDA
+  (KI-030 остаётся Open); дизайн SFT-пары требует решения до GPU-прогона
+  (KI-039, schema_version=2 `fact_sheet → commentary`).
 - **T-105.** On-prem профиль без облачных LLM (`LLM_PROVIDER=local`).
 - **T-106.** Английская локализация комментариев.
 - **T-107.** Экспорт комментария в PDF / DOCX.

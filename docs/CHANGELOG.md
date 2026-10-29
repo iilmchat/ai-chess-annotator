@@ -8,6 +8,32 @@
 
 ### Added
 
+- **LoRA fine-tuning (T-104, итерация 25):** `scripts/train_lora.py` —
+  реальный SFT на `peft`/`transformers` (QLoRA 4-bit, r=16,
+  `lora_alpha=32`, `target_modules=["q_proj","v_proj"]`, 3 эпохи,
+  lr=2e-4), маскирование лосса только на assistant-токенах,
+  right-padding-коллатор, gradient checkpointing; `--dry-run`/`--check-env`
+  работают без `torch`, реальный запуск без GPU/зависимостей падает с
+  понятной инструкцией; `--system-prompt`, `--limit`, `--check-env`.
+  Экспорт `scripts/export_dataset.py` — схема `system → user → assistant`
+  (`system` из `app/prompts/<level>.txt`). `LORA_ADAPTER_PATH`
+  учитывается в `Settings.lora_model`/`app/llm/factory.py` только для
+  существующего адаптера (`adapter_config.json`), с логами
+  `llm_lora_adapter_enabled` / `llm_lora_adapter_unavailable`.
+  Инструкция по GPU/облаку, стоимости и vLLM —
+  [LORA_TRAINING.md](development/reports/LORA_TRAINING.md). Реальное
+  обучение не выполнялось (нет CUDA) — KI-030 Open, KI-039.
+- **Playwright E2E (T-036b, итерация 25):** `@playwright/test` 1.64.1,
+  `web/playwright.config.ts` (projects `chromium` + `mobile`, baseURL
+  `http://127.0.0.1:5173`, webServer Vite, trace/screenshot/video при
+  падении), 5 сценариев в `web/e2e/` (`auth`, `analyze`, `commentary`,
+  `history`, `limits`) с page.route-моками API; скрипты
+  `test:e2e`/`test:e2e:ui`; CI-job `e2e` с `upload-artifact` при
+  падении; real-backend-режим `E2E_REAL_BACKEND=1` (локально 5 passed).
+  Ограничение CI — KI-040.
+- **Тесты (итерация 25):** `tests/unit/test_train_lora.py` (41),
+  `test_dataset_export.py` (6), `test_lora_config.py` (13), фикстура
+  `tests/fixtures/lora_sample.jsonl`; E2E 10 mocked-прогонов (5×2).
 - **JWT-аутентификация и изоляция данных (T-041, KI-035 закрыт, итерация 24):**
   миграция `c7d8e9f0a1b2` — `users.role` (enum `admin_role`: user/admin/
   auditor), `is_active`, `password_hash`, `last_login_at`;
@@ -41,6 +67,16 @@
 
 ### Changed
 
+- **LoRA-экспорт (итерация 25):** JSONL из `edits` теперь строго
+  `system → user → assistant` (`system` — промпт уровня из
+  `app/prompts/*.txt`); старые выгрузки без `system` требуют
+  переэкспорта. `Settings.lora_model` возвращает basename адаптера только
+  если путь существует (файл или каталог с `adapter_config.json`) —
+  иначе базовая `VLLM_MODEL`, без «model not found» у vLLM.
+- **CI (итерация 25):** новый job `e2e` (Playwright mocked, артефакты при
+  падении); `vitest` исключает `web/e2e/**`, в `.gitignore` добавлены
+  `web/test-results/`, `web/playwright-report/`, `web/blob-report/`,
+  `models/`.
 - **Защищённые эндпоинты:** `/v1/analyze`, `/v1/games*`, `/v1/commentary*`,
   `/v1/chat*` требуют `Authorization: Bearer <access>` (401 `unauthorized`
   без токена); `/v1/ingest` по-прежнему защищён `X-Admin-Token`.
