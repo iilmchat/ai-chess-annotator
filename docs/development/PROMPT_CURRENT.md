@@ -1,6 +1,6 @@
 # PROMPT_CURRENT — актуальные системные инструкции
 
-> **Версия:** 2.0 · **Синхронизировано:** 2026-10-28 (итерация 15, SSE + sync)
+> **Версия:** 2.1 · **Синхронизировано:** 2026-10-29 (итерация 24, JWT + изоляция данных)
 > **Источник:** `docs/development/PROMPT_FOR_DSH.md` (копия 1:1, ниже — без
 > изменений) + метрики и правила текущей итерации.
 >
@@ -13,14 +13,15 @@
 
 | Показатель | Значение | Проверка |
 | :--- | :--- | :--- |
-| Итерация | 15 — синхронизация UI (react-chessboard/chess.js/i18n/Zustand) + SSE |
-| Backend-тесты | 205 passed + 1 xfailed (23 файла) | `pytest -q` |
-| Frontend-тесты | 20 passed (4 файла, Vitest) | `pnpm --dir web test` |
+| Итерация | 24 — JWT-авторизация и изоляция данных (T-041, KI-035 закрыт); KI-036…038 открыты |
+| Backend-тесты | 382 passed + 1 skipped + 1 xfailed (48 файлов) | `pytest -q` |
+| Frontend-тесты | 36 passed (6 файлов, Vitest) | `pnpm --dir web test` |
 | `ruff check .` | 0 ошибок | CI job `backend` |
-| `mypy app` | 0 ошибок (strict), 49 файлов | CI job `backend` |
-| Миграции | 3 ревизии, head `d2e3f4a5b6c7`, 8 таблиц | `alembic current`, `alembic check` |
-| Healthcheck | `ok` (db/redis/stockfish/llm `ok`) | `GET /v1/health` |
-| Открытых KI | 18 открыто, 12 закрыто (KI-008, KI-009, KI-014, KI-018, KI-020, KI-022, KI-024…KI-029) — см. `docs/KNOWN_ISSUES.md` | реестр |
+| `mypy app` | 0 ошибок (strict), 67 файлов | CI job `backend` |
+| Миграции | 8 ревизий, head `c7d8e9f0a1b2`, 12 таблиц | `alembic current`, `alembic check` |
+| Frontend build | 99 модулей, 4.38 с; JS 465 КБ (gzip 146 КБ) | `pnpm --dir web build` |
+| Healthcheck | в итерации 24 не прогонялся (нужны все внешние сервисы) | `GET /v1/health` |
+| Открытых KI | 21 открыто, 17 закрыто (KI-008, KI-009, KI-014, KI-018, KI-020, KI-021, KI-022, KI-024…KI-029, KI-031…KI-033, KI-035) — см. `docs/KNOWN_ISSUES.md` | реестр |
 
 ---
 

@@ -21,7 +21,8 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Game, Level, Move
+from app.auth.deps import get_current_user
+from app.db.models import Game, Level, Move, User
 from app.db.models import Motif as MotifRow
 from app.db.session import get_session
 from app.engine.models import MoveAnalysis, MoveClassification
@@ -121,8 +122,13 @@ async def analyze(
     payload: AnalyzeRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> AnalyzeResponse:
     """Разобрать PGN, оценить ходы движком и сохранить партию.
+
+    Требует авторизации (T-028): сохранённая партия принадлежит вызывающему
+    пользователю (`games.user_id`), что и обеспечивает изоляцию данных
+    (KI-035).
 
     Raises:
         InvalidPgnError: PGN пуст, не распознан или содержит нелегальный ход (→ 400).
@@ -143,6 +149,7 @@ async def analyze(
         analyses,
         level=payload.level,
         elapsed_ms=elapsed_ms,
+        user_id=user.id,
     )
 
     return AnalyzeResponse(
@@ -178,13 +185,18 @@ async def _persist(
     *,
     level: str,
     elapsed_ms: int,
+    user_id: int,
 ) -> int:
     """Сохранить партию и оценки ходов одной транзакцией.
+
+    Args:
+        user_id: владелец партии (`games.user_id`) — вызывающий пользователь.
 
     Returns:
         `games.id` сохранённой партии.
     """
     game = Game(
+        user_id=user_id,
         pgn=pgn,
         eco_code=parsed.eco_code,
         analysis_level=Level(level),

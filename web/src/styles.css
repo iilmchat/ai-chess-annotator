@@ -1033,3 +1033,136 @@ button:disabled {
     padding: 16px;
   }
 }
+
+/* --- Auth (T-028) ------------------------------------------------------- */
+
+.auth-page {
+  display: flex;
+  justify-content: center;
+  padding: 32px 0 16px;
+}
+
+.auth-card {
+  width: min(440px, 100%);
+  padding: 26px;
+}
+
+.auth-card__title {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+}
+
+.auth-card__subtitle {
+  margin: 8px 0 18px;
+  line-height: 1.5;
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(13, 23, 41, 0.7);
+}
+
+.auth-tab {
+  flex: 1;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.auth-tab:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.auth-tab--active {
+  background: rgba(56, 189, 248, 0.16);
+  color: #bae6fd;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #0d1729;
+  padding: 10px 12px;
+  color: var(--text);
+}
+
+.auth-input:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.55);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.auth-hint {
+  margin-top: 8px;
+}
+
+.auth-error {
+  margin-top: 14px;
+  line-height: 1.45;
+}
+
+.auth-submit {
+  margin-top: 16px;
+}
+
+.auth-gate {
+  display: flex;
+  justify-content: center;
+  padding: 48px 0;
+}
+
+.auth-gate__card {
+  width: min(520px, 100%);
+}
+
+.auth-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.auth-user__email {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.auth-login-link {
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .auth-page {
+    padding-top: 12px;
+  }
+
+  .auth-card {
+    padding: 18px;
+  }
+
+  .auth-user__email {
+    max-width: 150px;
+  }
+}

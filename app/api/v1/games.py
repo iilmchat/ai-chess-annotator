@@ -21,8 +21,10 @@ from app.api.v1.analyze import (
     _build_moves,
     _summarize,
 )
+from app.auth.access import get_accessible_game
+from app.auth.deps import get_current_user
 from app.commentary.service import load_analyses
-from app.db.models import Commentary, Game, Level
+from app.db.models import AdminRole, Commentary, Game, Level, User
 from app.db.session import get_session
 from app.errors import NotFoundError
 from app.ingestion import parse_pgn
@@ -65,14 +67,18 @@ class GameListItem(BaseModel):
 @router.get("/games", response_model=list[GameListItem])
 async def list_games(
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
     limit: Annotated[int, Query(ge=1, le=50, description="Сколько партий")] = 20,
 ) -> list[GameListItem]:
-    """Последние `limit` партий (по умолчанию 20)."""
-    rows = (
-        await session.scalars(
-            select(Game).order_by(Game.created_at.desc(), Game.id.desc()).limit(limit)
-        )
-    ).all()
+    """Последние `limit` партий, доступные пользователю (по умолчанию 20).
+
+    Администратор видит все партии (включая legacy-записи с
+    `user_id IS NULL`), обычный пользователь — только свои (KI-035).
+    """
+    query = select(Game).order_by(Game.created_at.desc(), Game.id.desc())
+    if user.role != AdminRole.admin:
+        query = query.where(Game.user_id == user.id)
+    rows = (await session.scalars(query.limit(limit))).all()
     items: list[GameListItem] = []
     for game in rows:
         white = black = event = None
@@ -98,15 +104,17 @@ async def list_games(
 async def get_game(
     game_id: Annotated[int, Path(gt=0, description="ID партии из /v1/analyze")],
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> GameDetailResponse:
     """Вернуть сохранённый анализ партии.
 
+    Доступ проверяется по владельцу (`games.user_id`); чужая партия
+    неотличима от несуществующей (KI-035).
+
     Raises:
-        NotFoundError: партия не найдена или для неё нет анализа (→ 404).
+        NotFoundError: партия не найдена, чужая или для неё нет анализа (→ 404).
     """
-    game = await session.get(Game, game_id)
-    if game is None:
-        raise NotFoundError(f"Партия {game_id} не найдена")
+    game = await get_accessible_game(session, game_id, user)
 
     parsed = parse_pgn(game.pgn)
     analyses = await load_analyses(session, game, parsed)

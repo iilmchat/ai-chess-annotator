@@ -44,6 +44,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 __all__ = [
+    "AdminRole",
     "AnnotatedGame",
     "AuditLog",
     "Commentary",
@@ -57,6 +58,7 @@ __all__ = [
     "RetrievalCache",
     "SemanticCache",
     "User",
+    "admin_role_enum",
     "level_enum",
 ]
 
@@ -71,12 +73,21 @@ class Level(enum.StrEnum):
     gm = "gm"
 
 
+class AdminRole(enum.StrEnum):
+    """Роль пользователя (T-028, DESIGN_ADMIN_AND_OPS §4.1)."""
+
+    user = "user"
+    admin = "admin"
+    auditor = "auditor"
+
+
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     """Хранить в БД значения (``beginner``), а не имена членов перечисления."""
     return [str(member.value) for member in enum_cls]
 
 
 level_enum = Enum(Level, name="level", values_callable=_enum_values)
+admin_role_enum = Enum(AdminRole, name="admin_role", values_callable=_enum_values)
 
 
 def _pk() -> Mapped[int]:
@@ -90,14 +101,33 @@ def _created_at() -> Mapped[datetime]:
 
 
 class User(Base):
-    """Пользователь и его уровень по умолчанию."""
+    """Пользователь, его уровень и права (T-028)."""
 
     __tablename__ = "users"
+    __table_args__ = (
+        # Частичный индекс: роли, отличные от user, встречаются редко.
+        Index(
+            "ix_users_role",
+            "role",
+            postgresql_where=sql_text("role <> 'user'"),
+        ),
+    )
 
     id: Mapped[int] = _pk()
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
     level: Mapped[Level] = mapped_column(
         level_enum, nullable=False, server_default=sql_text("'club'")
+    )
+    role: Mapped[AdminRole] = mapped_column(
+        admin_role_enum, nullable=False, server_default=sql_text("'user'")
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=sql_text("true")
+    )
+    #: bcrypt-хеш; NULL — вход по паролю не настроен (SSO/служебный аккаунт).
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = _created_at()
 
@@ -110,6 +140,10 @@ class Game(Base):
     """Загруженная партия в PGN."""
 
     __tablename__ = "games"
+    __table_args__ = (
+        # История «мои партии»: фильтр по владельцу + сортировка по дате.
+        Index("ix_games_user_id_created", "user_id", "created_at"),
+    )
 
     id: Mapped[int] = _pk()
     user_id: Mapped[int | None] = mapped_column(
@@ -232,11 +266,18 @@ class Commentary(Base):
     """Сгенерированный комментарий под конкретный уровень (T-016)."""
 
     __tablename__ = "commentaries"
-    __table_args__ = (Index("ix_commentaries_game_id", "game_id"),)
+    __table_args__ = (
+        Index("ix_commentaries_game_id", "game_id"),
+        Index("ix_commentaries_user_id", "user_id"),
+    )
 
     id: Mapped[int] = _pk()
     game_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("games.id", ondelete="CASCADE"), nullable=False
+    )
+    # Владелец комментария (T-028): NULL — legacy-запись до JWT.
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     level: Mapped[Level] = mapped_column(level_enum, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -262,7 +303,10 @@ class Edit(Base):
     """Правка комментария человеком — датасет для дообучения (T-021/T-104)."""
 
     __tablename__ = "edits"
-    __table_args__ = (Index("ix_edits_commentary_id", "commentary_id"),)
+    __table_args__ = (
+        Index("ix_edits_commentary_id", "commentary_id"),
+        Index("ix_edits_user_id", "user_id"),
+    )
 
     id: Mapped[int] = _pk()
     commentary_id: Mapped[int] = mapped_column(
@@ -270,13 +314,18 @@ class Edit(Base):
     )
     original_text: Mapped[str] = mapped_column(Text, nullable=False)
     edited_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Автор правки (T-028): дублирует editor_id для явного фильтра по владельцу.
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     editor_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = _created_at()
 
     commentary: Mapped[Commentary] = relationship(back_populates="edits")
-    editor: Mapped[User | None] = relationship()
+    # Две FK на users (user_id + editor_id) — join только по editor_id.
+    editor: Mapped[User | None] = relationship(foreign_keys=[editor_id])
 
 
 class Prompt(Base):

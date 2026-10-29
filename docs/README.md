@@ -57,6 +57,7 @@
 | [reports/iteration-12/](development/reports/iteration-12/) | Отчёты итерации 12 — сброс БД, ingest, PATCH и чат (STEP-01…STEP-04) |
 | [reports/iteration-14/](development/reports/iteration-14/) | Отчёты итерации 14 — LLM-eval, Docker production, документация MVP |
 | [reports/iteration-15/](development/reports/iteration-15/) | Отчёт итерации 15 — синхронизация UI и SSE |
+| [reports/v0.1.0/](development/reports/v0.1.0/) | Отчёты итераций 16–24 (админка, кэш, auth; `ITERATION-24.md` — JWT и изоляция данных) |
 | [reports/LLM_EVAL.md](development/reports/LLM_EVAL.md) | LLM-as-judge: средние оценки по трём шкалам (T-023) |
 
 ### Состояние проекта
@@ -64,7 +65,7 @@
 | Документ | Что внутри |
 | :--- | :--- |
 | [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секция `[Unreleased]` |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-030 со статусами, severity и планом закрытия |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-038 со статусами, severity и планом закрытия |
 
 ### Тесты и данные
 
@@ -92,7 +93,14 @@
 | [../tests/integration/test_web_static.py](../tests/integration/test_web_static.py) | SPA из `web/dist` раздаётся FastAPI и не перехватывает `/v1` (T-025) |
 | [../tests/integration/test_api_games.py](../tests/integration/test_api_games.py) | `GET /v1/games/{id}`: сохранённый анализ, `analysis_level`, `commentaries`, 404 (T-031) |
 | [../tests/integration/test_streaming.py](../tests/integration/test_streaming.py) | SSE комментария/чата: delta→done, нелегальный ход→error, запись в БД (T-032) |
-| [../web/src/](../web/src/) | Frontend: `board.test.ts`/`pgn.test.ts` (FEN/chess.js), `api.test.ts` (SSE-парсер), `format.test.ts` — 20 тестов (Vitest) |
+| [../tests/unit/test_auth.py](../tests/unit/test_auth.py) | 24 теста паролей/JWT: bcrypt, rotate/type/tamper/expiry, схемы, race 409 (T-041) |
+| [../tests/integration/test_auth_api.py](../tests/integration/test_auth_api.py) | 15 тестов `/auth/*` с реальной авторизацией: register/login/refresh/me, 401/403/409/422 (T-041) |
+| [../tests/integration/test_data_isolation.py](../tests/integration/test_data_isolation.py) | 11 тестов изоляции: user A/B/admin, list/get/commentary/chat/patch, legacy NULL-owner (KI-035) |
+| [../tests/integration/test_usage_roles.py](../tests/integration/test_usage_roles.py) | 4 теста `/v1/users/me/usage`: free/pro по ролям и IP (T-041) |
+| [../tests/unit/test_embeddings.py](../tests/unit/test_embeddings.py) | 21 тест эмбеддера на моках: батчи, размерность, EmbeddingError (salvage) |
+| [../tests/integration/test_embeddings_live.py](../tests/integration/test_embeddings_live.py) | Живые LM Studio: 768-dim, норма, batch, ingest+retrieval (salvage) |
+| [../tests/unit/test_ingest_pgn.py](../tests/unit/test_ingest_pgn.py) | CLI ingest: `--limit=10`, exit-коды, cp1251, DB-768 (salvage) |
+| [../web/src/](../web/src/) | Frontend: `board.test.ts`/`pgn.test.ts` (FEN/chess.js), `api.test.ts` (SSE-парсер), `format.test.ts`, `authStore.test.ts`, `api.auth.test.ts` — 36 тестов (Vitest) |
 | [../tests/fixtures/example.pgn](../tests/fixtures/example.pgn) | Партия Гукеш — Каймер (Прага 2024), `1.d4 Nf6 2.c4 e6 … 27.Bg6+ 1-0`, ECO `E21` |
 | [../tests/fixtures/test_game.pgn](../tests/fixtures/test_game.pgn) | Та же партия с `Test White` / `Test Black` и без `[ECO]` — проверка метаданных и fallback-а ECO |
 | [../tests/fixtures/README.md](../tests/fixtures/README.md) | Инварианты обеих фикстур (полуходы, результат, ECO, фазы) |

@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     jwt_alg: str = "HS256"
     access_token_ttl_min: int = 15
     refresh_token_ttl_days: int = 7
+    #: Тестовый seam (T-028): подмена get_current_user для старой сюиты.
+    #: Работает ТОЛЬКО при APP_ENV=test; в dev/prod значение игнорируется.
+    test_auth_bypass: bool = False
 
     # Engine
     stockfish_path: str = "/usr/bin/stockfish"

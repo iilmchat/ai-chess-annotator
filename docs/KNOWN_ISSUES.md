@@ -53,9 +53,12 @@
 | KI-032 | **Closed** | Med | prompts, admin, infra | Кэш промптов не инвалидировался между воркерами. **Закрыт в T-029/итерация 18:** Redis Pub/Sub `prompts_updates` + watcher в lifespan |
 | KI-033 | **Closed** | Med | audit, admin | Аудит правки промпта писался после commit best-effort. **Закрыт в итерации 19:** аудит в `after_edit`, та же транзакция, сбой откатывает правку |
 | KI-034 | Open | Med | cache, llm | Semantic-хит по близкому FEN может переиспользовать комментарий другой партии |
-| KI-035 | Open | High | web, api | `GET /v1/games` отдаёт все партии без auth/скоупа; history упрощает перебор |
+| KI-035 | **Closed** | High | web, api | `GET /v1/games` без auth/скоупа. **Закрыт в итерации 24 (T-041):** JWT + `games.user_id`, фильтр по владельцу (admin — все), чужой id → 404 |
+| KI-036 | Open | Low | deps, auth | `passlib` 1.7.4 несовместим с `bcrypt>=4.1` → пин `bcrypt<4.1` |
+| KI-037 | Open | Med | auth, security | JWT без отзыва refresh/2FA/верификации email; токены в `localStorage` |
+| KI-038 | Open | Med | finops, auth | Дневной бюджет токенов по-прежнему по IP, не по JWT-пользователю |
 
-Всего: **35** (Open: 19, Closed: 16). KI-001…009 — итерация 1 (T-006); KI-010…012 — итерация 2 (T-007); KI-013, KI-014 — итерация 3 (T-008); KI-014 закрыт, KI-015…018 — итерация 4 (T-009); KI-018 закрыт, KI-019, KI-020 — итерация 5 (T-010/T-011); KI-020 закрыт, KI-021, KI-022 — итерация 6 (T-012/T-013); KI-022 закрыт, KI-023, KI-024 — итерация 7 (T-014/T-015); KI-025, KI-026 — итерация 9 (T-017); KI-027…029 — итерация 12 (T-021b/T-022); KI-008, KI-009, KI-024…028 закрыты, KI-030 — итерация 14 (T-023); KI-021 закрыт, KI-031, KI-032 — итерация 17 (T-029/T-031); KI-031/KI-032 закрыты, KI-033 — итерация 18 (T-033/T-035); KI-033 закрыт, KI-034 — итерация 19 (T-032); KI-035 — итерация 20 (T-036).
+Всего: **38** (Open: 21, Closed: 17). KI-001…009 — итерация 1 (T-006); KI-010…012 — итерация 2 (T-007); KI-013, KI-014 — итерация 3 (T-008); KI-014 закрыт, KI-015…018 — итерация 4 (T-009); KI-018 закрыт, KI-019, KI-020 — итерация 5 (T-010/T-011); KI-020 закрыт, KI-021, KI-022 — итерация 6 (T-012/T-013); KI-022 закрыт, KI-023, KI-024 — итерация 7 (T-014/T-015); KI-025, KI-026 — итерация 9 (T-017); KI-027…029 — итерация 12 (T-021b/T-022); KI-008, KI-009, KI-024…028 закрыты, KI-030 — итерация 14 (T-023); KI-021 закрыт, KI-031, KI-032 — итерация 17 (T-029/T-031); KI-031/KI-032 закрыты, KI-033 — итерация 18 (T-033/T-035); KI-033 закрыт, KI-034 — итерация 19 (T-032); KI-035 — итерация 20 (T-036); KI-035 закрыт, KI-036…038 — итерация 24 (T-041).
 
 ---
 
@@ -868,23 +871,124 @@ operations detected»; ingest загрузил 102 партии без ошиб�
 
 ---
 
-## KI-035 · Open · High · web, api
+## KI-035 · Closed · High · web, api
 
-**Симптом.** `GET /v1/games?limit=20` возвращает последние партии всех
+**Симптом.** `GET /v1/games?limit=20` возвращал последние партии всех
 пользователей: id, имена, турнир, уровень. Отдельного владельца у
-`games` нет, auth/JWT ещё не внедрён (T-028). Страница `/history`
-показывает этот глобальный список, то есть любой клиент может перебрать
+`games` не было, auth/JWT не внедрён (T-028). Страница `/history`
+показывала этот глобальный список, то есть любой клиент мог перебрать
 чужие партии и открыть `/analysis/:id`.
 
-**Причина.** MVP без пользовательских аккаунтов: `games` — общая
-таблица, `GET /v1/games/{id}` уже был публичным по id. История лишь
-делает перебор удобнее.
+**Причина.** MVP без пользовательских аккаунтов: `games.user_id`
+существовал, но никогда не заполнялся; `GET /v1/games/{id}` был
+публичным по id.
 
-**Обход / текущее поведение.** Эндпоинт ограничен 20 последними
-партиями; UI не показывает email/токены. Для локального/однопользовательского
-MVP это допустимо, для multi-user — нет.
+**Решение (KI-035, итерация 24 / T-041).**
 
-**План закрытия.** T-028-полный: `user_id`/`owner_hash` в `games`,
-фильтр по субъекту в `/v1/games` и `/v1/games/{id}`, JWT/сессии,
-проверка владельца в `/analysis/:id`; тест «чужой id → 404». До этого
-не выставлять инстанс в публичную сеть.
+- **JWT-аутентификация:** `app/auth/` (passlib/bcrypt + python-jose),
+  `POST /auth/register|login|refresh`, `GET /auth/me`; access 15 мин,
+  refresh 7 дней; зависимости `get_current_user` / `require_admin`.
+- **Схема (миграция `c7d8e9f0a1b2`):** `users.role` (enum `admin_role`:
+  user/admin/auditor), `is_active`, `password_hash`, `last_login_at`;
+  `commentaries.user_id`, `edits.user_id`; индексы
+  `ix_games_user_id_created`, `ix_users_role`, `ix_commentaries_user_id`,
+  `ix_edits_user_id`.
+- **Изоляция:** `POST /v1/analyze` пишет `games.user_id = current_user.id`;
+  `GET /v1/games` — только свои (admin — все, legacy NULL-owner — только
+  admin); `GET /v1/games/{id}` — чужой id неотличим от несуществующего
+  (404); `POST /v1/commentary(/stream)` и `POST /v1/chat(/stream)` —
+  проверка доступа к партии **до** любого вызова LLM; `PATCH
+  /v1/commentaries/{id}` — проверка владельца и `edits.user_id`;
+  `commentaries.user_id` заполняется и для SSE-стрима.
+- **Usage:** аутентифицированный admin/auditor → tier `pro`, user →
+  `free`, subject `user:{id}`; анонимно — прежний IP-путь.
+- **Фронтенд:** `/login` (вход/регистрация), токены в `localStorage`,
+  Bearer-заголовок + single-flight refresh на 401, route guard, профиль и
+  «Выйти» в шапке.
+
+**Доказательство.** `tests/unit/test_auth.py` (24) +
+`tests/integration/test_auth_api.py` (15, real auth) — регистрация/вход/
+refresh/me, 401/403/409/422. `tests/integration/test_data_isolation.py`
+(11) — матрица доступа user A/user B/admin для list/get/commentary/chat/
+patch, legacy NULL-owner только admin, 401 анонимно.
+`tests/integration/test_usage_roles.py` (4) — роли и тиры. Полный suite:
+382 passed, 1 skipped, 1 xfailed. Живой smoke (uvicorn + curl):
+register 201, login 200 (`access_token`, `refresh_token`), `GET /v1/games`
+с токеном 200 `[]`, без токена 401 `unauthorized`,
+`POST /v1/analyze` без токена 401. Фронтенд: 36 тестов, `tsc --noEmit`
+exit 0, `vite build` 99 модулей.
+
+**Остаток.** Ограничения вынесены в KI-036 (пин bcrypt), KI-037 (нет
+отзыва refresh/2FA/email-верификации; токены в `localStorage`), KI-038
+(бюджеты токенов пока по IP). `/admin` по-прежнему использует отдельную
+парольную сессию, а не JWT.
+
+---
+
+## KI-036 · Open · Low · deps, auth
+
+**Симптом.** `passlib` 1.7.4 несовместим с `bcrypt>=4.1` (модуль
+`bcrypt.__about__` удалён): при первом хешировании passlib падает с
+`ValueError: password cannot be longer than 72 bytes` в
+`detect_wrap_bug`/`_load_backend_mixin`.
+
+**Причина.** passlib давно не обновлялся и не поддерживает новую
+версию bcrypt; bcrypt 5.0 также ужесточил проверку длины входа.
+
+**Обход / текущее поведение.** В `pyproject.toml` зафиксирован
+`bcrypt>=4.0,<4.1` (см. комментарий рядом с `passlib[bcrypt]`);
+`app/auth/passwords.py` дополнительно проверяет 72-байтный лимит до
+вызова passlib.
+
+**План закрытия.** Перейти на поддерживаемую связку: `pwdlib[argon2]`
+или `argon2-cffi` (DESIGN_ADMIN_AND_OPS §4.1 предполагает Argon2id;
+постановка итерации 24 требовала passlib+bcrypt). После перехода —
+миграция существующих bcrypt-хешей при первом успешном входе.
+
+---
+
+## KI-037 · Open · Med · auth, security
+
+**Симптом.** JWT-аутентификация есть, но у неё нет управляемого
+жизненного цикла: refresh-токены не отзываются (jti не хранится),
+смены пароля/выхода «на всех устройствах» нет; access/refresh лежат в
+`localStorage` (риск XSS-кражи); нет верификации email и сброса
+пароля; отдельного лимита попыток входа по email нет (только общий
+IP-rate-limit 10/мин на `/auth/login`).
+
+**Причина.** Итерация 24 закрывала уязвимость KI-035 (отсутствие
+изоляции данных) минимальным JWT-слоем; token denylist, email-flow и
+httpOnly-cookie — отдельный объём.
+
+**Обход / текущее поведение.** Access живёт 15 минут, refresh — 7 дней;
+logout только чистит клиентское хранилище. Пароли — bcrypt (см. KI-036).
+`/admin` по-прежнему использует отдельную парольную сессию
+(`ADMIN_PASSWORD`), а не JWT.
+
+**План закрытия.** Таблица `refresh_tokens`/`jti` denylist в Redis,
+`POST /auth/logout`, ротация refresh с обнаружением повторного
+использования; httpOnly+Secure cookie либо BFF; лимит попыток по
+(email, IP); верификация email и сброс пароля; SSO — T-118.
+
+---
+
+## KI-038 · Open · Med · finops, auth
+
+**Симптом.** После внедрения JWT лимиты токенов всё ещё считаются по
+IP: `TokenBudgetMiddleware` и `request_subject`/`request_tier` в
+`app/finops.py` не смотрят на пользователя; `/v1/users/me/usage`
+показывает лимит по роли, а списывается бюджет по IP. Пользователь за
+NAT/общим IP делит лимит с другими; админ/аудитор получает «pro» только
+в ответе usage.
+
+**Причина.** FinOps-слой (T-031) проектировался до JWT (KI-031):
+`X-User-Tier`/`PRO_IPS` — временная замена ролей.
+
+**Обход / текущее поведение.** Дневные лимиты free/pro по-прежнему
+работают, но на IP-субъект. В тестах бюджет отключён
+(`TOKEN_BUDGET_ENABLED=false`).
+
+**План закрытия.** T-031b/T-041: брать `sub`/`role` из проверенного JWT в
+middleware (или из `request.state.user`), субъект `user:<id>`, tier из
+роли; durable-агрегаты `usage_daily` и месячные бюджеты по
+пользователю/организации.

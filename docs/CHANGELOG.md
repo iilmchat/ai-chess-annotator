@@ -8,6 +8,58 @@
 
 ### Added
 
+- **JWT-аутентификация и изоляция данных (T-041, KI-035 закрыт, итерация 24):**
+  миграция `c7d8e9f0a1b2` — `users.role` (enum `admin_role`: user/admin/
+  auditor), `is_active`, `password_hash`, `last_login_at`;
+  `commentaries.user_id`, `edits.user_id`; индексы `ix_games_user_id_created`,
+  `ix_users_role`, `ix_commentaries_user_id`, `ix_edits_user_id`.
+  Пакет `app/auth/`: bcrypt-хеширование (passlib), access+refresh JWT
+  (python-jose), зависимости `get_current_user` / `get_current_user_optional`
+  / `require_admin`, проверки владельца партии/комментария.
+- **`/auth` API:** `POST /auth/register` (201 профиль, 409 `email_taken`,
+  422 на слабый пароль), `POST /auth/login` (200 access+refresh+профиль,
+  401/403), `POST /auth/refresh` (ротация пары), `GET /auth/me`.
+- **Изоляция данных:** `POST /v1/analyze` пишет `games.user_id`; `GET
+  /v1/games` — только свои партии (admin — все, legacy NULL-owner — только
+  admin); `GET /v1/games/{id}` — чужой id → 404; `POST /v1/commentary(/stream)`
+  и `POST /v1/chat(/stream)` проверяют доступ к партии до вызова LLM и
+  пишут `commentaries.user_id` (включая SSE); `PATCH /v1/commentaries/{id}`
+  проверяет владельца и пишет `edits.user_id`.
+- **Usage по ролям:** `GET /v1/users/me/usage` для JWT-пользователя —
+  admin/auditor → `pro`, user → `free`, subject `user:{id}`; анонимно —
+  прежний IP-путь (KI-031).
+- **Фронтенд auth-flow:** страница `/login` (вход/регистрация, RU/EN),
+  Zustand-стор `chess.auth` в `localStorage`, Bearer-заголовок и
+  single-flight refresh на 401, `AuthGate` с редиректом на `/login`,
+  профиль email + «Выйти» в шапке; SSE-запросы тоже авторизуются.
+- **Feature-rate-limit на `/auth/login|register`** (10/мин на IP) —
+  базовая защита от перебора паролей.
+- **Тесты:** `tests/unit/test_auth.py` (24), `tests/integration/test_auth_api.py`
+  (15, real auth), `tests/integration/test_data_isolation.py` (11),
+  `tests/integration/test_usage_roles.py` (4); фронтенд — `authStore.test.ts`
+  (7), `api.auth.test.ts` (9).
+
+### Changed
+
+- **Защищённые эндпоинты:** `/v1/analyze`, `/v1/games*`, `/v1/commentary*`,
+  `/v1/chat*` требуют `Authorization: Bearer <access>` (401 `unauthorized`
+  без токена); `/v1/ingest` по-прежнему защищён `X-Admin-Token`.
+- **Salvage из локальной ветки итераций 10–11:** `LMStudioEmbedder` —
+  `EmbeddingError` (503 `embedding_unavailable`) для HTTP/таймаутов/сети/
+  битого JSON/неверной размерности/вырожденных векторов, батчевый
+  `embed_many` (32, порядок по `index`) и батчевый ingest;
+  `scripts/ingest_pgn.py` — `--limit` по умолчанию **10** (защита от
+  случайной массовой загрузки) и чистые exit-коды; дополнительные тесты
+  `GET /v1/games/{id}` (глубокий parity POST↔GET, FEN-старт, 404,
+  порядок комментариев) и детерминированный порядок мотивов.
+- **Тестовая сюита:** тестовый seam `APP_ENV=test` + `TEST_AUTH_BYPASS=true`
+  (dependency override `get_current_user` на тестового admin-пользователя;
+  в dev/prod недостижим); `tests/conftest.py` включает его, реальная
+  авторизация проверяется отдельными тестами.
+- **Конфиг:** `passlib[bcrypt]` + `bcrypt<4.1` (KI-036), `python-jose[cryptography]`,
+  `email-validator`, стабы `types-passlib`/`types-python-jose`; в
+  `.env.example` — комментарии про JWT и test-seam.
+
 - **История партий и лимиты (T-036/T-037, итерация 20):**
   `GET /v1/games`, `GET /v1/users/me/usage`, страницы `/history` и
   `/analysis/:id`, usage-badge с модалкой Pro, SPA-fallback.

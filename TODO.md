@@ -311,14 +311,16 @@
 задач — сверху вниз: T-028 задаёт control plane, остальные на него
 опираются.
 
-### [~] T-028. Admin Control Plane (частично, итерация 16)
+### [~] T-028. Admin Control Plane (частично, итерации 16 и 24)
 - **Зависит от:** T-004, T-025, T-027
 - **Статус итерации 16:** `/admin` смонтирован, защищён `X-Admin-Token`
   / cookie-сессией, подключены read-only views `annotated_games`,
   `commentaries`, `edits`; тесты `tests/integration/test_admin.py`.
-  Осталось: роли `user/admin/auditor`, миграция `users.role`,
-  `password_hash`, серверные сессии в Redis, мягкое удаление RAG,
-  RBAC и аудит мутаций (T-035).
+- **Статус итерации 24:** роли `user/admin/auditor`, `users.role`,
+  `password_hash`, `is_active`, `last_login_at` добавлены миграцией
+  `c7d8e9f0a1b2`; JWT-аутентификация публичного API — T-041. Осталось:
+  серверные сессии в Redis, RBAC внутри `/admin` (admin vs auditor),
+  мягкое удаление RAG, аудит мутаций (T-035).
 - **Что:** смонтировать `starlette-admin` на `/admin` (AsyncEngine из
   `app.db.session`), добавить роль `admin` в `users` (enum `user/admin/
   auditor`, `password_hash`, миграция), аутентификацию админки через
@@ -578,6 +580,20 @@
 - **Что:** pip-кэш, pnpm store cache, `workflow_dispatch`, полный набор
   `ruff`/`mypy`/`alembic`/`pytest`/`typecheck`/`build`/`test`.
 - **Статус:** workflow обновлён; GitHub Actions не запускался локально.
+
+### [x] T-041. JWT-аутентификация и изоляция данных (итерация 24, KI-035)
+- **Зависит от:** T-028, T-019
+- **Что:** миграция `users.role/is_active/password_hash/last_login_at`
+  (`admin_role`: user/admin/auditor), `commentaries.user_id`,
+  `edits.user_id`; `app/auth/` (passlib/bcrypt, python-jose access+refresh,
+  `get_current_user`, `require_admin`); `/auth/register|login|refresh|me`;
+  защита `/v1/analyze`, `/v1/games*`, `/v1/commentary*`, `/v1/chat*`
+  фильтром по владельцу (admin видит все, чужой id → 404); usage по роли;
+  фронтенд: `/login`, токены, refresh-интерцептор, guard, профиль в шапке.
+- **DoD:** регистрация/вход; без токена 401; пользователь видит только
+  свои партии; KI-035 закрыт; `ruff`/`mypy`/`pytest`/`pnpm build` зелёные.
+- **Статус:** выполнено (итерация 24); ограничения — KI-036…038
+  (bcrypt-pin, нет отзыва refresh/2FA, бюджеты пока по IP).
 
 ### [ ] T-036b. E2E браузерных сценариев
 - **Что:** Playwright: загрузка PGN → анализ → комментарий; `/history` →

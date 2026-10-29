@@ -1,15 +1,27 @@
+import { getAuthState } from "./stores/authStore";
 import type {
   AnalyzeResponse,
+  AuthTokens,
+  AuthUser,
   ChatHistoryItem,
   ChatResponse,
   CommentaryResponse,
   EditedCommentary,
   GameListItem,
   Level,
+  LoginResponse,
+  RegisterResponse,
   UsageResponse,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+/** Эти эндпоинты сами выдают/обновляют токены — refresh для них запрещён. */
+const NO_REFRESH_PATHS = new Set([
+  "/auth/login",
+  "/auth/register",
+  "/auth/refresh",
+]);
 
 export class ApiError extends Error {
   readonly status: number;
@@ -23,34 +35,151 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function send(
+  path: string,
+  init: RequestInit | undefined,
+  accessToken: string | null,
+): Promise<Response> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string> | undefined) ?? {}),
+  };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  try {
+    return await fetch(`${API_BASE}${path}`, { ...init, headers });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") {
+      throw cause;
+    }
+    throw new ApiError("Сервер недоступен. Проверьте, запущен ли API.", 0, null);
+  }
+}
+
+async function throwForResponse(response: Response): Promise<never> {
+  let detail = `HTTP ${response.status}`;
+  let code: string | null = null;
+  try {
+    const body = (await response.json()) as { detail?: string; code?: string };
+    detail = body.detail ?? detail;
+    code = body.code ?? null;
+  } catch {
+    // Тело не JSON — оставляем HTTP-статус.
+  }
+  throw new ApiError(detail, response.status, code);
+}
+
+/**
+ * Один общий refresh на все запросы: параллельные 401 ждут один и тот же
+ * промис, после успеха сессия обновляется в authStore.
+ */
+let refreshPromise: Promise<AuthTokens> | null = null;
+
+async function performRefresh(): Promise<AuthTokens> {
+  const refreshToken = getAuthState().refreshToken;
+  if (!refreshToken) {
+    getAuthState().clearSession();
+    throw new ApiError("unauthorized", 401, "unauthorized");
+  }
+
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
+    response = await fetch(`${API_BASE}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
     });
   } catch {
-    throw new ApiError("Сервер недоступен. Проверьте, запущен ли API.", 0, null);
+    getAuthState().clearSession();
+    throw new ApiError("unauthorized", 401, "unauthorized");
   }
 
   if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
-    let code: string | null = null;
-    try {
-      const body = (await response.json()) as { detail?: string; code?: string };
-      detail = body.detail ?? detail;
-      code = body.code ?? null;
-    } catch {
-      // Тело не JSON — оставляем HTTP-статус.
-    }
-    throw new ApiError(detail, response.status, code);
+    getAuthState().clearSession();
+    throw new ApiError("unauthorized", 401, "unauthorized");
+  }
+
+  let payload: AuthTokens & { user?: AuthUser };
+  try {
+    payload = (await response.json()) as AuthTokens & { user?: AuthUser };
+  } catch {
+    getAuthState().clearSession();
+    throw new ApiError("unauthorized", 401, "unauthorized");
+  }
+
+  if (!payload.access_token || !payload.refresh_token) {
+    getAuthState().clearSession();
+    throw new ApiError("unauthorized", 401, "unauthorized");
+  }
+
+  getAuthState().setSession(payload, payload.user);
+  return payload;
+}
+
+/** Обновляет пару токенов (single-flight); возвращает новую пару. */
+export function refreshSession(): Promise<AuthTokens> {
+  if (!refreshPromise) {
+    refreshPromise = performRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAuthState().accessToken;
+  let response = await send(path, init, token);
+
+  if (response.status === 401 && !NO_REFRESH_PATHS.has(path)) {
+    const latest = getAuthState().accessToken;
+    // Пока запрос летел, другой 401 уже обновил токен — просто повторяем.
+    const retryToken =
+      latest && latest !== token
+        ? latest
+        : (await refreshSession()).access_token;
+    response = await send(path, init, retryToken);
+  }
+
+  if (!response.ok) {
+    return throwForResponse(response);
   }
 
   return (await response.json()) as T;
+}
+
+/** `POST /auth/register` — создаёт пользователя, токены не выдаёт. */
+export function registerUser(
+  email: string,
+  password: string,
+): Promise<RegisterResponse> {
+  return request<RegisterResponse>("/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+/** `POST /auth/login` — сохраняет токены и профиль в authStore. */
+export async function loginUser(
+  email: string,
+  password: string,
+): Promise<LoginResponse> {
+  const session = await request<LoginResponse>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+  getAuthState().setSession(session, session.user);
+  return session;
+}
+
+/** `GET /auth/me` — профиль текущего пользователя. */
+export function getMe(): Promise<AuthUser> {
+  return request<AuthUser>("/auth/me");
+}
+
+/** Локальный выход: backend logout-эндпоинта нет. */
+export function logoutUser(): void {
+  getAuthState().clearSession();
 }
 
 export function analyzeGame(pgn: string, level: Level): Promise<AnalyzeResponse> {
@@ -163,35 +292,43 @@ async function streamRequest(
   body: Record<string, unknown>,
   handlers: StreamHandlers,
 ): Promise<StreamDone> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify(body),
-      signal: handlers.signal,
-    });
-  } catch (cause) {
-    if (cause instanceof DOMException && cause.name === "AbortError") {
-      throw cause;
+  const token = getAuthState().accessToken;
+
+  async function open(accessToken: string | null): Promise<Response> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    };
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`;
     }
-    throw new ApiError("Сервер недоступен. Проверьте, запущен ли API.", 0, null);
+    try {
+      return await fetch(`${API_BASE}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: handlers.signal,
+      });
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === "AbortError") {
+        throw cause;
+      }
+      throw new ApiError("Сервер недоступен. Проверьте, запущен ли API.", 0, null);
+    }
+  }
+
+  let response = await open(token);
+  if (response.status === 401) {
+    const latest = getAuthState().accessToken;
+    const retryToken =
+      latest && latest !== token
+        ? latest
+        : (await refreshSession()).access_token;
+    response = await open(retryToken);
   }
 
   if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
-    let code: string | null = null;
-    try {
-      const payload = (await response.json()) as { detail?: string; code?: string };
-      detail = payload.detail ?? detail;
-      code = payload.code ?? null;
-    } catch {
-      // Не JSON.
-    }
-    throw new ApiError(detail, response.status, code);
+    return throwForResponse(response);
   }
   if (!response.body) {
     throw new ApiError("Сервер не вернул поток", response.status, null);

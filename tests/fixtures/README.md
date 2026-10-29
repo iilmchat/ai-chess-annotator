@@ -43,3 +43,16 @@
 | Эндшпиль по разметке фаз | нет (`endgame_start_ply = None`) | нет |
 | Последний ход | `Bg6+` (шах) | `Bg6+` (шах) |
 | `python-chess` | `board.is_valid()` → `True` | `True` |
+
+## `rag_sample.pgn` — 3 аннотированные партии для RAG/CLI
+
+Три короткие легальные партии (по 12 полуходов) с заголовками и
+`{комментариями}` в главной линии: «Italian Demo», «Queen's Gambit Demo»,
+«King's Indian Demo».
+
+- **Зачем:** тесты `tests/unit/test_ingest_pgn.py`, живые тесты
+  `tests/integration/test_embeddings_live.py` и демо
+  `scripts/ingest_pgn.py --file tests/fixtures/rag_sample.pgn --limit 2`.
+- **Инварианты:** ровно 3 партии, у каждой есть ходы и хотя бы один
+  комментарий; `annotated_games.embedding` после ingest — 768 измерений.
+

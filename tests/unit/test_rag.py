@@ -7,7 +7,7 @@ import math
 import httpx
 import pytest
 
-from app.errors import LLMError
+from app.errors import EmbeddingError
 from app.rag.embedder import (
     DIMENSION,
     HashEmbedder,
@@ -101,5 +101,8 @@ async def test_lmstudio_embedder_rejects_wrong_dimension() -> None:
             model="nomic",
             client=client,
         )
-        with pytest.raises(LLMError, match="768"):
+        with pytest.raises(EmbeddingError, match="768") as exc_info:
             await embedder.embed("fen test")
+
+    assert exc_info.value.code == "embedding_unavailable"
+    assert exc_info.value.http_status == 503

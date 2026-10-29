@@ -86,6 +86,7 @@ async def edit_commentary(
     new_text: str,
     *,
     editor_id: int | None = None,
+    user_id: int | None = None,
 ) -> EditedCommentary:
     """Обновить текст комментария и сохранить правку в датасет `edits`.
 
@@ -97,7 +98,8 @@ async def edit_commentary(
         session: сессия БД.
         commentary_id: `commentaries.id`.
         new_text: новый текст (уже провалидирован API-слоем).
-        editor_id: пользователь-редактор; пока аутентификации нет — ``None``.
+        editor_id: пользователь-редактор (историческое поле, может быть NULL).
+        user_id: владелец правки (`edits.user_id`, T-028/KI-035).
 
     Raises:
         NotFoundError: комментарий не найден (→ 404).
@@ -113,6 +115,7 @@ async def edit_commentary(
         commentary_id=row.id,
         original_text=original_text,
         edited_text=new_text,
+        user_id=user_id,
         editor_id=editor_id,
     )
     session.add(edit)
@@ -149,7 +152,13 @@ async def load_analyses(
 
     move_ids = [row.id for row in rows]
     motif_rows = (
-        await session.scalars(select(MotifRow).where(MotifRow.move_id.in_(move_ids)))
+        await session.scalars(
+            select(MotifRow)
+            .where(MotifRow.move_id.in_(move_ids))
+            # Детерминированный порядок: GET /v1/games/{id} сравнивается с
+            # POST /v1/analyze поле-в-поле, а у хода может быть >1 мотива.
+            .order_by(MotifRow.id)
+        )
     ).all()
     motifs_by_move: dict[int, list[Motif]] = {}
     for motif_row in motif_rows:

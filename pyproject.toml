@@ -27,6 +27,13 @@ dependencies = [
     "structlog>=24.4",
     "httpx>=0.28",
     "python-multipart>=0.0.20",
+    # T-028: JWT-аутентификация (passlib+bcrypt — хеши, python-jose — токены).
+    "passlib[bcrypt]>=1.7.4",
+    # passlib 1.7.4 не поддерживает bcrypt>=4.1 (изменился API/версия модуля),
+    # поэтому фиксируем 4.0.x; см. KI-036.
+    "bcrypt>=4.0,<4.1",
+    "python-jose[cryptography]>=3.3",
+    "email-validator>=2.2",
     "sse-starlette>=2.1",
     "starlette-admin>=1.0",
     "itsdangerous>=2.2",
@@ -47,6 +54,9 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "httpx>=0.28",
+    # Стабы для mypy --strict (passlib, python-jose).
+    "types-passlib>=1.7.7",
+    "types-python-jose>=3.3",
 ]
 
 [tool.hatch.build.targets.wheel]

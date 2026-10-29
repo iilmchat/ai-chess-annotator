@@ -157,10 +157,15 @@
 
 ```sql
 -- Пользователи и уровни
-users(id, email, level ENUM('beginner','club','gm'), created_at)
+users(id, email, level ENUM('beginner','club','gm'),
+      role ENUM('user','admin','auditor') DEFAULT 'user',
+      is_active BOOL DEFAULT true, password_hash TEXT, last_login_at,
+      created_at)
 
 -- Партии
-games(id, user_id, pgn TEXT, eco_code, phase_breakdown JSONB, created_at)
+games(id, user_id, pgn TEXT, eco_code, phase_breakdown JSONB,
+      analysis_level ENUM('beginner','club','gm') DEFAULT 'club',
+      analysis_time_ms INT, created_at)
 
 -- Анализ по ходам
 moves(id, game_id, ply, san, fen, eval_cp, eval_mate,
@@ -178,12 +183,13 @@ annotated_games(id, source, pgn, white, black, event, year,
 retrieval_cache(id, fen_hash, top_k_ids INT[], created_at)
 
 -- Комментарии (сгенерированные)
-commentaries(id, game_id, level, text TEXT, model,
+commentaries(id, game_id, user_id, level, text TEXT, model,
              tokens_in, tokens_out, cost_usd, validated BOOL,
              human_edited BOOL, created_at)
 
 -- Правки (для датасета дообучения)
-edits(id, commentary_id, original_text, edited_text, editor_id, created_at)
+edits(id, commentary_id, original_text, edited_text, user_id,
+      editor_id, created_at)
 
 -- Промпты уровней (T-029, итерация 17)
 prompts(id, level VARCHAR(32) UNIQUE, content TEXT,
@@ -229,7 +235,14 @@ llm_evaluations(id, model, level, accuracy_score, usefulness_score,
 | `POST` | `/v1/ingest` | Загрузка аннотированных партий в RAG (админ). |
 | `GET` | `/v1/health` | Healthcheck движка, БД, LLM. |
 
-**Аутентификация:** JWT. **Rate limiting:** через Redis.
+**Аутентификация:** JWT (`POST /auth/register|login`, `GET /auth/me`,
+`POST /auth/refresh`; access 15 мин + refresh 7 дней; заголовок
+`Authorization: Bearer <access>`). Пароли — bcrypt (passlib), роли
+`user/admin/auditor` (enum `admin_role`). Чтение/запись партий, ходов,
+комментариев и чата — с изоляцией по владельцу: обычный пользователь
+видит только свои `games`, администратор — все; чужой id неотличим от
+несуществующего (404). **Rate limiting:** через Redis (в т.ч.
+`/auth/login|register`).
 
 ---
 

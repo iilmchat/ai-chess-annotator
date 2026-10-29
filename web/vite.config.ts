@@ -15,6 +15,8 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         "/v1": apiTarget,
+        // T-028: JWT-эндпоинты /auth/* живут вне /v1.
+        "/auth": apiTarget,
       },
     },
   };

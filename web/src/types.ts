@@ -1,5 +1,34 @@
 export type Level = "beginner" | "club" | "gm";
 
+//: Роли backend-а (enum admin_role): auditor — read-only аудитор.
+export type UserRole = "user" | "admin" | "auditor";
+
+/** Профиль пользователя из `/auth/*` (T-028). */
+export interface AuthUser {
+  id: number;
+  email: string;
+  level: Level;
+  role: UserRole;
+  is_active: boolean;
+  created_at: string;
+}
+
+/** Пара JWT-токенов из `/auth/login` и `/auth/refresh`. */
+export interface AuthTokens {
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer" | string;
+  expires_in: number;
+}
+
+/** Ответ `/auth/login`: токены плюс профиль. */
+export interface LoginResponse extends AuthTokens {
+  user: AuthUser;
+}
+
+/** Ответ `/auth/register` — профиль без токенов. */
+export type RegisterResponse = AuthUser;
+
 export interface Motif {
   type: string;
   description: string;

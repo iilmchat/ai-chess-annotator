@@ -21,9 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.audit import actor_from_request, append_audit, hash_text
+from app.auth.access import get_accessible_commentary, get_accessible_game
+from app.auth.deps import get_current_user
 from app.commentary import RagContextBuilder, edit_commentary, generate_commentary
 from app.commentary.streaming import stream_commentary
-from app.db.models import Commentary, Level
+from app.db.models import Commentary, Level, User
 from app.db.session import get_session
 
 router = APIRouter(tags=["commentary"])
@@ -98,15 +100,19 @@ async def create_commentary(
     payload: CommentaryRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> CommentaryResponse:
     """Сгенерировать комментарий и сохранить его в БД.
 
+    Доступ к партии проверяется до любого обращения к LLM (KI-035).
+
     Raises:
-        NotFoundError: партия не найдена или для неё нет анализа (→ 404).
+        NotFoundError: партия не найдена, чужая или для неё нет анализа (→ 404).
         LLMNotConfiguredError: для уровня gm не задан ключ (→ 503).
         LLMTimeoutError: провайдер не ответил (→ 504).
         LLMValidationError: нелегальные ходы даже после retry (→ 502).
     """
+    await get_accessible_game(session, payload.analysis_id, user)
     rag_context = _rag_builder(request) if payload.level == "gm" else None
     result = await generate_commentary(
         session,
@@ -119,6 +125,7 @@ async def create_commentary(
 
     row = Commentary(
         game_id=payload.analysis_id,
+        user_id=user.id,
         level=Level(payload.level),
         text=result.text,
         model=result.usage.model,
@@ -145,12 +152,15 @@ async def create_commentary_stream(
     payload: CommentaryRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> EventSourceResponse:
     """Стримить комментарий через SSE (T-032).
 
     События: `meta` → `delta`* → `done` | `error`. Валидатор проверяет
-    итоговый текст; при нелегальных ходах запись не создаётся.
+    итоговый текст; при нелегальных ходах запись не создаётся. Доступ к
+    партии проверяется до запуска стрима (и до LLM) — KI-035.
     """
+    await get_accessible_game(session, payload.analysis_id, user)
     return EventSourceResponse(
         stream_commentary(
             session,
@@ -158,6 +168,7 @@ async def create_commentary_stream(
             payload.level,
             payload.style,
             settings=getattr(request.app.state, "settings", None),
+            user_id=user.id,
         )
     )
 
@@ -173,17 +184,22 @@ async def patch_commentary(
     payload: CommentaryPatchRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> CommentaryPatchResponse:
     """Отредактировать комментарий человеком (T-021b).
 
     Обновляет `commentaries.text`, выставляет `human_edited = true` и
     сохраняет пару «оригинал → правка» в `edits` — датасет для будущего
-    дообучения LLM (T-104).
+    дообучения LLM (T-104). Правка принадлежит вызывающему пользователю
+    (`edits.user_id`), доступ проверяется по владельцу партии (KI-035).
 
     Raises:
-        NotFoundError: комментарий не найден (→ 404).
+        NotFoundError: комментарий не найден или его партия недоступна (→ 404).
     """
-    result = await edit_commentary(session, commentary_id, payload.text)
+    await get_accessible_commentary(session, commentary_id, user)
+    result = await edit_commentary(
+        session, commentary_id, payload.text, user_id=user.id
+    )
     await append_audit(
         session,
         actor=actor_from_request(request),

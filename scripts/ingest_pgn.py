@@ -8,6 +8,10 @@
 Скрипт пишет партии в `annotated_games` (эмбеддинг позиции + текст
 аннотаций). Это та же операция, что `POST /v1/ingest`, но без HTTP и
 rate limiting — удобно для массовой загрузки локальных коллекций.
+
+`--limit` по умолчанию 10: защита от случайной загрузки огромного файла.
+Коды выхода: 0 — успех (в том числе `--help`), 1 — в файле нет партий с
+ходами, 2 — ошибка аргументов/файла/настроек эмбеддера.
 """
 
 from __future__ import annotations
@@ -24,9 +28,26 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.db.session import SessionLocal, engine  # noqa: E402
+from app.errors import AppError  # noqa: E402
 from app.rag.service import ingest_pgn_text  # noqa: E402
 
-__all__ = ["main"]
+__all__ = ["DEFAULT_LIMIT", "build_parser", "main"]
+
+#: Сколько партий загружать за запуск, если ``--limit`` не передан.
+DEFAULT_LIMIT = 10
+
+
+def _positive_int(value: str) -> int:
+    """argparse-тип для ``--limit``: целое число ≥ 1."""
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"ожидается целое число, получено {value!r}"
+        ) from exc
+    if number < 1:
+        raise argparse.ArgumentTypeError("limit должен быть ≥ 1")
+    return number
 
 
 def _decode(data: bytes) -> str:
@@ -37,7 +58,8 @@ def _decode(data: bytes) -> str:
         return data.decode("cp1251", errors="replace")
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
+    """Собрать парсер аргументов командной строки."""
     parser = argparse.ArgumentParser(
         description="Загрузить партии из PGN в RAG (annotated_games).",
     )
@@ -49,9 +71,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--limit",
-        type=int,
-        default=None,
-        help="загрузить только первые N партий (по умолчанию — все)",
+        type=_positive_int,
+        default=DEFAULT_LIMIT,
+        help=(
+            "загрузить только первые N партий "
+            f"(по умолчанию {DEFAULT_LIMIT}; должен быть ≥ 1)"
+        ),
     )
     parser.add_argument(
         "--source",
@@ -87,7 +112,14 @@ async def _run(pgn_text: str, label: str, limit: int | None, source: str) -> int
 
 def main(argv: list[str] | None = None) -> int:
     """Точка входа CLI; возвращает код выхода процесса."""
-    args = _build_parser().parse_args(argv)
+    parser = build_parser()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        # argparse уже напечатал help/ошибку; возвращаем код, а не выходим,
+        # чтобы main() можно было вызывать из тестов.
+        return exc.code if isinstance(exc.code, int) else 2
+
     if not args.file.is_file():
         print(f"Файл не найден: {args.file}", file=sys.stderr)
         return 2
@@ -97,8 +129,22 @@ def main(argv: list[str] | None = None) -> int:
 
     # Чтение файла — синхронное, до входа в event loop: это CLI, а не
     # серверный путь, и блокировать нечего.
-    pgn_text = _decode(args.file.read_bytes())
-    return asyncio.run(_run(pgn_text, str(args.file), args.limit, args.source))
+    try:
+        pgn_text = _decode(args.file.read_bytes())
+    except OSError as exc:
+        print(f"Не удалось прочитать файл {args.file}: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        return asyncio.run(_run(pgn_text, str(args.file), args.limit, args.source))
+    except (AppError, ValueError) as exc:
+        # Фатальная ошибка настройки (например, неизвестный
+        # EMBEDDING_PROVIDER) — без трейсбека.
+        message = exc.message if isinstance(exc, AppError) else str(exc)
+        print(f"error: {message}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:  # pragma: no cover - интерактивная отмена
+        return 130
 
 
 if __name__ == "__main__":

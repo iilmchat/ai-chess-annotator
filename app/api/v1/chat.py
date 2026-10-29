@@ -17,8 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.audit import record_injection_attempt
+from app.auth.access import get_accessible_game
+from app.auth.deps import get_current_user
 from app.chat import answer_question
 from app.chat.streaming import stream_chat
+from app.db.models import User
 from app.db.session import get_session
 from app.errors import PromptInjectionError
 from app.security.guardrails import inspect_user_input, sanitize_user_input
@@ -76,20 +79,24 @@ async def chat_stream(
     payload: ChatRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> EventSourceResponse:
     """Стримить ответ чата через SSE (T-032).
 
     События: `meta` → `delta`* → `done` | `error`. Итоговый текст
-    проверяется SAN-валидатором.
+    проверяется SAN-валидатором. Guardrails и история проверяются до
+    обращения к БД за партией; доступ к партии — до LLM (KI-035).
     """
     question = await _guard_message(request, payload.message)
+    history = await _history(request, payload)
+    await get_accessible_game(session, payload.analysis_id, user)
     return EventSourceResponse(
         stream_chat(
             session,
             payload.analysis_id,
             payload.level,
             question,
-            history=await _history(request, payload),
+            history=history,
             settings=getattr(request.app.state, "settings", None),
         )
     )
@@ -100,22 +107,28 @@ async def chat(
     payload: ChatRequest,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> ChatResponse:
     """Ответить на вопрос пользователя по анализу партии.
 
+    Guardrails проверяются до обращения к БД за партией (как и раньше),
+    доступ к партии — до любого обращения к LLM (KI-035).
+
     Raises:
-        NotFoundError: партия не найдена или для неё нет анализа (→ 404).
+        NotFoundError: партия не найдена, чужая или для неё нет анализа (→ 404).
         LLMNotConfiguredError: для уровня gm не задан ключ (→ 503).
         LLMTimeoutError: провайдер не ответил (→ 504).
         LLMValidationError: нелегальные ходы даже после retry (→ 502).
     """
     question = await _guard_message(request, payload.message)
+    history = await _history(request, payload)
+    await get_accessible_game(session, payload.analysis_id, user)
     result = await answer_question(
         session,
         payload.analysis_id,
         payload.level,
         question,
-        history=await _history(request, payload),
+        history=history,
         settings=getattr(request.app.state, "settings", None),
     )
     return ChatResponse(

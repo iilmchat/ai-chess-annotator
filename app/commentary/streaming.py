@@ -53,8 +53,15 @@ async def stream_commentary(
     *,
     settings: Settings | None = None,
     client: BaseLLMClient | None = None,
+    user_id: int | None = None,
 ) -> AsyncIterator[dict[str, str]]:
-    """Сгенерировать комментарий потоком SSE-событий."""
+    """Сгенерировать комментарий потоком SSE-событий.
+
+    Args:
+        user_id: владелец создаваемой записи `commentaries.user_id`
+            (T-028/KI-035). ``None`` — служебная/тестовая генерация без
+            пользователя (legacy-поведение).
+    """
     cfg = settings or get_settings()
     llm: BaseLLMClient | None = None
     owns_client = client is None
@@ -92,6 +99,7 @@ async def stream_commentary(
         if hit is not None:
             row = Commentary(
                 game_id=game.id,
+                user_id=user_id,
                 level=Level(level),
                 text=hit.text,
                 model="semantic-cache",
@@ -153,6 +161,7 @@ async def stream_commentary(
         price_in, price_out = prices_for_level(cfg, level)
         row = Commentary(
             game_id=game.id,
+            user_id=user_id,
             level=Level(level),
             text=text,
             model=llm.model,

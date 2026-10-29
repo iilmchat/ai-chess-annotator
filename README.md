@@ -153,6 +153,39 @@ VITE_API_PROXY=http://127.0.0.1:8000 pnpm --dir web dev
 # → http://127.0.0.1:5173
 ```
 
+### Аутентификация (JWT, итерация 24)
+
+Публичный API защищён JWT: без `Authorization: Bearer <access>` защищённые
+эндпоинты (`/v1/analyze`, `/v1/games*`, `/v1/commentary*`, `/v1/chat*`)
+возвращают `401 unauthorized`. Access-токен живёт 15 минут, refresh — 7 дней.
+
+```bash
+# Регистрация (email + пароль ≥ 8 символов)
+curl -X POST http://127.0.0.1:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"strong-password"}'
+
+# Вход → access_token + refresh_token
+TOKEN=$(curl -s -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"strong-password"}' \
+  | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Свои партии (обычный пользователь видит только свои; admin — все)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/v1/games
+
+# Профиль и обновление пары токенов
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/auth/me
+curl -X POST http://127.0.0.1:8000/auth/refresh \
+  -H "Content-Type: application/json" -d '{"refresh_token":"<refresh>"}'
+```
+
+В UI: страница `/login` (вход/регистрация), профиль и «Выйти» в шапке;
+access/refresh хранятся в `localStorage`, при `401` клиент автоматически
+обновляет токен и повторяет запрос. Роль `admin` (выдаётся в БД/CLI)
+видит партии всех пользователей; `/admin`-панель по-прежнему использует
+отдельную парольную сессию (`ADMIN_PASSWORD`). Ограничения — KI-036…038.
+
 ### Production: Docker
 
 ```bash
@@ -206,14 +239,15 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP; качество LLM ниже 7/10 — KI-030) |
-| Итерация | **23 — Frontend UX, LLM Evals и CI (Фаза 8)**; итерации 1–22 закрыты |
-| Backend-тесты | **286 passed, 1 xfailed** (41 файл; `xfailed` — маркер KI-012) |
-| Frontend-тесты | **20 passed** (4 файла: chess.js FEN, react-chessboard-обвязка, SSE-парсер, форматирование; Vitest) |
+| Итерация | **24 — JWT-авторизация и изоляция данных (T-041, KI-035)**; итерации 1–23 закрыты |
+| Backend-тесты | **382 passed, 1 skipped, 1 xfailed** (48 файлов; skip — нет `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
+| Frontend-тесты | **36 passed** (6 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
-| Таблиц в БД | **12** (7 ревизий, head `b6c7d8e9f0a1`; `prompts`, `audit_logs`, `semantic_cache`, `llm_evaluations`, `annotated_games.embedding vector(768)`) |
+| Таблиц в БД | **12** (8 ревизий, head `c7d8e9f0a1b2`; `users.role/password_hash`, `commentaries.user_id`, `edits.user_id`) |
 | Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
 | Engine | Stockfish 17 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; пул из 4 процессов |
-| API | `POST /v1/analyze`, `GET /v1/games`, `GET /v1/games/{id}`, `GET /v1/users/me/usage`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, `POST /v1/chat`, SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest; `/admin` (starlette-admin: RAG/комментарии/правки/аудит/LLM-evals + редактируемые промпты) |
+| API | `POST /auth/register|login|refresh`, `GET /auth/me`; защищённые JWT: `POST /v1/analyze`, `GET /v1/games`, `GET /v1/games/{id}`, `GET /v1/users/me/usage`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, `POST /v1/chat`, SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest; `/admin` (starlette-admin: RAG/комментарии/правки/аудит/LLM-evals + редактируемые промпты) |
+| Auth | JWT access 15 мин + refresh 7 дней (python-jose), пароли bcrypt (passlib), роли `user/admin/auditor` (enum `admin_role`); изоляция партий по `games.user_id` (admin видит все, чужой id → 404), `commentaries.user_id`/`edits.user_id`; фронд: `/login`, refresh-интерцептор, guard, профиль в шапке; ограничения — KI-036…038 |
 | LLM | `beginner`/`club` → LM Studio (`qwen/qwen3-4b-2507`), `gm` → DeepSeek (`deepseek-chat`); таймауты, ретраи, токены, прогрев; локальный комментарий 15–120 с |
 | Prompts/Validator | Промпты 3 уровней в таблице `prompts` (seed из `.txt`, версия, редактирование в админке, hot-reload кэша); пакет фактов: `club` — топ-3 без PV, `gm` — до 10 с PV; валидатор SAN с retry |
 | FinOps | Дневные лимиты токенов в Redis (`usage:{date}:ip`), `429 token_budget_exceeded` + `X-RateLimit-Reset`; `pro` — только IP из `PRO_IPS`, заголовок `X-User-Tier` игнорируется; `cost_usd` по ценам из конфига |
@@ -232,7 +266,7 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | LLM-eval | 5 партий × club/gm, 3 шкалы; база **5.19/10** (9 из 10); после итерации 16 `club` — **4.40/10** (было 3.83), отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md); ниже 7/10 — KI-030 |
 | Streaming | SSE `/v1/commentary/stream` и `/v1/chat/stream`: `meta`/`delta`/`done`/`error`, финальная SAN-валидация; UI печатает постепенно |
 | Observability | OTel-спаны `llm_generate`/`llm_stream` (`llm.model`, `llm.level`, `tokens_in/out`, `cost_usd`); `OTEL_ENABLED=true`, экспорт `console`/`otlp` |
-| KI-реестр | **35** записей: 19 Open, 16 Closed (KI-031/KI-032/KI-033 закрыты; KI-034/KI-035 открыты) |
+| KI-реестр | **38** записей: 21 Open, 17 Closed (KI-035 закрыт в итерации 24; открыты KI-036…038 по auth-ограничениям) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, docker build; pip + pnpm store cache |
 | Docker | multi-stage образ (Node → Python + SPA), `docker-compose.prod.yml`, loopback-порты БД/Redis; публикация в GHCR — T-027 |
 

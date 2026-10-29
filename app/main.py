@@ -21,7 +21,16 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.admin import AdminPathNormalizer, create_admin
 from app.api.ratelimit import RateLimitMiddleware, RedisRateLimiter
-from app.api.v1 import analyze, chat, commentary, games, health, ingest, users
+from app.api.v1 import (
+    analyze,
+    auth,
+    chat,
+    commentary,
+    games,
+    health,
+    ingest,
+    users,
+)
 from app.cache import cleanup_expired_cache
 from app.config import Settings, get_settings
 from app.db.session import SessionLocal
@@ -142,12 +151,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url="/openapi.json",
     )
     app.state.settings = cfg
+    # Один объект Settings — единственный источник истины для приложения:
+    # зависимости Depends(get_settings) должны видеть те же настройки, что
+    # роутеры и middleware (см. итерацию 10).
+    app.dependency_overrides[get_settings] = lambda: cfg
+
+    # T-028: тестовый seam. Только APP_ENV=test + TEST_AUTH_BYPASS=true;
+    # в dev/prod эта ветка недостижима (реальная авторизация обязательна).
+    if cfg.app_env == "test" and cfg.test_auth_bypass:
+        from app.auth.deps import get_current_user, get_current_user_optional
+        from app.auth.testing import get_anonymous_user, get_test_user
+
+        app.dependency_overrides[get_current_user] = get_test_user
+        app.dependency_overrides[get_current_user_optional] = get_anonymous_user
 
     # Порядок важен: последним добавленный middleware — самый внешний.
     # CORS должен оборачивать rate limiting, чтобы браузер видел 429.
     app.add_middleware(
         RateLimitMiddleware,
         protected=[
+            # T-028: защита от перебора паролей на /auth/*.
+            ("POST", "/auth/login"),
+            ("POST", "/auth/register"),
             ("POST", f"{cfg.api_prefix}/analyze"),
             ("POST", f"{cfg.api_prefix}/commentary"),
             ("POST", f"{cfg.api_prefix}/commentary/stream"),
@@ -180,6 +205,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_exception_handler(AppError, _app_error_handler)
 
+    # T-028: JWT-эндпоинты живут под `/auth` (вне /v1, как в постановке).
+    app.include_router(auth.router, prefix="/auth")
     app.include_router(health.router, prefix=cfg.api_prefix)
     app.include_router(analyze.router, prefix=cfg.api_prefix)
     app.include_router(games.router, prefix=cfg.api_prefix)

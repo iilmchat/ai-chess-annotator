@@ -93,11 +93,14 @@ async def ingest_pgn_text(
         return []
 
     emb = embedder or get_embedder()
+    # Все позиции эмбеддятся одним батчем (LMStudioEmbedder сам режет на
+    # чанки по 32): для больших PGN это один round-trip вместо N.
+    documents = [position_document(_final_fen(game)) for game in games]
+    embeddings = await _embed_documents(emb, documents)
+
     ids: list[int] = []
-    for game in games:
+    for game, embedding in zip(games, embeddings, strict=True):
         headers = game.headers
-        final_fen = _final_fen(game)
-        embedding = await emb.embed(position_document(final_fen))
         row = AnnotatedGame(
             source=source[:64],
             pgn=str(game),
@@ -112,6 +115,21 @@ async def ingest_pgn_text(
         await session.flush()
         ids.append(row.id)
     return ids
+
+
+async def _embed_documents(
+    embedder: Embedder, documents: list[str]
+) -> list[list[float]]:
+    """Эмбеддинги документов: батч, если эмбеддер умеет `embed_many`.
+
+    `HashEmbedder` (fallback для тестов/CI) реализует только `embed`,
+    поэтому для него используется последовательный путь.
+    """
+    embed_many = getattr(embedder, "embed_many", None)
+    if callable(embed_many):
+        vectors: list[list[float]] = await embed_many(documents)
+        return vectors
+    return [await embedder.embed(document) for document in documents]
 
 
 async def find_similar_positions(

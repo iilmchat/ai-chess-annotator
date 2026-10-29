@@ -15,9 +15,12 @@ from __future__ import annotations
 
 __all__ = [
     "AppError",
+    "AuthError",
+    "EmbeddingError",
     "EngineError",
     "EngineNotFoundError",
     "EngineTimeoutError",
+    "ForbiddenError",
     "InvalidFenError",
     "InvalidLevelError",
     "InvalidPgnError",
@@ -27,6 +30,7 @@ __all__ = [
     "LLMValidationError",
     "NotFoundError",
     "PromptInjectionError",
+    "UserExistsError",
 ]
 
 
@@ -60,6 +64,18 @@ class InvalidLevelError(AppError):
 
     code = "invalid_level"
     http_status = 422
+
+
+class EmbeddingError(AppError):
+    """Эмбеддинг недоступен: сеть/HTTP/таймаут, битый ответ или размерность.
+
+    Размерность вектора модели не совпала с `annotated_games.embedding`
+    (`vector(768)`, KI-025) — тоже эта ошибка: писать такой вектор в БД
+    бессмысленно, PostgreSQL вернул бы невнятную ошибку приведения.
+    """
+
+    code = "embedding_unavailable"
+    http_status = 503
 
 
 class EngineError(AppError):
@@ -116,6 +132,30 @@ class NotFoundError(AppError):
 
     code = "not_found"
     http_status = 404
+
+
+class AuthError(AppError):
+    """Пользователь не аутентифицирован: нет/битый/просроченный JWT (T-028).
+
+    Всегда 401: клиент должен очистить токены и показать форму входа.
+    """
+
+    code = "unauthorized"
+    http_status = 401
+
+
+class ForbiddenError(AppError):
+    """Аутентифицирован, но прав недостаточно (например, не admin) — 403."""
+
+    code = "forbidden"
+    http_status = 403
+
+
+class UserExistsError(AppError):
+    """Регистрация на уже занятый email (T-028) — 409."""
+
+    code = "email_taken"
+    http_status = 409
 
 
 class PromptInjectionError(AppError):

@@ -1183,3 +1183,71 @@ T-035b (аудит/SIEM).
 
 T-028 (auth/скоуп), T-039b (графики/фильтры evals), T-036b (E2E),
 T-032b (cache hot-layer).
+
+---
+
+## Итерация 24 — JWT-авторизация и изоляция данных (T-041, KI-035)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ завершена. **KI-035 закрыт**; заведены KI-036, KI-037, KI-038.
+**Отчёт:** `docs/development/reports/v0.1.0/ITERATION-24.md` (7 разделов, RULES §2.18)
+
+### Что сделано
+
+- [x] **Схема и auth-фундамент.** Миграция `c7d8e9f0a1b2`: `users.role`
+  (enum `admin_role`: user/admin/auditor), `is_active`, `password_hash`,
+  `last_login_at`; `commentaries.user_id`, `edits.user_id`; индексы
+  `ix_games_user_id_created`, `ix_users_role`, `ix_commentaries_user_id`,
+  `ix_edits_user_id`. Пакет `app/auth/` (passlib/bcrypt, python-jose,
+  access 15 мин / refresh 7 дней, `get_current_user`, `require_admin`,
+  проверки доступа к партии/комментарию).
+- [x] **`/auth` API:** register (201), login (200 access+refresh+user),
+  refresh (ротация), me; 401/403/409/422 по контракту.
+- [x] **Изоляция данных (KI-035):** analyze пишет `games.user_id`, list/get
+  фильтруются по владельцу (admin — все, legacy NULL-owner — только
+  admin, чужой id → 404), commentary/chat проверяют доступ до LLM,
+  `commentaries.user_id`/`edits.user_id` заполняются (включая SSE).
+- [x] **Usage по ролям:** admin/auditor → pro, user → free, subject
+  `user:{id}`; анонимно — прежний IP-путь.
+- [x] **Фронтенд:** `/login`, токены в `localStorage`, Bearer + refresh
+  interceptor, `AuthGate`, профиль/выход в шапке.
+- [x] **Salvage итераций 10–11:** `EmbeddingError` + батчевый `embed_many`,
+  safe `--limit=10` в CLI, расширенные тесты GET parity/FEN/404,
+  детерминированный порядок мотивов.
+- [x] **Документация:** `KNOWN_ISSUES` (KI-035 → Closed, +036…038),
+  `CHANGELOG`, `README`, `TODO` (T-041, T-028), `docs/README`,
+  `PROMPT_CURRENT`, `.env.example`, `ITERATION-24.md`.
+
+### Метрики
+
+- **Backend-тесты:** **382 passed, 1 skipped, 1 xfailed** (48 файлов;
+  +96 к итерации 23), 210.78 с. Skip — нет `DEEPSEEK_API_KEY`, xfail — KI-012.
+- **Frontend-тесты:** **36 passed** (6 файлов; +16 к итерации 23).
+- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 67 файлов.
+- **Миграции:** head `c7d8e9f0a1b2`; upgrade/roundtrip/`alembic check` — чистые.
+- **Сборка фронтенда:** 99 модулей, 4.38 с, JS 465 КБ (gzip 146 КБ).
+- **Smoke (uvicorn + curl):** register 201; login 200
+  (`access_token`, `refresh_token`); `GET /v1/games` с токеном 200 `[]`,
+  без токена 401 `unauthorized`; `POST /v1/analyze` без токена 401;
+  неверный пароль 401.
+- **KI:** 38 записей, 21 Open, 17 Closed.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Отзыв refresh-токенов, logout на сервере, 2FA, верификация email/сброс пароля | Отдельный объём; итерация закрывала KI-035 минимальным JWT-слоем | KI-037 |
+| httpOnly-cookie вместо `localStorage` | Требует CSRF-стратегии/BFF; фронтенд по постановке использует `localStorage` | KI-037 |
+| Per-user дневные бюджеты токенов | `TokenBudgetMiddleware` остался IP-based (T-031) | KI-038 |
+| Обновление `passlib` на Argon2id | passlib 1.7.4 + bcrypt 5 несовместимы; пин bcrypt<4.1 | KI-036 |
+| JWT для `/admin` | `/admin` по-прежнему использует парольную сессию `ADMIN_PASSWORD` | T-028 |
+
+### Что дальше
+
+- **KI-037:** refresh-token store/denylist, `POST /auth/logout`, httpOnly
+  cookie/BFF, лимиты попыток по email, email-flow.
+- **KI-038/T-031b:** брать subject/tier из JWT в middleware, durable
+  агрегаты расходов по пользователю/организации.
+- **T-028:** RBAC внутри `/admin` (admin vs auditor), серверные сессии в
+  Redis, мягкое удаление RAG.
+- **T-036b:** Playwright e2e (login → анализ → комментарий).
