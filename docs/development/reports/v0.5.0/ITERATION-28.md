@@ -58,8 +58,8 @@ KI-049/KI-050). Заведены KI-049, KI-050.
 ### Документация
 
 `README.md` (итерация 28, 641/42, 14 таблиц/head `e9f0a1b2c3d4`,
-FinOps/Observability/API, KI 50/25/25), `docs/KNOWN_ISSUES.md`
-(KI-046/047 → Closed, KI-048 обновлён, +KI-049/050),
+FinOps/Observability/API, KI 51/25/26), `docs/KNOWN_ISSUES.md`
+(KI-046/047/051 → Closed, KI-048 обновлён, +KI-049/050),
 `TODO.md` (T-031b/T-034b → `[x]`), `docs/CHANGELOG.md`,
 `docs/development/RELEASES.md`, этот отчёт.
 
