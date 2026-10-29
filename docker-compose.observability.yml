@@ -80,6 +80,10 @@ services:
   grafana:
     image: grafana/grafana:11.3.0
     restart: unless-stopped
+    # T-113: alert rules провижинятся из provisioning/alerting/rules.yaml
+    # (Grafana unified alerting). Отдельный Alertmanager не нужен: правила
+    # видны и оцениваются внутри Grafana; уведомления можно добавить
+    # contact point'ом без изменения compose.
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}

@@ -1,0 +1,180 @@
+# T-113: правила алертинга Grafana (unified alerting) для ChessAnnotator.
+#
+# Grafana читает этот файл из /etc/grafana/provisioning/alerting при старте.
+# Правила используют datasource `prometheus` (uid из datasources.yaml):
+#   * traces_span_metrics_* — spanmetrics OTel Collector (HTTP-метрики);
+#   * llm_cost_usd_total    — счётчик стоимости LLM из app.observability.
+#
+# Уведомления (Telegram/Slack) сознательно не настроены: для DoD достаточно
+# видеть правила и их состояние в Grafana → Alerting → Alert rules.
+# Порог LLMBudgetExceeded (5 USD/сутки) меняется здесь; отдельной env-ручки
+# у file-provisioning Grafana нет.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: chessannotator-slo
+    folder: ChessAnnotator
+    interval: 1m
+    rules:
+      - uid: high-error-rate
+        title: HighErrorRate
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: |
+                sum(rate(traces_span_metrics_calls_total{http_response_status_code=~"5.."}[5m]))
+                /
+                clamp_min(sum(rate(traces_span_metrics_calls_total{http_route=~"/v1/.*"}[5m])), 1e-9)
+              instant: true
+              range: false
+              legendFormat: 5xx / all
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: B
+              type: threshold
+              conditions:
+                - evaluator:
+                    params: [0.05]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+        noDataState: NoData
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: "5xx error rate > 5% за 5 минут"
+          description: >-
+            Доля ответов 5xx среди запросов /v1/* превысила 5% за последние
+            5 минут. Проверьте логи API, X-Trace-Id и зависимости (Postgres,
+            Redis, LLM, Stockfish).
+        labels:
+          severity: critical
+          service: chessannotator
+        isPaused: false
+
+      - uid: high-latency-commentary
+        title: HighLatency
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: |
+                histogram_quantile(
+                  0.95,
+                  sum by (le) (
+                    rate(traces_span_metrics_duration_milliseconds_bucket{http_route="/v1/commentary"}[5m])
+                  )
+                )
+              instant: true
+              range: false
+              legendFormat: p95 /v1/commentary
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: B
+              type: threshold
+              conditions:
+                - evaluator:
+                    params: [10000]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+        noDataState: NoData
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: "p95 /v1/commentary > 10 секунд за 5 минут"
+          description: >-
+            95-й процентиль длительности /v1/commentary превысил 10 000 мс
+            (10 с) за 5 минут. Проверьте латентность LLM (llm_latency),
+            очередь и нагрузку на Stockfish.
+        labels:
+          severity: warning
+          service: chessannotator
+        isPaused: false
+
+      - uid: llm-budget-exceeded
+        title: LLMBudgetExceeded
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 86400
+              to: 0
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(increase(llm_cost_usd_total[24h]))
+              instant: true
+              range: false
+              legendFormat: LLM cost / 24h (USD)
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: B
+              type: threshold
+              conditions:
+                - evaluator:
+                    params: [5]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        annotations:
+          summary: "LLM-стоимость за сутки > 5 USD"
+          description: >-
+            Суммарная стоимость LLM за последние 24 часа превысила 5 USD
+            (порог задан в deploy/grafana/provisioning/alerting/rules.yaml).
+            Проверьте распределение по моделям/уровням в /admin/llmops.
+        labels:
+          severity: warning
+          service: chessannotator
+        isPaused: false

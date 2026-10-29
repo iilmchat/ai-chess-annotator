@@ -125,6 +125,8 @@ def _settings(**overrides: Any) -> Settings:
         "prompt_pubsub_enabled": False,
         "semantic_cache_enabled": False,
         "cors_origins": "http://localhost:5173",
+        # PyJWT предупреждает про HMAC-ключи < 32 байт; фиксируем длинный.
+        "jwt_secret": "integration-test-secret-0123456789-0123456789",
     }
     base.update(overrides)
     return Settings(**base)

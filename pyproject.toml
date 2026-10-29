@@ -35,7 +35,11 @@ dependencies = [
     # Argon2id (см. app/auth/passwords.py). После конвертации всех хешей
     # зависимость можно удалить.
     "bcrypt>=4.1",
-    "python-jose[cryptography]>=3.3",
+    # T-110 (итерация 34): PyJWT вместо python-jose. Причина — аудит
+    # зависимостей: python-jose 3.5.0 (PYSEC-2026-4298) и его транзитивный
+    # python-ecdsa (PYSEC-2026-1325) не имеют исправленных версий; нам нужен
+    # только HS256, для которого PyJWT достаточно и не тянет ecdsa.
+    "PyJWT>=2.8",
     "email-validator>=2.2",
     "sse-starlette>=2.1",
     "starlette-admin>=1.0",
@@ -65,9 +69,8 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "httpx>=0.28",
-    # Стабы для mypy --strict (python-jose); argon2-cffi и bcrypt
-    # поставляют типы сами (py.typed).
-    "types-python-jose>=3.3",
+    # T-110: python-jose удалён (PYSEC-2026-4298 + ecdsa
+    # PYSEC-2026-1325); PyJWT поставляет собственные type hints.
     # T-107: проверка PDF в тестах (извлечение текста из сгенерированного файла).
     "pypdf>=5.0",
 ]

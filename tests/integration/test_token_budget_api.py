@@ -53,6 +53,7 @@ def _settings() -> Settings:
         rate_limit_enabled=False,
         llm_warmup_enabled=False,
         prompt_pubsub_enabled=False,
+        jwt_secret="token-budget-test-secret-0123456789-0123456789",
         semantic_cache_enabled=False,
         otel_enabled=False,
     )

@@ -1,6 +1,7 @@
 """`POST /v1/commentary` — сгенерированный и провалидированный комментарий (T-016).
 
-Принимает `analysis_id` (сохранённая партия), уровень и опциональный стиль.
+Принимает `analysis_id` (сохранённая партия), уровень, опциональный стиль и
+язык (`language`, T-106; иначе `Accept-Language`/`DEFAULT_LANGUAGE`).
 Восстанавливает анализ из БД, собирает пакет фактов, генерирует текст,
 проверяет ходы валидатором (при нарушениях — до двух retry) и сохраняет
 комментарий в `commentaries`.
@@ -42,6 +43,7 @@ from app.export.board import BoardDiagram, MoveSnapshot, select_diagrams
 from app.export.pdf import CommentaryPdfData, build_commentary_pdf
 from app.ingestion import STARTING_FEN, parse_pgn
 from app.llm.calls import attach_commentary_id, llm_call_context, stream_in_call_context
+from app.prompts import resolve_language
 
 logger = structlog.get_logger(__name__)
 
@@ -66,6 +68,13 @@ class CommentaryRequest(BaseModel):
         default=None,
         max_length=MAX_STYLE_CHARS,
         description="Пожелание по стилю (например, «короче, для новичка»)",
+    )
+    language: Literal["ru", "en"] | None = Field(
+        default=None,
+        description=(
+            "Язык комментария (T-106); None — Accept-Language или "
+            "DEFAULT_LANGUAGE"
+        ),
     )
 
 
@@ -130,6 +139,7 @@ async def create_commentary(
         LLMValidationError: нелегальные ходы даже после retry (→ 502).
     """
     await get_accessible_game(session, payload.analysis_id, user)
+    language = _request_language(payload, request)
     rag_context = _rag_builder(request) if payload.level == "gm" else None
     # T-030: метрики вызова LLM в llm_calls (операция + владелец + партия).
     with llm_call_context(
@@ -143,6 +153,7 @@ async def create_commentary(
             payload.analysis_id,
             payload.level,
             payload.style,
+            language=language,
             rag_context=rag_context,
             settings=getattr(request.app.state, "settings", None),
         )
@@ -188,6 +199,7 @@ async def create_commentary_stream(
     партии проверяется до запуска стрима (и до LLM) — KI-035.
     """
     await get_accessible_game(session, payload.analysis_id, user)
+    language = _request_language(payload, request)
     # T-030: генератор исполняется после возврата ответа, поэтому контекст
     # вызова LLM выставляется обёрткой вокруг итерации стрима.
     return EventSourceResponse(
@@ -197,6 +209,7 @@ async def create_commentary_stream(
                 payload.analysis_id,
                 payload.level,
                 payload.style,
+                language=language,
                 settings=getattr(request.app.state, "settings", None),
                 user_id=user.id,
             ),
@@ -387,3 +400,18 @@ def _rag_builder(request: Request) -> RagContextBuilder | None:
     """RAG-контекст подключается в lifespan (T-017); без него — None."""
     builder = getattr(request.app.state, "rag_context_builder", None)
     return builder if callable(builder) else None
+
+
+def _request_language(payload: CommentaryRequest, request: Request) -> str:
+    """Язык комментария: поле запроса → Accept-Language → DEFAULT_LANGUAGE."""
+    cfg = getattr(request.app.state, "settings", None)
+    default = (
+        cfg.default_language
+        if isinstance(cfg, Settings)
+        else get_settings().default_language
+    )
+    return resolve_language(
+        payload.language,
+        request.headers.get("accept-language"),
+        default,
+    )

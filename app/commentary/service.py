@@ -43,7 +43,7 @@ from app.llm import BaseLLMClient, LLMUsage, get_llm_client
 from app.llm.calls import record_cache_hit
 from app.llm.prompts import build_fact_package
 from app.motifs.models import Motif
-from app.prompts import load_system_prompt
+from app.prompts import load_system_prompt, resolve_language
 
 __all__ = [
     "EditedCommentary",
@@ -210,17 +210,23 @@ async def generate_commentary(
     level: str,
     style: str | None = None,
     *,
+    language: str | None = None,
     settings: Settings | None = None,
     client: BaseLLMClient | None = None,
     rag_context: RagContextBuilder | None = None,
 ) -> GeneratedCommentary:
     """Сгенерировать и провалидировать комментарий для сохранённой партии.
 
+    Args:
+        language: ``ru``/``en`` (T-106); ``None`` — из `DEFAULT_LANGUAGE`.
+            Выбор промпта и retry-подсказки зависит от языка.
+
     Raises:
         NotFoundError: партии или её анализа нет в БД.
         LLMValidationError: LLM так и не выдала ответ без нелегальных ходов.
     """
     cfg = settings or get_settings()
+    lang = resolve_language(language, None, cfg.default_language)
     game = await load_game(session, game_id)
     parsed = parse_pgn(game.pgn)
     analyses = await load_analyses(session, game, parsed)
@@ -229,9 +235,8 @@ async def generate_commentary(
             f"Для партии {game_id} нет анализа ходов — сначала вызовите /v1/analyze"
         )
 
-    system_prompt = await load_system_prompt(level, session)
-    if style:
-        system_prompt = f"{system_prompt}\n\nДОПОЛНИТЕЛЬНЫЙ СТИЛЬ: {style}"
+    system_prompt = await load_system_prompt(level, session, language=lang)
+    system_prompt = _with_style(system_prompt, style, lang)
 
     model = client.model if client is not None else model_for_level(cfg, level)
     prompt_hash_value = make_prompt_hash(
@@ -269,7 +274,13 @@ async def generate_commentary(
     owns_client = client is None
     try:
         text, usage, attempts = await _generate_with_validation(
-            llm, package, system_prompt, parsed, analyses, cfg.commentary_max_retries
+            llm,
+            package,
+            system_prompt,
+            parsed,
+            analyses,
+            cfg.commentary_max_retries,
+            language=lang,
         )
     finally:
         if owns_client:
@@ -295,6 +306,8 @@ async def _generate_with_validation(
     parsed: ParsedGame,
     analyses: list[MoveAnalysis],
     max_retries: int,
+    *,
+    language: str = "ru",
 ) -> tuple[str, LLMUsage, int]:
     """Сгенерировать текст; при нелегальных ходах — переспросить (до retry)."""
     mainline = [move.san for move in parsed.moves]
@@ -303,7 +316,11 @@ async def _generate_with_validation(
     extra_fens = pv_positions(parsed, analyses)
     illegal: list[str] = []
     for attempt in range(1, max_retries + 2):
-        prompt = package if not illegal else _retry_prompt(package, illegal)
+        prompt = (
+            package
+            if not illegal
+            else _retry_prompt(package, illegal, language)
+        )
         result = await llm.complete(prompt, system_prompt=system_prompt)
         moves = extract_moves_from_text(result.text)
         legal, illegal = validate_moves(
@@ -349,8 +366,23 @@ def pv_positions(
     return positions
 
 
-def _retry_prompt(package: str, illegal: list[str]) -> str:
+def _with_style(system_prompt: str, style: str | None, language: str) -> str:
+    """Добавить пользовательский стиль к промпту на языке комментария."""
+    if not style:
+        return system_prompt
+    label = "ADDITIONAL STYLE" if language == "en" else "ДОПОЛНИТЕЛЬНЫЙ СТИЛЬ"
+    return f"{system_prompt}\n\n{label}: {style}"
+
+
+def _retry_prompt(package: str, illegal: list[str], language: str = "ru") -> str:
     bad = ", ".join(illegal)
+    if language == "en":
+        return (
+            f"{package}\n\n"
+            "WARNING: the previous answer contained moves that are not in the "
+            f"fact sheet: {bad}. Rewrite the commentary using ONLY moves from "
+            "the fact sheet. Do not mention moves that are not there."
+        )
     return (
         f"{package}\n\n"
         "ВНИМАНИЕ: в предыдущем ответе были ходы, которых нет в пакете фактов: "

@@ -804,14 +804,19 @@ TTL, аудит).
 
 ### 6.5. SLO и алерты
 
-| Метрика | Цель | Алерт |
+Провижинятся `deploy/grafana/provisioning/alerting/rules.yaml` (T-113);
+Grafana unified alerting, отдельный Alertmanager не нужен.
+
+| Правило | Условие | For |
 | :--- | :--- | :--- |
-| `/v1/commentary` p95 | ≤ 90 с (локальная LLM) | > 120 с 5 мин |
-| `/v1/chat` p95 | ≤ 30 с | > 45 с 5 мин |
-| LLM error rate | < 2% | > 5% 5 мин |
-| Cost per commentary | ≤ $0.10 (gm) | > $0.20 среднее за час |
-| Cache hit rate | ≥ 25% через месяц | < 10% за день |
-| Guardrail false positive | ≤ 5% | > 10% за день |
+| `HighErrorRate` | 5xx / все `/v1/*` > 5% за 5 мин | 5m |
+| `HighLatency` | p95 `/v1/commentary` > 10 000 мс за 5 мин | 5m |
+| `LLMBudgetExceeded` | `sum(increase(llm_cost_usd_total[24h]))` > 5 USD | 10m |
+
+Цели/ориентиры (не все пока превращены в алерты): `/v1/chat` p95 ≤ 30 с;
+LLM error rate < 2%; cache hit rate ≥ 25%; guardrail false positive ≤ 5%.
+Порог стоимости меняется в YAML; отдельной env-ручки у file-provisioning
+Grafana нет.
 
 ---
 
@@ -1075,7 +1080,9 @@ best-effort, не ломая MD/JSON-отчёт.
 
 - `DEEPSEEK_API_KEY`, `JWT_SECRET`, `ADMIN_SESSION_SECRET`,
   `AUDIT_PEPPER` — только ENV/Vault; не в `system_settings`, не в БД, не
-  в логах.
+  в логах. T-110: при `APP_ENV=prod/production` `Settings` падает на
+  старте, если `JWT_SECRET` — плейсхолдер/короче 32 символов, а
+  `ADMIN_API_KEY` — dev-значение; CORS `*` запрещён всегда.
 - БД-роли: `app_rw` (API), `admin_rw` (админка, без audit DML),
   `app_audit_writer` (INSERT/SELECT в `audit_logs`), `auditor_ro`
   (SELECT). Приложение не ходит под суперпользователем.

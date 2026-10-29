@@ -35,6 +35,8 @@ SHORT_PGN = "1. d4 Nf6 2. c4 e6 1/2-1/2"
 
 ILLEGAL_TEXT = "Белые сыграли Qxf7 и выиграли партию."
 LEGAL_TEXT = "Партия началась с хода d4, затем последовало Nf6."
+ILLEGAL_TEXT_EN = "White played Qxf7 and won the game."
+LEGAL_TEXT_EN = "The game began with d4, followed by Nf6."
 
 
 class ScriptedLLM(BaseLLMClient):
@@ -44,6 +46,7 @@ class ScriptedLLM(BaseLLMClient):
         super().__init__(model="scripted-model")
         self._texts = list(texts)
         self.prompts: list[str] = []
+        self.system_prompts: list[str | None] = []
 
     @property
     def provider(self) -> str:
@@ -53,6 +56,7 @@ class ScriptedLLM(BaseLLMClient):
         self, prompt: str, system_prompt: str | None = None
     ) -> LLMResult:
         self.prompts.append(prompt)
+        self.system_prompts.append(system_prompt)
         text = self._texts.pop(0) if len(self._texts) > 1 else self._texts[0]
         return LLMResult(
             text=text,
@@ -146,6 +150,21 @@ async def _seed_game(db_session: AsyncSession, pgn: str = SHORT_PGN) -> Game:
     return game
 
 
+async def _seed_game_db(pgn: str = SHORT_PGN) -> int:
+    """Создать партию+ходы в отдельной сессии и вернуть id (для sync-тестов)."""
+    engine = create_async_engine(
+        get_settings().database_url, poolclass=NullPool
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as db_session:
+            game = await _seed_game(db_session, pgn)
+            await db_session.commit()
+            return game.id
+    finally:
+        await engine.dispose()
+
+
 # --- реконструкция анализа из БД -----------------------------------------
 
 
@@ -195,6 +214,25 @@ async def test_raises_after_retries_exhausted(session: AsyncSession) -> None:
     assert len(llm.prompts) == 1
 
 
+async def test_english_language_uses_english_prompt_and_retry(
+    session: AsyncSession,
+) -> None:
+    """T-106: language=en выбирает *_en.txt и англоязычный retry."""
+    game = await _seed_game(session)
+    llm = ScriptedLLM([ILLEGAL_TEXT_EN, LEGAL_TEXT_EN])
+
+    result = await generate_commentary(
+        session, game.id, "club", language="en", client=llm
+    )
+
+    assert result.text == LEGAL_TEXT_EN
+    assert result.attempts == 2
+    assert llm.system_prompts[0] is not None
+    assert "Write in English" in llm.system_prompts[0]
+    assert "WARNING" in llm.prompts[1]
+    assert "Qxf7" in llm.prompts[1]
+
+
 async def test_unknown_game_raises_not_found(session: AsyncSession) -> None:
     with pytest.raises(NotFoundError):
         await generate_commentary(session, 999_999_999, "club", client=ScriptedLLM([LEGAL_TEXT]))
@@ -235,6 +273,42 @@ def test_commentary_validates_level_and_id() -> None:
 
     assert bad_level.status_code == 422
     assert bad_id.status_code == 422
+
+
+def test_commentary_language_en_via_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T-106: `language=en` и Accept-Language дают английский prompt."""
+    game_id = asyncio.run(_seed_game_db())
+    llm = ScriptedLLM([LEGAL_TEXT_EN])
+    monkeypatch.setattr(
+        "app.commentary.service.get_llm_client",
+        lambda level, cfg: llm,
+    )
+    try:
+        with _client() as client:
+            explicit = client.post(
+                "/v1/commentary",
+                json={
+                    "analysis_id": game_id,
+                    "level": "club",
+                    "language": "en",
+                },
+            )
+            header_only = client.post(
+                "/v1/commentary",
+                json={"analysis_id": game_id, "level": "club"},
+                headers={"Accept-Language": "en-US,en;q=0.9"},
+            )
+    finally:
+        asyncio.run(_delete_game(game_id))
+
+    assert explicit.status_code == 200, explicit.text
+    assert explicit.json()["text"] == LEGAL_TEXT_EN
+    assert header_only.status_code == 200, header_only.text
+    assert header_only.json()["text"] == LEGAL_TEXT_EN
+    assert len(llm.system_prompts) == 2
+    for system_prompt in llm.system_prompts:
+        assert system_prompt is not None
+        assert "Write in English" in system_prompt
 
 
 # --- живой тест через API -------------------------------------------------

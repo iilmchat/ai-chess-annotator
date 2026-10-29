@@ -2022,3 +2022,81 @@ KI-055.
   (TTL + scope + аудит).
 - **T-113:** Alertmanager по стоимости/latency/error rate.
 - **T-118:** SSO/SAML для админки.
+
+---
+
+## Итерация 34 — Release Prep: Security, GHCR, EN Localization & Alerts (T-110, T-027, T-106, T-113)
+
+**Дата:** 2026-10-30
+**Статус:** ✅ завершена. T-110 и T-106 закрыты, T-027/T-113
+реализованы; новый KI-058 (English localization ограничена
+комментариями).
+**Отчёт:** `docs/development/reports/v0.11.0/ITERATION-34.md`
+
+### Что сделано
+
+- [x] **T-110, dependency audit.** `pip-audit` нашёл python-jose 3.5.0
+  (PYSEC-2026-4298) и ecdsa 0.19.2 (PYSEC-2026-1325); оба заменены
+  переходом на **PyJWT** (HS256). После миграции — «No known
+  vulnerabilities found».
+- [x] **T-110, конфиг.** `Settings` падает в `APP_ENV=prod/production`
+  на dev-`JWT_SECRET`/ключе <32 символов и dev-`ADMIN_API_KEY`;
+  `CORS_ORIGINS=*` запрещён всегда (allow_credentials=True). Тесты:
+  `tests/unit/test_config_security.py` (10).
+- [x] **T-110, SQL-инъекции.** Проверены `app/llmops_dashboard.py`
+  (ORM select с параметрами), `app/dataset/jobs.py` и
+  `app/api/v1/admin_exports.py` (ORM update/delete, FileResponse,
+  path-containment); raw SQL только статический advisory-lock в
+  `app/audit.py`. Пользовательский ввод в SQL не интерполируется.
+- [x] **T-027, GHCR.** Job `publish-docker` в CI: только тег `v*`,
+  `docker/login-action` + `GITHUB_TOKEN`, metadata-теги
+  `vX.Y.Z`/`X.Y.Z`/`latest`, build-push-action с gha-cache; build-arg
+  `VITE_API_BASE`.
+- [x] **T-106, English prompts.** `beginner_en.txt`, `club_en.txt`,
+  `gm_en.txt`; `DEFAULT_LANGUAGE`; `language` в `/v1/commentary` и
+  `/stream` (fallback `Accept-Language`); английская retry-подсказка;
+  frontend передаёт `i18n.language`.
+- [x] **T-113, Grafana alerts.** `HighErrorRate`, `HighLatency`,
+  `LLMBudgetExceeded` в `deploy/grafana/provisioning/alerting/rules.yaml`;
+  проверено локально через Grafana API (3 правила, папка
+  ChessAnnotator).
+- [x] **Тесты/документация:** Vitest 55 (+2), E2E 28, backend 779 (+18);
+  README/SPEC/ARCHITECTURE/GETTING_STARTED/USER_GUIDE/DESIGN/TODO/
+  CHANGELOG/KNOWN_ISSUES.
+
+### Метрики
+
+- **Backend-тесты:** **779 passed, 1 skipped, 1 xfailed** (73 файла;
+  +18 к итерации 33), **268.32 с**, exit 0. Skip — cairo на Windows-dev;
+  xfail — KI-012.
+- **Новые тесты:** security-конфиг 10, English prompts +6,
+  English commentary +2, frontend +2.
+- **Frontend-тесты:** **55 passed** (8 файлов); typecheck 0; build 5.77 с
+  (JS 480.98 КБ / gzip 149.86, CSS 15.70 КБ / gzip 4.09).
+- **E2E mocked:** **28 passed** (14 × 2), 28.4 с; локально
+  `E2E_PREVIEW=1`, CI — `pnpm dev`.
+- **pip-audit:** до — 3 уязвимости в 2 пакетах; после — 0.
+- **ruff:** 0; **mypy:** 0 (strict), 84 файла.
+- **Alembic:** схема не менялась, head `dcf1da1421cd`.
+- **Grafana:** 3 правила, health `ok`, folderUID `chessannotator`.
+- **KI:** 58 записей, 26 Open, 32 Closed (+KI-058).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Фактический GHCR push | Нужен `git tag v*` и registry-доступ; workflow готов | T-027 |
+| Docker build в этой среде | Docker Hub auth timeout (TLS), не код | — |
+| Уведомления Telegram/Slack | DoD допускал UI-only; contact point — отдельный шаг | T-113 |
+| English chat/PDF/errors, en-промпты в БД | DoD T-106 — комментарии; нужна миграция `prompts.language` | KI-058 |
+| Порог latency 10 с для локальной LLM | Соответствует постановке; в dev будет шуметь | §5 |
+| `pnpm audit`/OS-аудит | pip-audit покрывает только Python | — |
+| LoRA-обучение (KI-030) | Нет GPU | KI-030 |
+
+### Что дальше
+
+- **T-027:** создать тег `v1.0.0`, проверить `publish-docker`, сделать
+  GHCR package public.
+- **KI-058:** `prompts.language`, en-чат/PDF, вычитка промптов.
+- **T-113:** contact point (Slack/Telegram) и пороги под production LLM.
+- **T-111:** multi-tenant/RBAC.

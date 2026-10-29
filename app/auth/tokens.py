@@ -1,9 +1,13 @@
-"""Генерация и проверка JWT (python-jose).
+"""Генерация и проверка JWT (PyJWT).
 
 Access- и refresh-токены различаются claim-ом ``type``; в полезной
 нагрузке есть ``sub`` (id пользователя), ``role``, ``jti`` и ``exp``.
 Refresh-токен НЕ даёт доступа к API: зависимости проверяют
 ``expected_type="access"``, а `/auth/refresh` принимает только refresh.
+
+T-110: PyJWT вместо python-jose — у последнего открытая algorithm-confusion
+уязвимость (PYSEC-2026-4298), а его транзитивный python-ecdsa не имеет
+исправленной версии (PYSEC-2026-1325). Для HS256 функциональность та же.
 """
 
 from __future__ import annotations
@@ -13,7 +17,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
 
-from jose import JWTError, jwt
+from jwt import InvalidTokenError
+from jwt import decode as jwt_decode
+from jwt import encode as jwt_encode
 
 from app.config import Settings
 from app.db.models import User
@@ -76,7 +82,9 @@ def _encode(
         "exp": now + ttl,
         "jti": uuid4().hex,
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_alg)
+    return jwt_encode(
+        payload, settings.jwt_secret, algorithm=settings.jwt_alg
+    )
 
 
 def create_access_token(user: User, settings: Settings) -> str:
@@ -123,8 +131,10 @@ def decode_token(
             claim-ов (→ HTTP 401).
     """
     try:
-        raw = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_alg])
-    except JWTError as exc:
+        raw = jwt_decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_alg]
+        )
+    except InvalidTokenError as exc:
         raise AuthError("Недействительный или истёкший токен") from exc
 
     sub = raw.get("sub")

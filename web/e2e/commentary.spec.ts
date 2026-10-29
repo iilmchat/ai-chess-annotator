@@ -32,7 +32,17 @@ test("комментарий: SSE-генерация → правка → PATCH 
     exact: true,
   });
   await expect(generate).toBeVisible();
+  const commentaryRequestPromise = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/v1/commentary/stream",
+  );
   await generate.click();
+  const commentaryRequest = await commentaryRequestPromise;
+  // T-106: UI передаёт текущий язык i18n (по умолчанию RU) в LLM-промпт.
+  expect(commentaryRequest.postDataJSON()).toMatchObject({
+    language: "ru",
+  });
 
   // После события done панель переключается на «Сгенерировать заново».
   await expect(

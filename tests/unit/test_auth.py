@@ -79,7 +79,7 @@ def _settings(**overrides: int) -> Settings:
     """Настройки для юнит-тестов: фиксированный секрет и TTL."""
     return Settings(
         _env_file=None,
-        jwt_secret="unit-test-secret-0123456789",
+        jwt_secret="unit-test-secret-0123456789-0123456789",
         access_token_ttl_min=overrides.get("access_token_ttl_min", 15),
         refresh_token_ttl_days=overrides.get("refresh_token_ttl_days", 7),
     )
@@ -553,7 +553,7 @@ def test_token_with_wrong_secret_rejected() -> None:
     issuer = _settings()
     verifier = Settings(
         _env_file=None,
-        jwt_secret="another-secret-9876543210",
+        jwt_secret="another-secret-9876543210-9876543210",
         access_token_ttl_min=15,
         refresh_token_ttl_days=7,
     )

@@ -74,13 +74,15 @@ POST /v1/analyze
 ### 3.2. Комментарий
 
 ```text
-POST /v1/commentary
+POST /v1/commentary {analysis_id, level, style?, language?}
+  → language = request → Accept-Language → DEFAULT_LANGUAGE (T-106)
   → load_game + load_analyses (moves/motifs/multipv)
   → build_fact_package (метаданные, ходы, ключевые моменты)
   → [+ RAG-контекст для gm]
+  → load_system_prompt(level, language)  # ru = БД/файл, en = *_en.txt
   → get_llm_client(level).complete
   → extract_moves_from_text + validate_moves
-  → retry (до 2) при нелегальных ходах
+  → retry (до 2) при нелегальных ходах (подсказка на языке комментария)
   → INSERT commentaries
   → JSON: text, tokens_used, validated, model, attempts
 ```
@@ -162,9 +164,15 @@ Prometheus :9090, Tempo :3200, collector :4317/:4318). Дашборд
 rate 5xx, стоимость и токены LLM. HTTP-спан `http_request` несёт
 `http.route` (полный, с префиксом) и `http.response.status_code`; при
 `OTEL_ENABLED=true` спаны и метрики уходят в коллектор, при `false` —
-no-op.
+no-op. Alert rules (T-113) — `deploy/grafana/provisioning/alerting/
+rules.yaml`: `HighErrorRate`, `HighLatency`, `LLMBudgetExceeded`;
+Grafana unified alerting, отдельный Alertmanager не требуется.
 
 ## 5.2. Auth lifecycle (KI-041, KI-055)
+
+JWT подписывается **PyJWT** (HS256): python-jose убран в T-110 из-за
+PYSEC-2026-4298, а его транзитивный python-ecdsa — PYSEC-2026-1325.
+Формат токенов не изменился, старые HS256-токены остаются валидными.
 
 ```text
 register → users.is_verified=false → MockEmailSender (verify JWT 24h)
@@ -238,8 +246,10 @@ Retention по умолчанию 7 дней (`EXPORT_RETENTION_DAYS`); файл
 
 ## 8. Безопасность и ограничения MVP
 
-- JWT/ролей нет: `/v1/ingest` защищён общим `X-Admin-Token`
-  (constant-time), полноценный RBAC — T-028.
+- JWT + роли `user/admin/auditor`, refresh в HttpOnly-cookie, Redis-denylist;
+  `/v1/ingest` дополнительно защищён `X-Admin-Token` (constant-time).
+- CORS — только явные origin-ы (`*` запрещён при `allow_credentials=True`,
+  T-110); в prod секреты-плейсхолдеры отвергаются на старте.
 - Rate limit 10/мин на IP, fail-open при недоступном Redis (KI-015).
 - Валидатор проверяет легальность SAN, не семантику (KI-023).
 - RAG-эмбеддинги — LM Studio 768 (L2); hash — fallback тестов.

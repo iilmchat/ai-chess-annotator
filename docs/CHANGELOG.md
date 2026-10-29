@@ -8,6 +8,30 @@
 
 ### Added
 
+- **English commentary localization (T-106, итерация 34):** файлы
+  `app/prompts/{beginner,club,gm}_en.txt`; настройка `DEFAULT_LANGUAGE`
+  (`ru`/`en`); `POST /v1/commentary` и `/v1/commentary/stream` принимают
+  `language` (`ru`/`en`), иначе берут `Accept-Language`; английский
+  retry-prompt; frontend передаёт `i18n.language` и нормализует его в
+  `en`/`ru`. Тесты: `test_prompts.py`, `test_api_commentary.py`,
+  Vitest `api.auth.test.ts`.
+- **Grafana alerting (T-113, итерация 34):**
+  `deploy/grafana/provisioning/alerting/rules.yaml` — `HighErrorRate`
+  (5xx > 5% / 5 мин), `HighLatency` (p95 `/v1/commentary` > 10 с /
+  5 мин), `LLMBudgetExceeded` (`increase(llm_cost_usd_total[24h])` >
+  5 USD). Проверено в локальной Grafana: 3 правила в папке
+  `ChessAnnotator`.
+- **GHCR publishing (T-027, итерация 34):** job `publish-docker` в CI
+  запускается только на тег `v*`, логинится в `ghcr.io` через
+  `GITHUB_TOKEN` и пушит `ghcr.io/iilmchat/ai-chess-annotator:vX.Y.Z`,
+  `:X.Y.Z`, `:latest`; `Dockerfile` принимает build-arg `VITE_API_BASE`.
+- **Security review (T-110, итерация 34):** `pip-audit` — 3 уязвимости
+  до, 0 после; `python-jose`/`ecdsa` заменены на **PyJWT** (HS256,
+  формат токенов совместим); `Settings` падает в `APP_ENV=prod/
+  production` на dev/коротком `JWT_SECRET` и dev-`ADMIN_API_KEY`, а
+  также запрещает `CORS_ORIGINS=*` (при `allow_credentials=True`).
+  Проверены raw SQL/ORM (`llmops_dashboard.py`, `export_jobs/jobs.py`) —
+  пользовательский ввод параметризуется SQLAlchemy.
 - **Frontend auth UX (KI-055, итерация 33):** публичные маршруты
   `/verify-email?token=…` (GET `/auth/verify-email` при монтировании,
   статусы проверки/успеха/ошибки, обновление `authStore` после успеха),

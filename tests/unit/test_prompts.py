@@ -16,7 +16,11 @@ from app.llm.prompts import (
     build_fact_package,
 )
 from app.motifs.models import Motif
-from app.prompts import PROMPT_LEVELS, load_system_prompt
+from app.prompts import (
+    PROMPT_LEVELS,
+    load_system_prompt,
+    resolve_language,
+)
 
 SHORT_PGN = """[White "Test White"]
 [Black "Test Black"]
@@ -100,6 +104,37 @@ async def test_prompt_exists_and_has_rules(level: str) -> None:
 async def test_prompt_unknown_level_raises() -> None:
     with pytest.raises(InvalidLevelError):
         await load_system_prompt("master")
+
+
+@pytest.mark.parametrize("level", sorted(PROMPT_LEVELS))
+async def test_english_prompt_exists_and_has_rules(level: str) -> None:
+    """T-106: для каждого уровня есть английский prompt-файл."""
+    text = await load_system_prompt(level, language="en")
+
+    assert len(text) > 300
+    assert "SAN" in text
+    assert "Markdown" in text
+    assert "FORBIDDEN" in text or "STRICT RULES" in text
+    assert "English" in text
+
+
+async def test_prompts_differ_by_language() -> None:
+    ru = await load_system_prompt("club")
+    en = await load_system_prompt("club", language="en")
+    assert ru != en
+
+
+async def test_unknown_language_raises() -> None:
+    with pytest.raises(ValueError, match="языка"):
+        await load_system_prompt("club", language="de")
+
+
+def test_resolve_language_precedence() -> None:
+    assert resolve_language("en", "ru-RU", "ru") == "en"
+    assert resolve_language(None, "en-US,en;q=0.9", "ru") == "en"
+    assert resolve_language(None, "ru-RU,ru;q=0.9", "en") == "ru"
+    assert resolve_language(None, None, "en") == "en"
+    assert resolve_language("de", "fr-FR", "ru") == "ru"
 
 
 async def test_prompts_are_distinct() -> None:

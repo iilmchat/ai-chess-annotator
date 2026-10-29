@@ -364,4 +364,56 @@ describe("api: Bearer из памяти и cookie-запросы", () => {
     expect(init.credentials).toBe("include");
     expect(authHeader(init)).toBe("Bearer access-old");
   });
+
+  it("streamCommentary передаёт нормализованный язык i18n (T-106)", async () => {
+    await authorize();
+    const { streamCommentary } = await import("./api");
+    const sse =
+      'event: done\ndata: {"commentary_id":1,"tokens_used":5,"validated":true}\n\n';
+    fetchMock.mockResolvedValueOnce(
+      new Response(sse, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+      }),
+    );
+
+    await streamCommentary(
+      "42",
+      "club",
+      { onDelta: () => undefined },
+      "en-US",
+    );
+
+    const { init } = callAt(fetchMock, 0);
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      analysis_id: 42,
+      level: "club",
+      language: "en",
+    });
+  });
+
+  it("generateCommentary передаёт язык в JSON-запрос (T-106)", async () => {
+    await authorize();
+    const { generateCommentary } = await import("./api");
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        commentary_id: 7,
+        text: "English commentary.",
+        tokens_used: 10,
+        validated: true,
+        model: "mock",
+        attempts: 1,
+      }),
+    );
+
+    await generateCommentary("42", "gm", "ru");
+
+    const { url, init } = callAt(fetchMock, 0);
+    expect(url).toBe("/v1/commentary");
+    expect(JSON.parse(String(init.body))).toEqual({
+      analysis_id: 42,
+      level: "gm",
+      language: "ru",
+    });
+  });
 });

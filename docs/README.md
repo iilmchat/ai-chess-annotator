@@ -61,6 +61,7 @@
 | [reports/v0.8.0/](development/reports/v0.8.0/) | Отчёт итерации 31 — observability-стек, диаграмма доски в PDF, фоновая выгрузка (T-107b/T-109b/KI-050) |
 | [reports/v0.9.0/](development/reports/v0.9.0/) | Отчёт итерации 32 — auth finalization (KI-041) и arq-воркер (KI-053) |
 | [reports/v0.10.0/](development/reports/v0.10.0/) | Отчёт итерации 33 — frontend auth-UX (KI-055) и retention экспортов (KI-054) |
+| [reports/v0.11.0/](development/reports/v0.11.0/) | Отчёт итерации 34 — security review (T-110), GHCR (T-027), English prompts (T-106), Grafana alerts (T-113) |
 | [reports/LLM_EVAL.md](development/reports/LLM_EVAL.md) | LLM-as-judge: средние оценки по трём шкалам (T-023) |
 
 ### Состояние проекта
@@ -68,7 +69,7 @@
 | Документ | Что внутри |
 | :--- | :--- |
 | [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секция `[Unreleased]` |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-057 со статусами, severity и планом закрытия |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-058 со статусами, severity и планом закрытия |
 
 ### Тесты и данные
 

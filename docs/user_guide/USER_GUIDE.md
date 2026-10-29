@@ -89,7 +89,9 @@ VITE_API_PROXY=http://127.0.0.1:8010 pnpm --dir web dev
    карточка выбранного хода. Кликайте по ходам, чтобы листать партию.
 6. Нажмите **«Сгенерировать»** в панели **«Комментарий»**. Текст
    появляется сразу, по мере генерации (SSE + «печатная машинка»); рядом
-   есть **«Остановить»**. Для `gm` используется DeepSeek.
+   есть **«Остановить»**. Для `gm` используется DeepSeek. Язык текста
+   следует за переключателем интерфейса RU/EN (T-106): поле `language`
+   уходит в `/v1/commentary/stream`.
 7. Прочитайте текст. Если нужно — нажмите **«Редактировать»**, поправьте и
    сохраните (**«Сохранить правку»**). Появится `edit #N` — запись ушла в
    датасет.
@@ -201,9 +203,16 @@ curl -s http://127.0.0.1:8000/v1/games/25 | jq
 ### 7.3. Комментарий
 
 ```bash
+# Русский (по умолчанию)
 curl -s -X POST http://127.0.0.1:8000/v1/commentary \
   -H 'Content-Type: application/json' \
-  -d '{"analysis_id":25,"level":"club"}' | jq
+  -d '{"analysis_id":25,"level":"club","language":"ru"}' | jq
+
+# Английский: language имеет приоритет над Accept-Language (T-106)
+curl -s -X POST http://127.0.0.1:8000/v1/commentary \
+  -H 'Content-Type: application/json' \
+  -H 'Accept-Language: en-US,en;q=0.9' \
+  -d '{"analysis_id":25,"level":"club","language":"en"}' | jq
 ```
 
 ### 7.4. Стриминг (SSE)
@@ -211,7 +220,7 @@ curl -s -X POST http://127.0.0.1:8000/v1/commentary \
 ```bash
 curl -N -X POST http://127.0.0.1:8000/v1/commentary/stream \
   -H 'Content-Type: application/json' \
-  -d '{"analysis_id":25,"level":"club"}'
+  -d '{"analysis_id":25,"level":"club","language":"en"}'
 # event: meta / event: delta / event: done | event: error
 ```
 

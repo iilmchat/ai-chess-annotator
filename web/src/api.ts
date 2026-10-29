@@ -285,13 +285,26 @@ export function getUsage(): Promise<UsageResponse> {
   return request<UsageResponse>("/v1/users/me/usage");
 }
 
+/** Нормализовать язык i18n (`en-US` → `en`) для LLM-промптов. */
+function requestLanguage(language?: string): "ru" | "en" | undefined {
+  if (!language) {
+    return undefined;
+  }
+  return language.toLowerCase().startsWith("en") ? "en" : "ru";
+}
+
 export function generateCommentary(
   analysisId: string,
   level: Level,
+  language?: string,
 ): Promise<CommentaryResponse> {
   return request<CommentaryResponse>("/v1/commentary", {
     method: "POST",
-    body: JSON.stringify({ analysis_id: Number(analysisId), level }),
+    body: JSON.stringify({
+      analysis_id: Number(analysisId),
+      level,
+      language: requestLanguage(language),
+    }),
   });
 }
 
@@ -372,6 +385,8 @@ export function askChat(
 export interface StreamMeta {
   model: string;
   level: string;
+  /** T-106: язык сгенерированного комментария. */
+  language?: "ru" | "en";
 }
 
 export interface StreamDone {
@@ -391,10 +406,15 @@ export async function streamCommentary(
   analysisId: string,
   level: Level,
   handlers: StreamHandlers,
+  language?: string,
 ): Promise<StreamDone> {
   return streamRequest(
     "/v1/commentary/stream",
-    { analysis_id: Number(analysisId), level },
+    {
+      analysis_id: Number(analysisId),
+      level,
+      language: requestLanguage(language),
+    },
     handlers,
   );
 }

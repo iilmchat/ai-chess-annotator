@@ -39,7 +39,7 @@ from app.llm import BaseLLMClient, get_llm_client
 from app.llm.calls import attach_commentary_id, record_cache_hit
 from app.llm.prompts import build_fact_package
 from app.llm.tokens import estimate_tokens
-from app.prompts import load_system_prompt
+from app.prompts import load_system_prompt, resolve_language
 from app.streaming import chunk_text, sse_event
 
 __all__ = ["stream_commentary"]
@@ -53,6 +53,7 @@ async def stream_commentary(
     level: str,
     style: str | None = None,
     *,
+    language: str | None = None,
     settings: Settings | None = None,
     client: BaseLLMClient | None = None,
     user_id: int | None = None,
@@ -60,11 +61,13 @@ async def stream_commentary(
     """Сгенерировать комментарий потоком SSE-событий.
 
     Args:
+        language: ``ru``/``en`` (T-106); ``None`` — из `DEFAULT_LANGUAGE`.
         user_id: владелец создаваемой записи `commentaries.user_id`
             (T-028/KI-035). ``None`` — служебная/тестовая генерация без
             пользователя (legacy-поведение).
     """
     cfg = settings or get_settings()
+    lang = resolve_language(language, None, cfg.default_language)
     llm: BaseLLMClient | None = None
     owns_client = client is None
     try:
@@ -82,9 +85,16 @@ async def stream_commentary(
             )
             return
 
-        system_prompt = await load_system_prompt(level, session)
+        system_prompt = await load_system_prompt(
+            level, session, language=lang
+        )
         if style:
-            system_prompt = f"{system_prompt}\n\nДОПОЛНИТЕЛЬНЫЙ СТИЛЬ: {style}"
+            label = (
+                "ADDITIONAL STYLE"
+                if lang == "en"
+                else "ДОПОЛНИТЕЛЬНЫЙ СТИЛЬ"
+            )
+            system_prompt = f"{system_prompt}\n\n{label}: {style}"
 
         model = client.model if client is not None else model_for_level(cfg, level)
         prompt_hash_value = make_prompt_hash(
@@ -119,7 +129,9 @@ async def stream_commentary(
             await session.flush()
             await session.commit()
             attach_commentary_id(row.id)
-            yield sse_event("meta", model="semantic-cache", level=level)
+            yield sse_event(
+                "meta", model="semantic-cache", level=level, language=lang
+            )
             for chunk in chunk_text(hit.text):
                 yield sse_event("delta", text=chunk)
             yield sse_event(
@@ -134,7 +146,7 @@ async def stream_commentary(
         package = build_fact_package(parsed, analyses, level)
         llm = client if client is not None else get_llm_client(level, cfg)
         llm.set_level(level)
-        yield sse_event("meta", model=llm.model, level=level)
+        yield sse_event("meta", model=llm.model, level=level, language=lang)
 
         chunks: list[str] = []
         async for chunk in llm.stream_generate(package, system_prompt=system_prompt):

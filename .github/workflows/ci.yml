@@ -149,3 +149,49 @@ jobs:
         # KI-051: wheel содержит только app; любой import app -> scripts
         # уронит uvicorn. Проверяем импорт без инфраструктуры.
         run: docker run --rm chessannotator:ci python -c "import app.main"
+
+  # T-027: публикация образа в GHCR только по тегу v* (release).
+  # На обычных push/PR job пропускается; права packages: write выданы
+  # только этому job-у, а не всему workflow.
+  publish-docker:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # ghcr.io/iilmchat/ai-chess-annotator
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=ChessAnnotator
+            org.opencontainers.image.description=AI chess commentary engine
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Тот же build-arg, что и в Dockerfile: пусто = same-origin SPA.
+          build-args: |
+            VITE_API_BASE=${{ vars.VITE_API_BASE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

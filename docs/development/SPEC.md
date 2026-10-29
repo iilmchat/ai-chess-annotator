@@ -242,7 +242,7 @@ multipv)` — уникальный ключ кэша движка + `engine_cach
 | Метод | Endpoint | Описание |
 |---|---|---|
 | `POST` | `/v1/analyze` | Принимает PGN/FEN, `level`, возвращает структурированный анализ (moves, evals, motifs). **Без LLM** — быстро. |
-| `POST` | `/v1/commentary` | Принимает `analysis_id` или PGN, `level`, `style`, возвращает сгенерированный комментарий. |
+| `POST` | `/v1/commentary` | Принимает `analysis_id` или PGN, `level`, `style`, `language` (`ru`/`en`, T-106), возвращает сгенерированный комментарий. |
 | `POST` | `/v1/chat` | Чат по партии: `{analysis_id, message}` → ответ LLM с проверкой вариантов. |
 | `GET` | `/v1/games/{id}` | Метаданные партии и сохранённые комментарии. |
 | `PATCH` | `/v1/commentaries/{id}` | Правка комментария (human-in-the-loop). |
@@ -279,6 +279,10 @@ access JWT admin/auditor. Чтение/запись партий, ходов,
 видит только свои `games`, администратор — все; чужой id неотличим от
 несуществующего (404). **Rate limiting:** через Redis (в т.ч.
 `/auth/login|register|forgot-password|reset-password|logout-all`).
+**Язык комментария (T-106):** поле `language` (`ru`/`en`) → заголовок
+`Accept-Language` → `DEFAULT_LANGUAGE` (по умолчанию `ru`); для `en`
+используются `app/prompts/<level>_en.txt`, факт-пакет остаётся русским
+(промпт требует перевести подписи, сохранив SAN/оценки).
 **FinOps:** дневной бюджет токенов считается по `user:{id}` из JWT,
 анонимно — по IP.
 

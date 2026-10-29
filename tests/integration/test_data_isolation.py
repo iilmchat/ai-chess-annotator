@@ -91,6 +91,7 @@ def _settings() -> Settings:
         # get_settings(): без переноса пути приложение искало бы
         # /usr/bin/stockfish на Windows-dev (KI-006).
         stockfish_path=get_settings().stockfish_path,
+        jwt_secret="isolation-test-secret-0123456789-0123456789",
     )
 
 

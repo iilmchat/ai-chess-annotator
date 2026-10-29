@@ -122,6 +122,8 @@ async def test_watcher_applies_message(
 
 def test_cache_object_is_shared() -> None:
     # Страховка от случайного пересоздания кэша в другом модуле.
-    prompts._cache["club"] = "x"
-    assert "club" in prompts._cache
+    # T-106: ключ кэша — (language, level).
+    prompts._cache[("ru", "club")] = "x"
+    assert ("ru", "club") in prompts._cache
     prompts.reset_prompt_cache("club")
+    assert ("ru", "club") not in prompts._cache

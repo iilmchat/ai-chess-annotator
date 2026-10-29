@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6380/0"
 
     # Auth
-    jwt_secret: str = "dev_secret_change_me"
+    jwt_secret: str = "dev_secret_change_me_32_chars_min_000000"
     jwt_alg: str = "HS256"
     access_token_ttl_min: int = 15
     refresh_token_ttl_days: int = 7
@@ -61,6 +61,57 @@ class Settings(BaseSettings):
                 "(браузеры не принимают SameSite=None без Secure)"
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_security_defaults(self) -> "Settings":
+        """T-110: не пускать dev-секреты и `*`-CORS в production.
+
+        Приложение всегда добавляет CORSMiddleware с
+        ``allow_credentials=True``; браузерный стандарт запрещает сочетать
+        это с ``Access-Control-Allow-Origin: *``, а реальная конфигурация
+        с wildcard означала бы «любой сайт с cookie пользователя». Поэтому
+        wildcard запрещён в любом окружении, а дефолтные/пустые секреты —
+        только в prod (dev/test должны запускаться без настройки).
+        """
+        origins = self.cors_origin_list
+        if "*" in origins:
+            raise ValueError(
+                "CORS_ORIGINS не может содержать '*': приложение отправляет "
+                "allow_credentials=True (нужен явный список origin-ов)"
+            )
+
+        if self.app_env.strip().lower() not in {"prod", "production"}:
+            return self
+
+        secret = self.jwt_secret.strip()
+        if len(secret) < 32 or self._looks_like_placeholder(secret):
+            raise ValueError(
+                "JWT_SECRET в production должен быть случайной строкой "
+                "длиной ≥ 32 символов (например: openssl rand -hex 32); "
+                "dev-плейсхолдеры запрещены"
+            )
+
+        admin_key = (self.admin_api_key or "").strip()
+        if admin_key and (
+            admin_key.lower()
+            in {"dev-admin-token", "dev-admin-key", "admin", "changeme"}
+            or "change_me" in admin_key.lower()
+        ):
+            raise ValueError(
+                "ADMIN_API_KEY в production не должен быть dev-плейсхолдером; "
+                "задайте случайный токен или оставьте пустым"
+            )
+        return self
+
+    @staticmethod
+    def _looks_like_placeholder(value: str) -> bool:
+        """Похож ли секрет на дефолтный/документационный плейсхолдер."""
+        normalized = value.strip().lower()
+        return (
+            normalized.startswith("dev_secret")
+            or "change_me" in normalized
+            or normalized in {"secret", "changeme", "change-me", "dev-secret"}
+        )
 
     #: Тестовый seam (T-028): подмена get_current_user для старой сюиты.
     #: Работает ТОЛЬКО при APP_ENV=test; в dev/prod значение игнорируется.
@@ -159,6 +210,10 @@ class Settings(BaseSettings):
     llm_warmup_enabled: bool = True
 
     # Commentary (T-016)
+    #: Язык комментариев по умолчанию (T-106): `ru` или `en`. Запрос может
+    #: переопределить его полем `language`; иначе учитывается
+    #: `Accept-Language`, затем это значение.
+    default_language: Literal["ru", "en"] = "ru"
     #: Сколько раз переспрашивать LLM, если валидатор нашёл нелегальные ходы.
     commentary_max_retries: int = 2
 

@@ -11,7 +11,7 @@ interface CommentaryPanelProps {
 }
 
 export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [commentary, setCommentary] = useState<CommentaryResponse | null>(null);
   const [streamText, setStreamText] = useState("");
   const [draft, setDraft] = useState("");
@@ -49,13 +49,18 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
     setSavedEdit(null);
     let full = "";
     try {
-      const done = await streamCommentary(analysisId, level, {
-        signal: controller.signal,
-        onDelta: (text) => {
-          full += text;
-          setStreamText(full);
+      const done = await streamCommentary(
+        analysisId,
+        level,
+        {
+          signal: controller.signal,
+          onDelta: (text) => {
+            full += text;
+            setStreamText(full);
+          },
         },
-      });
+        i18n.language,
+      );
       setCommentary({
         commentary_id: done.commentary_id ?? 0,
         text: full,

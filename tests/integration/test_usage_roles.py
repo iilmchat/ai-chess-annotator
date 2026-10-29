@@ -69,6 +69,7 @@ def _settings() -> Settings:
         prompt_pubsub_enabled=False,
         semantic_cache_enabled=False,
         pro_ips="",
+        jwt_secret="usage-roles-test-secret-0123456789-0123456789",
     )
 
 

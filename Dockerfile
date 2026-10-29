@@ -6,6 +6,12 @@ FROM node:22-alpine AS web-build
 WORKDIR /web
 RUN npm install --global pnpm@12.14.0
 
+# T-027: SPA собирается в тот же origin, что API, поэтому VITE_API_BASE
+# обычно пуст. Для отдельного frontend-домена его можно передать
+# build-arg-ом (GHCR workflow берёт vars.VITE_API_BASE).
+ARG VITE_API_BASE=""
+ENV VITE_API_BASE=${VITE_API_BASE}
+
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 

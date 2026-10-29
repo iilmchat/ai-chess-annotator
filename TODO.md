@@ -291,7 +291,7 @@
   CHANGELOG, RELEASES и GETTING_STARTED обновлены; ссылки проверены.
 - **Оценка:** 1
 
-### [ ] T-027. Релиз v0.1.0
+### [x] T-027. Релиз v0.1.0
 - **Зависит от:** T-023…T-026
 - **Что:** чек-лист из `RELEASES.md`, тег `v0.1.0`, публикация образа,
   релиз-ноты.
@@ -299,6 +299,11 @@
 - **Статус итерации 14:** релизные артефакты (CHANGELOG 0.1.0, README,
   RELEASES, LLM_EVAL) готовы; тег и GHCR не созданы — нет доступа к
   registry и не закрыт T-024 (слепой тест).
+- **Статус итерации 34 (T-046):** job `publish-docker` в CI
+  (`docker/login-action`, `metadata-action`, `build-push-action`) пушит
+  `ghcr.io/iilmchat/ai-chess-annotator:vX.Y.Z` и `:latest` по тегу `v*`;
+  build-arg `VITE_API_BASE` проброшен. Фактический `git tag`/push —
+  действие мейнтейнера при релизе.
 - **Оценка:** 0.5
 
 ---
@@ -747,6 +752,20 @@
 - **Остаток:** SMTP/2FA/SSO/лимит по email/resend — KI-056; signed URL
   экспортов — KI-057.
 
+### [x] T-046. Release Prep: Security, GHCR, EN localization, Grafana alerts (T-110, T-027, T-106, T-113, итерация 34)
+- **Зависит от:** T-027, T-028b, T-045, T-109b
+- **Что:** T-110 — pip-audit и миграция python-jose→PyJWT, валидаторы
+  prod-секретов/CORS, ревизия raw SQL; T-027 — `publish-docker` в CI
+  (GHCR, теги `v*`/`:latest`, `VITE_API_BASE`); T-106 — `*_en.txt`,
+  `DEFAULT_LANGUAGE`, `language`/`Accept-Language` в commentary,
+  frontend `i18n.language`; T-113 — Grafana provisioning трёх alert
+  rules.
+- **DoD:** pip-audit без уязвимостей; prod-валидатор; E2E/back-end
+  зелёные; `language=en` возвращает английский текст (тест); в Grafana
+  видны 3 правила.
+- **Статус:** выполнено; фактический push GHCR — при создании тега
+  мейнтейнером.
+
 ### [x] T-044. Dataset Schema v2: fact_sheet → commentary (KI-039, итерация 26)
 - **Зависит от:** T-104
 - **Что:** `export_dataset.py` по умолчанию `schema_version=2`:
@@ -785,7 +804,9 @@
   **Реальное обучение не выполнялось** — на машине нет GPU/CUDA
   (KI-030 остаётся Open).
 - **T-105.** On-prem профиль без облачных LLM (`LLM_PROVIDER=local`).
-- **T-106.** Английская локализация комментариев.
+- **T-106.** Английская локализация комментариев. **[x]** — выполнено в
+  T-046 (итерация 34): `*_en.txt`, `DEFAULT_LANGUAGE`, `language`/
+  `Accept-Language`, frontend передаёт `i18n.language`.
 ### [x] T-107. Экспорт комментария в PDF (итерация 30)
 - **Зависит от:** T-016, T-019
 - **Статус итерации 30:** `GET /v1/commentaries/{id}/export/pdf` —
@@ -851,13 +872,17 @@
   observability.json` (p95/p99 для `/v1/commentary` и `/v1/analyze`,
   5xx error rate, tokens/cost) провижинится автоматически; datasource
   Tempo — для трейсов. Алерты/Alertmanager по-прежнему T-113.
-- **T-110.** Pen-test и security review.
+- **T-110.** Pen-test и security review. **[x]** — выполнено в T-046
+  (итерация 34): pip-audit (python-jose/ecdsa заменены на PyJWT),
+  CORS/secrets-валидаторы, ревизия raw SQL.
 - **T-111.** Multi-tenant организации и RBAC (роли `owner/admin/editor/
   viewer`, изоляция данных по `org_id`).
 - **T-112.** A/B-эксперименты версий промптов с автоматической оценкой
   LLM-as-judge и выбором победителя.
 - **T-113.** Алерты аномалий стоимости (Grafana/Alertmanager): всплеск
-  токенов, дорогая модель, рост error rate.
+  токенов, дорогая модель, рост error rate. **[x]** — выполнено в T-046
+  (итерация 34): 3 провижиненных правила Grafana (HighErrorRate,
+  HighLatency, LLMBudgetExceeded).
 - **T-114.** PII-редакция в трейсах, аудите и экспортах (email, IP,
   имена) с настраиваемыми правилами.
 - **T-115.** Backup/DR: PITR для Postgres, версии промптов, RAG-датасет

@@ -182,6 +182,11 @@ cp .env.example .env
   закомментируйте `STOCKFISH_PATH`.
 - `JWT_SECRET` — **обязательно** замените на случайную строку ≥ 32
   символов. Пример: `openssl rand -hex 32`.
+- `CORS_ORIGINS` — явный список origin-ов через запятую; `*` запрещён
+  (приложение отправляет `allow_credentials=True`, T-110).
+- `DEFAULT_LANGUAGE` — язык комментариев по умолчанию: `ru` или `en`
+  (T-106). Запрос `/v1/commentary` может переопределить его полем
+  `language`, иначе учитывается `Accept-Language`.
 - `LLM_*` — пока можно оставить пустыми (LLM не нужна для healthcheck).
 - `ENGINE_CACHE_*` — кэш результатов Stockfish (T-108): включён по
   умолчанию, TTL 30 дней, чистка при старте приложения.
@@ -430,6 +435,18 @@ error rate 5xx, стоимость и токены LLM, латентность �
 приложение запущено в контейнере в сети observability-стека, endpoint —
 `http://otel-collector:4318`.
 
+**Алерты (T-113).** `deploy/grafana/provisioning/alerting/rules.yaml`
+провижинит три правила в Grafana → Alerting → Alert rules:
+`HighErrorRate` (5xx > 5% за 5 мин), `HighLatency` (p95
+`/v1/commentary` > 10 с за 5 мин) и `LLMBudgetExceeded` (стоимость LLM
+за 24 ч > 5 USD). Отдельный Alertmanager не требуется — правила
+оцениваются unified alerting Grafana; уведомления добавляются contact
+point'ом. Проверка через API:
+
+```bash
+curl -s -u admin:admin http://127.0.0.1:3000/api/v1/provisioning/alert-rules
+```
+
 **Диаграммы доски в PDF** требуют нативной `libcairo2` (для `cairosvg`).
 В production-образе она установлена (`Dockerfile`); на Windows без Cairo
 PDF генерируется без картинки (graceful degradation), см. §8.11.
@@ -484,11 +501,15 @@ cp .env.example .env
 
 **Обязательно заменить:**
 
-- `JWT_SECRET` — `openssl rand -hex 32`.
+- `JWT_SECRET` — `openssl rand -hex 32`. В `APP_ENV=prod` приложение
+  **не стартует** с dev-плейсхолдером или ключом короче 32 символов
+  (T-110).
 - `POSTGRES_PASSWORD` — сильный пароль.
 - `DEEPSEEK_API_KEY` — если нужен уровень `gm`.
-- `ADMIN_API_KEY` — токен для `POST /v1/ingest` (`X-Admin-Token`).
-- `PROD_CORS_ORIGINS` — ваш домен (например, `https://chess.example.com`).
+- `ADMIN_API_KEY` — токен для `POST /v1/ingest` (`X-Admin-Token`);
+  dev-плейсхолдер в prod также отвергается (T-110).
+- `PROD_CORS_ORIGINS` — ваш домен (например, `https://chess.example.com`),
+  без `*`.
 
 `APP_ENV=prod`, адреса `postgres`/`redis` и путь к Stockfish выставляются
 в `docker-compose.prod.yml`; dev-значения `127.0.0.1` и Windows-путь
@@ -544,6 +565,26 @@ docker compose -p chessannotator-prod -f docker-compose.prod.yml up -d --build
 
 Миграции применяются автоматически в entrypoint **до** старта
 приложения.
+
+### 7.5. Публикация образа в GHCR (T-027)
+
+На обычных push/PR образ только собирается и проверяется (`docker` job).
+Публикация включается тегом `v*`:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Job `publish-docker` в `.github/workflows/ci.yml` логинится в `ghcr.io`
+через `GITHUB_TOKEN` (`packages: write`), собирает образ и пушит теги
+`ghcr.io/iilmchat/ai-chess-annotator:v1.0.0`, `:1.0.0`, `:latest`.
+`VITE_API_BASE` можно задать repository variable, если SPA живёт на
+отдельном домене; по умолчанию образ same-origin.
+
+```bash
+docker pull ghcr.io/iilmchat/ai-chess-annotator:latest
+```
 
 ---
 
