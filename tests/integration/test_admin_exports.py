@@ -8,7 +8,9 @@
 * фильтры `date_from/date_to`, `level`, `human_edited`, `schema_version`;
 * v2: `user` — пакет фактов (`# Партия`), `assistant` — `edited_text`,
   `metadata`/`schema_version=2`; v1: `user == original_text`;
-* страница `/admin/exports/dataset` с формой (admin и auditor).
+* страница `/admin/exports/dataset` с формой (admin и auditor);
+* аудит `dataset.export` (KI-050): фильтры, число выгруженных строк и
+  актор (JWT/сессия) пишутся в `audit_logs` после завершения стрима.
 
 Данные (Game/Move/Commentary/Edit) сидятся напрямую ORM и удаляются после
 теста. Требуется PostgreSQL; без него модуль скипается.
@@ -19,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -26,7 +29,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -34,6 +37,7 @@ from app.auth.tokens import create_access_token
 from app.config import Settings, get_settings
 from app.db.models import (
     AdminRole,
+    AuditLog,
     Commentary,
     Edit,
     Game,
@@ -486,3 +490,141 @@ def test_admin_export_page_is_available(
         assert response.status_code == 200, (role, response.text)
         assert "dataset-export-form" in response.text
         assert "/v1/admin/exports/edits.jsonl" in response.text
+
+
+# --- Аудит выгрузки (KI-050, итерация 29) ---------------------------------
+
+
+async def _max_audit_id() -> int:
+    """Максимальный id в audit_logs до запроса (аудит append-only)."""
+    engine = create_async_engine(_db_url(), poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            value = await session.scalar(select(func.max(AuditLog.id)))
+            return int(value or 0)
+    finally:
+        await engine.dispose()
+
+
+async def _export_audits_after(audit_id: int) -> list[AuditLog]:
+    """Записи `dataset.export`, появившиеся после `audit_id`."""
+    engine = create_async_engine(_db_url(), poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            rows = await session.scalars(
+                select(AuditLog)
+                .where(
+                    AuditLog.action == "dataset.export",
+                    AuditLog.id > audit_id,
+                )
+                .order_by(AuditLog.id)
+            )
+            return list(rows)
+    finally:
+        await engine.dispose()
+
+
+def _await_export_audit(audit_id: int, timeout_s: float = 5.0) -> AuditLog:
+    """Дождаться аудита выгрузки (пишется после завершения генератора)."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        rows = asyncio.run(_export_audits_after(audit_id))
+        if rows:
+            return rows[0]
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                "audit_logs.action=dataset.export не появился после выгрузки"
+            )
+        time.sleep(0.05)
+
+
+def test_export_writes_audit_record(
+    client: TestClient,
+    settings: Settings,
+    users: dict[str, str],
+    seeded: dict[str, int],
+) -> None:
+    """Фильтры и число фактически выгруженных строк попадают в аудит."""
+    before = asyncio.run(_max_audit_id())
+    response = client.get(
+        "/v1/admin/exports/edits.jsonl"
+        "?level=club&human_edited=false&schema_version=1",
+        headers=_bearer(settings, users, "admin"),
+    )
+    assert response.status_code == 200, response.text
+    assert len(_parse_ndjson(response)) == 1
+
+    audit = _await_export_audit(before)
+    assert audit.action == "dataset.export"
+    assert audit.target_id == "edits.jsonl"
+    assert audit.actor.startswith("jwt:")
+    details = audit.details
+    assert details["level"] == "club"
+    assert details["human_edited"] is False
+    assert details["schema_version"] == 1
+    assert details["date_from"] is None
+    assert details["date_to"] is None
+    assert details["rows"] == 1
+    assert details["completed"] is True
+    assert isinstance(details["trace_id"], str)
+    assert details["trace_id"]
+
+
+def test_export_empty_result_audited_with_zero_rows(
+    client: TestClient,
+    settings: Settings,
+    users: dict[str, str],
+    seeded: dict[str, int],
+) -> None:
+    before = asyncio.run(_max_audit_id())
+    response = client.get(
+        "/v1/admin/exports/edits.jsonl"
+        "?date_from=2000-01-01&date_to=2000-01-02",
+        headers=_bearer(settings, users, "admin"),
+    )
+    assert response.status_code == 200
+    assert response.text == ""
+
+    audit = _await_export_audit(before)
+    assert audit.details["rows"] == 0
+    assert audit.details["completed"] is True
+    assert audit.details["date_from"] == "2000-01-01"
+    assert audit.details["date_to"] == "2000-01-02"
+
+
+def test_export_audit_actor_from_admin_cookie_session(
+    client: TestClient, seeded: dict[str, int]
+) -> None:
+    """Кнопка из админки: актор — парольная сессия, а не JWT."""
+    _login_admin(client)
+    before = asyncio.run(_max_audit_id())
+    response = client.get("/v1/admin/exports/edits.jsonl?level=club")
+    assert response.status_code == 200, response.text
+
+    audit = _await_export_audit(before)
+    assert audit.actor == "session:admin"
+    assert audit.details["level"] == "club"
+    assert audit.details["human_edited"] is None
+    assert audit.details["schema_version"] == 2
+    assert audit.details["rows"] == 1
+
+
+def test_export_audit_for_auditor_jwt(
+    client: TestClient,
+    settings: Settings,
+    users: dict[str, str],
+    seeded: dict[str, int],
+) -> None:
+    before = asyncio.run(_max_audit_id())
+    response = client.get(
+        "/v1/admin/exports/edits.jsonl?level=gm&schema_version=1",
+        headers=_bearer(settings, users, "auditor"),
+    )
+    assert response.status_code == 200, response.text
+
+    audit = _await_export_audit(before)
+    assert audit.actor.startswith("jwt:")
+    assert audit.details["level"] == "gm"
+    assert audit.details["rows"] == 1

@@ -20,6 +20,11 @@
 
 Чтение — keyset-пагинацией по `edits.id` (батчами), без загрузки всей
 таблицы в память; пустой результат — 200 с пустым телом.
+
+Аудит (KI-050, итерация 29): после завершения генератора пишется запись
+`audit_logs.action="dataset.export"` с фильтрами, числом фактически
+выгруженных строк и trace_id. Запись — best-effort в отдельной сессии:
+сбой аудита не ломает уже отданный стрим (только warning в лог).
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin import ADMIN_SESSION_COOKIE, decode_admin_session
+from app.audit import append_audit
 from app.auth.tokens import decode_token
 from app.commentary.service import load_analyses
 from app.config import Settings, get_settings
@@ -55,6 +61,7 @@ from app.errors import (
     InvalidPgnError,
 )
 from app.ingestion import parse_pgn
+from app.tracing import current_trace_id
 
 __all__ = ["router"]
 
@@ -188,6 +195,53 @@ async def _record_for_edit(
     )
 
 
+async def _audit_dataset_export(
+    *,
+    actor: str,
+    date_from: date | None,
+    date_to: date | None,
+    level: ExportLevel | None,
+    human_edited: bool | None,
+    schema_version: int,
+    rows: int,
+    completed: bool,
+) -> None:
+    """Записать факт выгрузки датасета в `audit_logs` (KI-050).
+
+    Вызывается после завершения (или обрыва) стрима, в отдельной сессии:
+    основная транзакция запроса уже не нужна, а аудит не должен ломать
+    скачивание. Фильтры пишутся как есть (без PII), ``rows`` — число
+    фактически отданных строк (v2 может пропускать проблемные записи).
+    """
+    try:
+        async with SessionLocal() as session:
+            await append_audit(
+                session,
+                actor=actor,
+                action="dataset.export",
+                target_id="edits.jsonl",
+                details={
+                    "date_from": date_from.isoformat() if date_from else None,
+                    "date_to": date_to.isoformat() if date_to else None,
+                    "level": level,
+                    "human_edited": human_edited,
+                    "schema_version": schema_version,
+                    "rows": rows,
+                    "completed": completed,
+                    "trace_id": current_trace_id(),
+                },
+            )
+            await session.commit()
+        logger.info(
+            "dataset_export_audited",
+            actor=actor,
+            rows=rows,
+            completed=completed,
+        )
+    except Exception as exc:  # best-effort: не ломаем уже отданный стрим
+        logger.warning("dataset_export_audit_failed", error=str(exc))
+
+
 async def _iter_edits_jsonl(
     *,
     date_from: date | None,
@@ -195,46 +249,65 @@ async def _iter_edits_jsonl(
     level: ExportLevel | None,
     human_edited: bool | None,
     schema_version: int,
+    actor: str,
 ) -> AsyncIterator[bytes]:
-    """Стримить NDJSON батчами (keyset по `edits.id`)."""
+    """Стримить NDJSON батчами (keyset по `edits.id`) и аудировать выгрузку."""
     last_id = 0
-    async with SessionLocal() as session:
-        while True:
-            statement = (
-                select(Edit, Commentary, Game)
-                .join(Commentary, Edit.commentary_id == Commentary.id)
-                .outerjoin(Game, Commentary.game_id == Game.id)
-                .where(Edit.id > last_id)
-                .order_by(Edit.id)
-                .limit(DEFAULT_BATCH_SIZE)
-            )
-            statement = _apply_filters(
-                statement,
-                date_from=date_from,
-                date_to=date_to,
-                level=level,
-                human_edited=human_edited,
-            )
-            rows = (await session.execute(statement)).all()
-            if not rows:
-                return
-            for row in rows:
-                edit: Edit = row[0]
-                commentary: Commentary = row[1]
-                game: Game | None = row[2]
-                last_id = edit.id
-                record = await _record_for_edit(
-                    session,
-                    edit,
-                    commentary,
-                    game,
-                    schema_version=schema_version,
+    exported = 0
+    completed = False
+    try:
+        async with SessionLocal() as session:
+            while True:
+                statement = (
+                    select(Edit, Commentary, Game)
+                    .join(Commentary, Edit.commentary_id == Commentary.id)
+                    .outerjoin(Game, Commentary.game_id == Game.id)
+                    .where(Edit.id > last_id)
+                    .order_by(Edit.id)
+                    .limit(DEFAULT_BATCH_SIZE)
                 )
-                if record is None:
-                    continue
-                yield (
-                    json.dumps(record, ensure_ascii=False) + "\n"
-                ).encode("utf-8")
+                statement = _apply_filters(
+                    statement,
+                    date_from=date_from,
+                    date_to=date_to,
+                    level=level,
+                    human_edited=human_edited,
+                )
+                rows = (await session.execute(statement)).all()
+                if not rows:
+                    completed = True
+                    return
+                for row in rows:
+                    edit: Edit = row[0]
+                    commentary: Commentary = row[1]
+                    game: Game | None = row[2]
+                    last_id = edit.id
+                    record = await _record_for_edit(
+                        session,
+                        edit,
+                        commentary,
+                        game,
+                        schema_version=schema_version,
+                    )
+                    if record is None:
+                        continue
+                    exported += 1
+                    yield (
+                        json.dumps(record, ensure_ascii=False) + "\n"
+                    ).encode("utf-8")
+    finally:
+        # completed=False — клиент оборвал соединение/ошибка: фиксируем
+        # факт частичной выгрузки, а не теряем его.
+        await _audit_dataset_export(
+            actor=actor,
+            date_from=date_from,
+            date_to=date_to,
+            level=level,
+            human_edited=human_edited,
+            schema_version=schema_version,
+            rows=exported,
+            completed=completed,
+        )
 
 
 @router.get("/edits.jsonl")
@@ -278,6 +351,7 @@ async def export_edits_jsonl(
             level=level,
             human_edited=human_edited,
             schema_version=schema_version,
+            actor=_actor,
         ),
         media_type="application/x-ndjson",
         headers={
