@@ -183,6 +183,10 @@ cp .env.example .env
 - `JWT_SECRET` — **обязательно** замените на случайную строку ≥ 32
   символов. Пример: `openssl rand -hex 32`.
 - `LLM_*` — пока можно оставить пустыми (LLM не нужна для healthcheck).
+- `ENGINE_CACHE_*` — кэш результатов Stockfish (T-108): включён по
+  умолчанию, TTL 30 дней, чистка при старте приложения.
+- `PDF_FONT_PATH` — нужен только если в системе нет Arial/DejaVuSans
+  (PDF-экспорт комментария подбирает их автоматически).
 
 ### 3.5. Применить миграции
 
@@ -626,6 +630,26 @@ CI, кэш).
 Если GPU нет — использовать облачную LLM (§5.1) или отложить локальную
 LLM до появления GPU.
 
+### 8.10. PDF-экспорт → `503 pdf_font_unavailable`
+
+**Симптом:** `GET /v1/commentaries/{id}/export/pdf` возвращает
+`503 {"detail": "...", "code": "pdf_font_unavailable"}`.
+
+**Причина:** для кириллицы в PDF нужен TrueType-шрифт; в минимальных
+Linux-образах (`python:3.12-slim`) системных шрифтов нет.
+
+**Решение:**
+
+```bash
+# Debian/Ubuntu:
+sudo apt-get install -y fonts-dejavu-core
+# или задать явный путь в .env:
+# PDF_FONT_PATH=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+```
+
+В Docker-образе (`Dockerfile`) `fonts-dejavu-core` уже установлен.
+Проверка шрифтов: `python -c "from app.export.pdf import find_pdf_font; print(find_pdf_font())"`.
+
 ---
 
 ## 9. Обслуживание: retention и FinOps
@@ -635,6 +659,9 @@ T-030) и `usage_daily` (FinOps-агрегаты, T-031b). Их чистку и 
 отчёты можно повесить на cron/планировщик: скрипты идемпотентны, читают
 `Settings` (`.env`/ENV) и возвращают exit code `0` (успех) или `2`
 (неверные аргументы / БД недоступна).
+
+`engine_cache` (T-108) в cron не нужен: устаревшие строки удаляются
+автоматически при старте приложения (`ENGINE_CACHE_TTL_DAYS`, 30 дней).
 
 ### 9.1. Retention `llm_calls` (KI-048)
 

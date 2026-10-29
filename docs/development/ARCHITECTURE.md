@@ -32,7 +32,8 @@
 | Модуль | Ответственность |
 | :--- | :--- |
 | `app/ingestion/` | PGN/FEN → `ParsedGame`, ECO, фазы, повторы |
-| `app/engine/` | async UCI-клиент Stockfish, пул, классификация, Policy, валидатор |
+| `app/engine/` | async UCI-клиент Stockfish, пул, классификация, Policy, валидатор; `engine_cache` (T-108) |
+| `app/export/` | PDF-экспорт комментария: fpdf2 + TTF-шрифт, шапка/ходы/текст (T-107) |
 | `app/motifs/` | эвристики мотивов (слабые поля, линии, вилки, мат и т.д.) |
 | `app/llm/` | OpenAI-совместимый клиент, фабрика по уровню, пакет фактов, прогрев |
 | `app/prompts/` | системные промпты `beginner`/`club`/`gm`: `.txt` — seed/fallback, таблица `prompts` — источник истины, in-memory кэш |
@@ -57,6 +58,8 @@
 POST /v1/analyze
   → parse_pgn (python-chess: легальность, ECO, фазы)
   → EnginePool.analyze_game_moves (MultiPV по уровню)
+     ↳ EngineCache: попадание по (fen_hash, engine_version, depth, multipv)
+       → без запуска поиска; промах → Stockfish → best-effort store
   → detect_motifs + classify_move + choose_recommended_move
   → INSERT games/moves/motifs
   → JSON: analysis_id, initial_fen, moves[] с fen/оценкой/мотивами
@@ -105,6 +108,7 @@ PATCH /v1/commentaries/{id}
 | POST | `/v1/commentary` | `analysis_id` + level → комментарий |
 | POST | `/v1/commentary/stream` | SSE: `meta`/`delta`/`done`/`error` |
 | PATCH | `/v1/commentaries/{id}` | ручная правка + `edits` |
+| GET | `/v1/commentaries/{id}/export/pdf` | PDF комментария (T-107) |
 | POST | `/v1/chat` | вопрос по `analysis_id` |
 | POST | `/v1/chat/stream` | SSE-ответ чата |
 | POST | `/v1/ingest` | PGN → `annotated_games` (`X-Admin-Token`) |
@@ -115,8 +119,10 @@ PATCH /v1/commentaries/{id}
 
 ## 5. База данных
 
-8 таблиц: `users`, `games`, `moves`, `motifs`, `annotated_games`,
-`retrieval_cache`, `commentaries`, `edits`. Основное:
+15 таблиц: `users`, `games`, `moves`, `motifs`, `annotated_games`,
+`retrieval_cache`, `commentaries`, `edits`, `prompts`, `audit_logs`,
+`semantic_cache`, `llm_evaluations`, `llm_calls`, `usage_daily`,
+`engine_cache`. Основное:
 
 - `moves` — SAN/FEN/eval/best/delta/class/multipv;
 - `motifs` — тип, описание, важность, FK на ход;

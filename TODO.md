@@ -738,8 +738,32 @@
   (KI-030 остаётся Open).
 - **T-105.** On-prem профиль без облачных LLM (`LLM_PROVIDER=local`).
 - **T-106.** Английская локализация комментариев.
-- **T-107.** Экспорт комментария в PDF / DOCX.
-- **T-108.** Кэш retrieval по `fen_hash` (уже в схеме — включить).
+### [x] T-107. Экспорт комментария в PDF (итерация 30)
+- **Зависит от:** T-016, T-019
+- **Статус итерации 30:** `GET /v1/commentaries/{id}/export/pdf` —
+  серверный PDF (fpdf2 + TTF-шрифт с кириллицей): шапка (игроки, турнир,
+  дата, результат, уровень, модель, статус), PGN-ходы, текст комментария
+  с абзацами, номер страницы; `Content-Disposition: attachment`;
+  JWT + изоляция данных (чужая запись → 404), `asyncio.to_thread` для
+  CPU-bound генерации; битый PGN не ломает экспорт. Кнопка «Скачать PDF»
+  в панели комментария (RU/EN), API-хелпер с refresh. Тесты:
+  `tests/unit/test_pdf_export.py`,
+  `tests/integration/test_commentary_pdf.py`, `web/src/api.pdf.test.ts`.
+  DOCX и диаграмма доски — не входили в DoD, остаются на будущее.
+### [x] T-108. Кэш результатов движка по `fen_hash` (итерация 30)
+- **Зависит от:** T-008, T-030
+- **Статус итерации 30:** миграция `19bf1fdc2a73` — таблица
+  `engine_cache` (`fen_hash`, `engine_version`, `depth`, `multipv`,
+  `lines` JSONB, `created_at`, `UNIQUE(fen_hash, engine_version, depth,
+  multipv)`, индекс `created_at`); `app/engine/cache.py`
+  (`EngineCache.lookup/store/cleanup_expired`), интеграция в
+  `EngineService.analyze` (проверка до поиска, запись после, версия из
+  UCI `id name`), `ENGINE_CACHE_ENABLED`/`ENGINE_CACHE_TTL_DAYS` (30),
+  чистка при старте; выключение флагом. Тесты: `tests/unit/test_engine_cache.py`,
+  `tests/integration/test_engine_cache.py` (fake UCI + реальный Stockfish:
+  повторный `/v1/analyze` быстрее). Исходный backlog-пункт «кэш retrieval
+  по `fen_hash`» (`retrieval_cache`) остаётся не включён — это часть T-018
+  / T-032b, не engine cache.
 ### [x] T-109. LLMOps-дашборд в админке (итерация 29)
 - **Зависит от:** T-030, T-031b, T-028
 - **Статус итерации 29:** `/admin/llmops` (`LlmOpsDashboardView`,

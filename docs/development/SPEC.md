@@ -203,6 +203,10 @@ audit_logs(id, timestamp, actor, action, target_id,
 semantic_cache(id, fen_hash, fen_embedding vector(768), level,
                prompt_hash, response_text TEXT, created_at)
 
+-- Кэш результатов движка (T-108, итерация 30)
+engine_cache(id, fen_hash, engine_version, depth, multipv,
+             lines JSONB, created_at)
+
 -- LLM-as-judge (T-039, итерация 22)
 llm_evaluations(id, model, level, accuracy_score, usefulness_score,
                 style_score, created_at)
@@ -219,7 +223,9 @@ llm_evaluations(id, model, level, accuracy_score, usefulness_score,
 
 **Индексы:** `moves(game_id, ply)`,
 `annotated_games USING ivfflat (embedding vector_cosine_ops)`,
-`retrieval_cache(fen_hash)`.
+`retrieval_cache(fen_hash)`, `engine_cache(fen_hash, engine_version, depth,
+multipv)` — уникальный ключ кэша движка + `engine_cache(created_at)` для
+чистки по TTL.
 
 ---
 
@@ -232,6 +238,7 @@ llm_evaluations(id, model, level, accuracy_score, usefulness_score,
 | `POST` | `/v1/chat` | Чат по партии: `{analysis_id, message}` → ответ LLM с проверкой вариантов. |
 | `GET` | `/v1/games/{id}` | Метаданные партии и сохранённые комментарии. |
 | `PATCH` | `/v1/commentaries/{id}` | Правка комментария (human-in-the-loop). |
+| `GET` | `/v1/commentaries/{id}/export/pdf` | PDF-экспорт комментария: шапка партии, ходы, текст; `Content-Disposition: attachment` (T-107). |
 | `POST` | `/v1/ingest` | Загрузка аннотированных партий в RAG (админ). |
 | `GET` | `/v1/health` | Healthcheck движка, БД, LLM. |
 

@@ -862,12 +862,24 @@ Read-only, доступна admin и auditor. Grafana/Tempo-дашборды п�
 
 | Kind | Ключ | TTL | Можно ли делиться между пользователями |
 | :--- | :--- | :--- | :--- |
-| `engine` | `fen_hash + level + engine_version + multipv` | 30 дней | Да, это детерминированный результат движка |
+| `engine` | `fen_hash + engine_version + depth + multipv` (нормализованный FEN без номера хода) | 30 дней | Да, это детерминированный результат движка |
 | `llm` (commentary) | `analysis_hash + level + prompt_version + model + style_hash` | 7 дней | Да, если ответ прошёл валидатор и не содержит пользовательских данных |
 | `llm` (chat) | `user_id + message_hash + ...` | 0 (выкл.) | **Нет**: сообщение пользователя приватно |
 
 Чат по умолчанию **не кэшируется** между пользователями; внутри одной
 сессии — опционально, с ключом по `user_id`.
+
+**Engine cache реализован в итерации 30 (T-108):** отдельная таблица
+`engine_cache` (не `semantic_cache`) — линии MultiPV структурные, их
+удобнее хранить JSONB, а не текстом. Ключ —
+`(fen_hash, engine_version, depth, multipv)`: `fen_hash` — sha256 FEN без
+номера хода, `engine_version` — UCI `id name` бинарника, `depth`/`multipv`
+— параметры уровня (beginner 12/1 ≠ gm 28/5). Запись best-effort после
+поиска (`EngineCache.store`), чтение — перед поиском в
+`EngineService.analyze`; устаревшие строки (TTL
+`ENGINE_CACHE_TTL_DAYS`, по умолчанию 30) удаляются при старте
+`cleanup_expired`. Выключается `ENGINE_CACHE_ENABLED=false`; работает и
+через пул (`EnginePool` передаёт кэш во все `EngineService`).
 
 ### 8.2. Два режима
 

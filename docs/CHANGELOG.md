@@ -8,6 +8,30 @@
 
 ### Added
 
+- **PDF-экспорт комментария (T-107, итерация 30):**
+  `GET /v1/commentaries/{id}/export/pdf` — серверный PDF (`fpdf2` + TTF-
+  шрифт с кириллицей): шапка (игроки, турнир, дата, результат, уровень,
+  модель, статус), PGN-ходы, текст комментария с абзацами, нумерация
+  страниц; `Content-Disposition: attachment; filename="commentary-{id}.pdf"`.
+  JWT + изоляция данных (чужая запись → 404), CPU-bound генерация в
+  `asyncio.to_thread`, битый legacy-PGN не ломает экспорт. Кнопка
+  «Скачать PDF» в панели комментария (RU/EN) и API-хелпер с single-flight
+  refresh. Настройка `PDF_FONT_PATH` (auto: Arial/DejaVuSans); в
+  Docker-образ добавлен `fonts-dejavu-core`. Тесты:
+  `tests/unit/test_pdf_export.py`,
+  `tests/integration/test_commentary_pdf.py`, `web/src/api.pdf.test.ts`.
+- **Кэш результатов Stockfish (T-108, итерация 30):** миграция
+  `19bf1fdc2a73` — таблица `engine_cache` (`fen_hash`, `engine_version`,
+  `depth`, `multipv`, `lines` JSONB, `created_at`,
+  UNIQUE(fen_hash, engine_version, depth, multipv), индекс `created_at`);
+  `app/engine/cache.py` — чтение/запись/чистка по TTL (30 дней,
+  `ENGINE_CACHE_TTL_DAYS`); `EngineService.analyze` проверяет кэш до
+  поиска и пишет результат после; ключ включает версию движка (UCI
+  `id name`) и параметры уровня (beginner 12/1 ≠ gm 28/5); выключается
+  `ENGINE_CACHE_ENABLED=false`; в lifespan — очистка устаревших строк.
+  Тесты: `tests/unit/test_engine_cache.py`,
+  `tests/integration/test_engine_cache.py` (включая реальный Stockfish:
+  повторный `/v1/analyze` быстрее).
 - **Retention `llm_calls` (KI-048, итерация 29):**
   `scripts/prune_llm_calls.py` — батчевый `DELETE` вызовов LLM старше
   `LLM_CALLS_RETENTION_DAYS` (по умолчанию 90 дней): `DELETE ... WHERE id

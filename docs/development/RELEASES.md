@@ -1698,3 +1698,78 @@ T-031b/T-034b закрыты в объёме MVP; заведены KI-049/KI-050
 - **T-113/T-109 (остаток):** Grafana/Tempo-дашборды и алерты аномалий.
 - **KI-049:** outbox/ARQ для durable-upsert, cron-агрегация и алерты
   80/100%.
+
+## Итерация 30 — PDF Export и Engine Cache (T-107, T-108)
+
+**Дата:** 2026-10-29. **Статус:** ✅ завершена. **T-107 закрыт** (PDF-экспорт
+комментария + кнопка в UI); **T-108 закрыт** (кэш результатов Stockfish).
+Новых KI нет.
+
+### Задачи
+
+- [x] **T-108, engine cache.** Миграция `19bf1fdc2a73`: таблица
+  `engine_cache` (`fen_hash`, `engine_version`, `depth`, `multipv`,
+  `lines` JSONB, `created_at`; `UNIQUE(fen_hash, engine_version, depth,
+  multipv)`, индекс `created_at`, CHECK depth/multipv ≥ 1).
+  `app/engine/cache.py`: `EngineCache` (lookup/store/cleanup_expired,
+  best-effort, отдельные сессии), нормализация FEN без номера хода,
+  sha256-ключ. `EngineService.analyze` проверяет кэш до поиска и пишет
+  результат после; `engine_version` — UCI `id name` (Stockfish 19),
+  key включает depth/multipv (beginner 12/1 ≠ gm 28/5). Настройки
+  `ENGINE_CACHE_ENABLED` / `ENGINE_CACHE_TTL_DAYS=30`, чистка при старте,
+  кэш передаётся во все `EngineService` пула.
+- [x] **T-107, PDF-экспорт.** `GET /v1/commentaries/{id}/export/pdf`:
+  fpdf2 + TTF-шрифт с кириллицей (auto Arial/DejaVuSans, `PDF_FONT_PATH`),
+  шапка (игроки, турнир, дата, результат, уровень, модель, статус),
+  PGN-ходы, текст комментария с абзацами, нумерация страниц;
+  `Content-Disposition: attachment; filename="commentary-{id}.pdf"`;
+  JWT + изоляция данных (чужая запись → 404), `asyncio.to_thread` для
+  CPU-bound генерации, битый legacy-PGN не ломает экспорт. Кнопка
+  «Скачать PDF» в панели комментария (RU/EN), API-хелпер с single-flight
+  refresh. В Docker-образ добавлен `fonts-dejavu-core`.
+- [x] **Документация:** SPEC §4/§5 (`engine_cache`, PDF endpoint),
+  DESIGN §8.1 (реализация engine cache), ARCHITECTURE §2–§5,
+  USER_GUIDE (PDF), GETTING_STARTED (настройки + troubleshooting 8.10),
+  README (696 тестов, 15 таблиц, head `19bf1fdc2a73`), TODO (T-107/T-108
+  → `[x]`), CHANGELOG, RELEASES, `ITERATION-30.md`.
+- [x] **Зависимости:** `fpdf2>=2.8` (production, чистый Python),
+  `pypdf>=5.0` (dev, проверка PDF в тестах); обоснование — отчёт §7.
+
+### Метрики
+
+- **Backend-тесты:** **696 passed, 1 skipped, 1 xfailed** (64 файла;
+  +25 к итерации 29), **238.43 с**, exit 0. Skip — нет
+  `DEEPSEEK_API_KEY`, xfail — маркер KI-012.
+- **Новые тесты:** engine cache — 6 unit + 6 integration (включая
+  реальный Stockfish); PDF — 6 unit + 6 integration; схема БД — +1.
+- **Frontend-тесты:** **46 passed** (7 файлов; +4 PDF-API); typecheck 0;
+  build 4.95 с (JS 465.21 КБ / gzip 146.45, CSS 14.29 КБ / gzip 3.77).
+- **E2E mocked:** **10 passed** (5 сценариев × chromium/mobile).
+- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 78 файлов.
+- **Alembic:** 11 ревизий, head `19bf1fdc2a73`; upgrade + `alembic check`
+  + roundtrip `downgrade base → upgrade head` — чистые; 15 таблиц.
+- **Engine cache smoke (живой uvicorn :8018, real Stockfish):**
+  `POST /v1/analyze` (4 полухода, beginner) — **656 мс → 22 мс** при
+  повторе (×30); в `engine_cache` 5 строк (`engine_version=Stockfish 19`,
+  depth=12, multipv=1).
+- **PDF smoke:** `GET /v1/commentaries/1/export/pdf` → 200,
+  `application/pdf`, `attachment; filename="commentary-1.pdf"`,
+  32 846 байт; pypdf извлёк игроков, турнир, ходы и текст комментария.
+- **KI:** 52 записи, 25 Open, 27 Closed (без изменений).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Диаграмма доски в PDF | В постановке «возможно» (опционально); для PNG нужен растровый рендер SVG (cairo/native), а `chess.svg` + fpdf2 SVG-поддержка не гарантируют качество | — |
+| DOCX-экспорт | В DoD только PDF; отдельная фича | — |
+| Кэш retrieval по `fen_hash` (`retrieval_cache`) | T-108 в backlog означал другой кэш; выполнен engine cache из постановки итерации; retrieval-кэш остаётся частью T-018/T-032b | T-018, T-032b |
+| Redis hot-слой для engine cache | Для MVP достаточно Postgres; Redis-слой — оптимизация при росте нагрузки | T-032b (по аналогии) |
+| Реальный LoRA-прогон (KI-030) | Нет GPU | KI-030 |
+
+### Что дальше
+
+- **T-107 остаток:** диаграмма критической позиции в PDF и/или DOCX.
+- **T-108 остаток:** метрики cache hit/miss в админке/OTel, Redis hot-слой.
+- **T-032b:** Redis hot-слой semantic cache и метрики.
+- **KI-049/KI-052/KI-050:** планировщик FinOps, партиционирование `llm_calls`, фоновая выгрузка датасета.

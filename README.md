@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-671_passed-brightgreen.svg)](docs/development/RELEASES.md)
-[![Frontend tests](https://img.shields.io/badge/frontend_tests-42_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-696_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Frontend tests](https://img.shields.io/badge/frontend_tests-46_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
 > **Ассистент-комментатор шахматных партий.** Загрузите PGN — получите
@@ -246,14 +246,14 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Показатель | Значение |
 |---|---|
 | Версия | **v0.1.0** (MVP; качество LLM ниже 7/10 — KI-030) |
-| Итерация | **29 — LLMOps Dashboard и Retention (T-109, KI-048, KI-050)**; итерации 1–28 закрыты |
-| Backend-тесты | **671 passed, 1 skipped, 1 xfailed** (60 файлов; skip — нет `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
-| Frontend-тесты | **42 passed** (6 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API; Vitest) |
+| Итерация | **30 — PDF Export и Engine Cache (T-107, T-108)**; итерации 1–29 закрыты |
+| Backend-тесты | **696 passed, 1 skipped, 1 xfailed** (64 файла; skip — нет `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
+| Frontend-тесты | **46 passed** (7 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, PDF-API; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
-| Таблиц в БД | **14** (10 ревизий, head `e9f0a1b2c3d4`; `llm_calls` — durable-история вызовов LLM: trace_id/span_id, токены/стоимость/латентность/статус, prompt_slug/version; `usage_daily` — durable FinOps-агрегат по субъекту/дню) |
+| Таблиц в БД | **15** (11 ревизий, head `19bf1fdc2a73`; `llm_calls` — durable-история вызовов LLM, `usage_daily` — FinOps-агрегат, `engine_cache` — кэш MultiPV Stockfish по позиции/версии/depth/multipv) |
 | Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
-| Engine | Stockfish 17 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; пул из 4 процессов |
-| API | `POST /auth/register|login|refresh|logout`, `GET /auth/me`; защищённые JWT: `POST /v1/analyze`, `GET /v1/games`, `GET /v1/games/{id}`, `GET /v1/users/me/usage`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, `POST /v1/chat`, SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest; `GET /v1/admin/exports/edits.jsonl` (JSONL-экспорт для LoRA, JWT admin/auditor или cookie админки); `/admin` (starlette-admin: RAG/комментарии/правки/аудит/LLM-evals + редактируемые промпты + страница «Экспорт датасета» + **LLMOps-дашборд `/admin/llmops`**; вход по JWT admin/auditor) |
+| Engine | Stockfish 17 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; пул из 4 процессов; **кэш `engine_cache` (T-108)** — попадание по `(fen_hash, engine_version, depth, multipv)`, TTL 30 дней, запись best-effort, версия из UCI `id name` |
+| API | `POST /auth/register|login|refresh|logout`, `GET /auth/me`; защищённые JWT: `POST /v1/analyze`, `GET /v1/games`, `GET /v1/games/{id}`, `GET /v1/users/me/usage`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, **`GET /v1/commentaries/{id}/export/pdf` (T-107)**, `POST /v1/chat`, SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest; `GET /v1/admin/exports/edits.jsonl` (JSONL-экспорт для LoRA, JWT admin/auditor или cookie админки); `/admin` (starlette-admin: RAG/комментарии/правки/аудит/LLM-evals + редактируемые промпты + страница «Экспорт датасета» + **LLMOps-дашборд `/admin/llmops`**; вход по JWT admin/auditor) |
 | Auth | JWT access 15 мин + refresh 7 дней (python-jose); refresh — HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`, `Secure` в prod), `/auth/logout` + Redis-denylist, ротация отзывает прежний jti; пароли **Argon2id** (argon2-cffi), legacy bcrypt перехешируется при входе; dummy-Argon2id для несуществующего email (timing-safe login); роли `user/admin/auditor`; access на фронтенде только в памяти, `credentials: include`, single-flight refresh; изоляция партий по `games.user_id`; `/admin` — JWT admin/auditor, auditor read-only; ограничения — KI-041, KI-042 |
 | LLM | `beginner`/`club` → LM Studio (`qwen/qwen3-4b-2507`), `gm` → DeepSeek (`deepseek-chat`); таймауты, ретраи, токены, прогрев; локальный комментарий 15–120 с |
 | Prompts/Validator | Промпты 3 уровней в таблице `prompts` (seed из `.txt`, версия, редактирование в админке, hot-reload кэша); пакет фактов: `club` — топ-3 без PV, `gm` — до 10 с PV; валидатор SAN с retry |
@@ -263,9 +263,9 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Semantic cache | `semantic_cache` (vector 768, HNSW): exact `fen_hash+level+prompt_hash`, semantic cosine < 0.05, TTL 30 дней; `/commentary`, `/chat` и SSE; второй запрос — 0.030 с |
 | LoRA | `scripts/export_dataset.py` — **schema_version=2** по умолчанию: `user` = пакет фактов (`build_fact_package`), `assistant` = `edited_text`, `metadata`/`fact_sheet_chars`; v1 — legacy-флаг. `scripts/train_lora.py` — реальный SFT (peft/transformers, QLoRA 4-bit, r=16/alpha=32/q_proj,v_proj, маскирование на assistant, `--dry-run`/`--check-env`, поддержка schema {1,2}); `LORA_ADAPTER_PATH` → adapter basename для vLLM; инструкция — [LORA_TRAINING.md](docs/development/reports/LORA_TRAINING.md); обучение на GPU не выполнялось (нет CUDA, KI-030 Open) |
 | E2E | Playwright 1.64.1: 5 сценариев (`auth`, `analyze`, `commentary`, `history`, `limits`) × chromium/mobile; mocked-режим 10 passed, real-backend 5 passed (chromium); CI job `e2e` + trace/screenshot при падении; ограничение — KI-040 |
-| Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `PATCH` пишет правку в `edits` |
+| Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `PATCH` пишет правку в `edits`; **PDF-экспорт** (`GET .../export/pdf`, fpdf2 + TTF-шрифт, кнопка «Скачать PDF» в UI) |
 | Chat | `POST /v1/chat`: вопрос → контекст анализа → LLM → валидатор → `{reply, tokens_used}` |
-| Frontend | React 19 + Vite + React Router: главная, `/history`, `/analysis/:id`; `react-chessboard` 5.12.1, FEN из PGN через `chess.js`, RU/EN, Zustand + sessionStorage; история чата сохраняется и уходит в LLM; комментарий/чат стримятся постепенно |
+| Frontend | React 19 + Vite + React Router: главная, `/history`, `/analysis/:id`; `react-chessboard` 5.12.1, FEN из PGN через `chess.js`, RU/EN, Zustand + sessionStorage; история чата сохраняется и уходит в LLM; комментарий/чат стримятся постепенно; **кнопка «Скачать PDF»** с JWT-refresh |
 | UX | Skeleton-лоадеры, Error Boundary, mobile 1280/820/640/480, usage-badge `Free: 12k/50k` + модалка Pro, SPA-fallback в production |
 | LLM-evals | `llm_evaluations` (model, level, accuracy/usefulness/style), read-only view в админке; `scripts/evaluate_llm.py` пишет MD/JSON и БД |
 | RAG | `POST /v1/ingest` (PGN, до 5 МБ, `X-Admin-Token`) → `annotated_games` (LM Studio 768; **624** записи: 102 `my-collection` + 522 `new_samples`, итерация 25); `find_similar_positions` по FEN; контекст для `gm`; eval — `evaluate_llm.py --source new_samples` |
