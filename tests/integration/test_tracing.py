@@ -200,3 +200,34 @@ def test_trace_context_is_immutable_dataclass() -> None:
 
     with pytest.raises(AttributeError):
         context.span_id = "b" * 16  # type: ignore[misc]
+
+
+# --- KI-047: X-Trace-Id на необработанных 500 -----------------------------
+
+
+def test_unhandled_500_has_trace_id_header() -> None:
+    """ServerErrorMiddleware не пропускает ответ через TraceMiddleware,
+    поэтому заголовок добавляет exception handler из app.main."""
+    from fastapi import FastAPI
+
+    from app.main import _unhandled_error_handler
+
+    api = FastAPI()
+    api.add_middleware(TraceMiddleware)
+    api.add_exception_handler(Exception, _unhandled_error_handler)
+
+    @api.get("/boom")
+    async def boom() -> JSONResponse:  # pragma: no cover - всегда падает
+        raise RuntimeError("boom")
+
+    trace_hex = uuid4().hex
+    traceparent = f"00-{trace_hex}-1234567890abcdef-01"
+    with TestClient(api, raise_server_exceptions=False) as client:
+        response = client.get("/boom", headers={"traceparent": traceparent})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Internal Server Error",
+        "code": "internal_error",
+    }
+    assert response.headers[TRACE_HEADER] == str(UUID(hex=trace_hex))

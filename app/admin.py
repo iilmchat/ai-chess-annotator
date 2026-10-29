@@ -39,17 +39,28 @@ Read-only views: `annotated_games`, `commentaries`, `edits`, `audit_logs`,
 промптов, и только через аудируемый edit. Экспорт в starlette-admin —
 POST-действие, поэтому для auditor он закрыт вместе с остальными
 небезопасными методами.
+
+T-034b: страница «Экспорт датасета» (`/admin/exports/dataset`) с формой
+фильтров и ссылкой на `GET {api_prefix}/admin/exports/edits.jsonl`
+(роутер `app.api.v1.admin_exports`). Кнопка из админки авторизуется
+cookie-сессией `admin_session`, поэтому её формат (Starlette
+SessionMiddleware/itsdangerous) разбирает `decode_admin_session` — тот же
+секрет, что у SessionMiddleware в `create_admin`.
 """
 
 from __future__ import annotations
 
+import json
 import secrets
+from base64 import b64decode
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import itsdangerous
 import structlog
+from itsdangerous.exc import BadSignature
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.middleware.sessions import SessionMiddleware
@@ -86,18 +97,24 @@ from app.prompts import reset_prompt_cache
 from app.prompts.pubsub import publish_prompt_update
 
 __all__ = [
+    "ADMIN_SESSION_COOKIE",
     "AdminAuthGuard",
     "AdminAuthProvider",
     "AdminPathNormalizer",
     "AuditLogAdmin",
     "AuditVerifyView",
+    "DatasetExportView",
     "LlmCallAdmin",
     "LlmEvaluationAdmin",
     "PromptAdmin",
     "create_admin",
+    "decode_admin_session",
 ]
 
 logger = structlog.get_logger(__name__)
+
+#: Имя подписанной cookie парольной сессии админки (starlette SessionMiddleware).
+ADMIN_SESSION_COOKIE = "admin_session"
 
 
 def _same_secret(left: str, right: str) -> bool:
@@ -784,8 +801,71 @@ class AuditVerifyView(CustomView):
         )
 
 
+class DatasetExportView(CustomView):
+    """Страница «Экспорт датасета» (T-034b).
+
+    Форма не скачивает файл сама: она собирает query-строку и открывает
+    JSONL-endpoint `GET {api_prefix}/admin/exports/edits.jsonl`, который
+    авторизует тот же браузер по cookie `admin_session` (страница доступна
+    admin/auditor; для `user` guard уже даёт 403 на входе в /admin).
+    """
+
+    menu_label = "Экспорт датасета"
+    icon = "fa fa-download"
+    path = "/exports/dataset"
+    route_name = "dataset-export"
+
+    def __init__(self, *, export_url: str) -> None:
+        super().__init__()
+        self._export_url = export_url
+
+    @route("")
+    async def index(self, request: Request) -> Response:
+        templates = self.templates
+        if templates is None:  # pragma: no cover - выставляется при mount
+            raise RuntimeError("templates не инициализированы")
+        return templates.TemplateResponse(
+            request=request,
+            name="dataset_export.html",
+            context={
+                "title": "Экспорт датасета",
+                "export_url": self._export_url,
+                "levels": ("beginner", "club", "gm"),
+            },
+        )
+
+
 def _session_secret(settings: Settings) -> str:
     return settings.admin_session_secret or settings.jwt_secret
+
+
+def decode_admin_session(
+    settings: Settings, cookie_value: str
+) -> dict[str, Any] | None:
+    """Разобрать подписанную cookie `admin_session` (Starlette/itsdangerous).
+
+    Формат повторяет `starlette.middleware.sessions.SessionMiddleware`:
+    ``TimestampSigner(secret).sign(base64(json(session)))``. Нужен для
+    экспорта (`/v1/admin/...`), который живёт вне admin-приложения и
+    поэтому не получает `request.session`: кнопка из админки ходит по
+    cookie без ручного Bearer-токена.
+
+    Возвращает ``None`` для битой/просроченной подписи или не-JSON
+    полезной нагрузки — вызывающий сам решает, считать это 401.
+    """
+    signer = itsdangerous.TimestampSigner(_session_secret(settings))
+    max_age = settings.admin_session_ttl_min * 60
+    try:
+        raw = signer.unsign(cookie_value.encode("utf-8"), max_age=max_age)
+    except BadSignature:
+        return None
+    try:
+        payload = json.loads(b64decode(raw))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
 
 
 def create_admin(settings: Settings) -> Admin:
@@ -801,7 +881,7 @@ def create_admin(settings: Settings) -> Admin:
             Middleware(
                 SessionMiddleware,
                 secret_key=_session_secret(settings),
-                session_cookie="admin_session",
+                session_cookie=ADMIN_SESSION_COOKIE,
                 max_age=settings.admin_session_ttl_min * 60,
                 same_site="lax",
                 https_only=settings.app_env not in {"dev", "test", "local"},
@@ -817,6 +897,11 @@ def create_admin(settings: Settings) -> Admin:
     admin.add_view(LlmCallAdmin(LlmCall, icon="fa fa-microchip"))
     admin.add_view(
         LlmEvaluationAdmin(LlmEvaluation, icon="fa fa-chart-line")
+    )
+    admin.add_view(
+        DatasetExportView(
+            export_url=f"{settings.api_prefix}/admin/exports/edits.jsonl"
+        )
     )
     admin.add_view(AuditVerifyView())
     return admin

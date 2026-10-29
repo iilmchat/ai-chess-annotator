@@ -1,0 +1,83 @@
+{% extends "layout.html" %}
+{% block header %}
+    <div class="d-flex justify-content-between align-items-center">
+        <h1>{{ title }}</h1>
+    </div>
+{% endblock %}
+{% block content %}
+    <div class="card">
+        <div class="card-body">
+            <p class="text-muted">
+                Выгрузка правок комментариев в JSONL для дообучения (LoRA).
+                Схема v2: system-промпт уровня → пакет фактов партии →
+                текст после правки редактора. Схема v1 (legacy): исходный
+                текст → текст после правки.
+            </p>
+            <form id="dataset-export-form" class="row g-3">
+                <div class="col-md-3">
+                    <label class="form-label" for="date_from">С даты</label>
+                    <input class="form-control" type="date" id="date_from"
+                           name="date_from">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="date_to">По дату</label>
+                    <input class="form-control" type="date" id="date_to"
+                           name="date_to">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="level">Уровень</label>
+                    <select class="form-select" id="level" name="level">
+                        <option value="">Все</option>
+                        {% for level in levels %}
+                            <option value="{{ level }}">{{ level }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="human_edited">
+                        Правил человек
+                    </label>
+                    <select class="form-select" id="human_edited"
+                            name="human_edited">
+                        <option value="">Все</option>
+                        <option value="true">Да</option>
+                        <option value="false">Нет</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="schema_version">Схема</label>
+                    <select class="form-select" id="schema_version"
+                            name="schema_version">
+                        <option value="2" selected>v2 — пакет фактов</option>
+                        <option value="1">v1 — legacy rewrite</option>
+                    </select>
+                </div>
+                <div class="col-12">
+                    <button type="submit" class="btn btn-primary">
+                        Скачать JSONL
+                    </button>
+                    <a class="btn btn-outline-secondary" href="{{ export_url }}">
+                        Скачать без фильтров
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+    <script>
+        (function () {
+            const form = document.getElementById("dataset-export-form");
+            form.addEventListener("submit", function (event) {
+                const params = new URLSearchParams();
+                for (const [name, value] of new FormData(form).entries()) {
+                    if (value !== "") {
+                        params.set(name, value);
+                    }
+                }
+                const query = params.toString();
+                window.location.href = {{ export_url|tojson }} +
+                    (query ? "?" + query : "");
+                event.preventDefault();
+            });
+        })();
+    </script>
+{% endblock %}

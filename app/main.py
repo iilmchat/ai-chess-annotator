@@ -22,6 +22,7 @@ from app import __version__
 from app.admin import AdminPathNormalizer, create_admin
 from app.api.ratelimit import RateLimitMiddleware, RedisRateLimiter
 from app.api.v1 import (
+    admin_exports,
     analyze,
     auth,
     chat,
@@ -43,7 +44,7 @@ from app.observability import configure_telemetry, shutdown_telemetry
 from app.prompts import seed_prompts, warm_prompt_cache
 from app.prompts.pubsub import watch_prompt_updates
 from app.rag.context import make_rag_context_builder
-from app.tracing import TraceMiddleware
+from app.tracing import TraceMiddleware, current_trace_id
 from app.web import SPAStaticFiles
 
 logger = structlog.get_logger(__name__)
@@ -210,6 +211,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(TraceMiddleware)
 
     app.add_exception_handler(AppError, _app_error_handler)
+    # KI-047: unhandled-исключения обрабатываются внутри ServerErrorMiddleware,
+    # поэтому TraceMiddleware не успевает добавить заголовок в ответ. Здесь
+    # сами достаём trace_id из request.state (его уже выставил TraceMiddleware
+    # до входа в приложение) и добавляем X-Trace-Id к 500.
+    app.add_exception_handler(Exception, _unhandled_error_handler)
 
     # T-028: JWT-эндпоинты живут под `/auth` (вне /v1, как в постановке).
     app.include_router(auth.router, prefix="/auth")
@@ -220,6 +226,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(chat.router, prefix=cfg.api_prefix)
     app.include_router(ingest.router, prefix=cfg.api_prefix)
     app.include_router(users.router, prefix=cfg.api_prefix)
+    # T-034b: выгрузка датасета edits.jsonl (JWT или cookie админки).
+    app.include_router(admin_exports.router, prefix=cfg.api_prefix)
 
     # Admin control plane (T-028): монтируется до SPA, чтобы `/admin`
     # не перехватывался статикой.
@@ -252,6 +260,30 @@ def _app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=status,
         content={"detail": detail, "code": app_error.code},
+    )
+
+
+def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """500 для необработанных исключений + `X-Trace-Id` (KI-047).
+
+    Клиент не должен видеть текст внутренней ошибки; для поддержки нужен
+    только trace_id (он же в structlog-логе). Регистрируется на `Exception`,
+    поэтому доменные `AppError` по-прежнему идут через
+    :func:`_app_error_handler`.
+    """
+    trace_id = getattr(request.state, "trace_id", None) or current_trace_id()
+    logger.error(
+        "unhandled_exception",
+        path=request.url.path,
+        method=request.method,
+        trace_id=trace_id,
+        error_type=type(exc).__name__,
+    )
+    headers = {"X-Trace-Id": trace_id} if trace_id else None
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "code": "internal_error"},
+        headers=headers,
     )
 
 
