@@ -39,6 +39,7 @@ SPEC_TABLES = {
     "commentaries",
     "edits",
     "games",
+    "llm_calls",
     "llm_evaluations",
     "motifs",
     "moves",
@@ -53,6 +54,25 @@ PGN = '[Event "Test"]\n\n1. e4 e5 2. Nf3 Nc6 1/2-1/2\n'
 
 def test_metadata_contains_exactly_spec_tables() -> None:
     assert set(Base.metadata.tables) == SPEC_TABLES
+
+
+def test_llm_calls_table_has_trace_and_indexes() -> None:
+    """T-030: durable-история LLM — обязательные поля и индексы."""
+    calls = Base.metadata.tables["llm_calls"]
+    assert calls.c.trace_id.nullable is False
+    assert calls.c.span_id.nullable is False
+    assert calls.c.latency_ms.nullable is False
+    assert calls.c.status.nullable is False
+    unique = {
+        constraint.name for constraint in calls.constraints if constraint.name
+    }
+    assert "uq_llm_calls_trace_span" in unique
+    indexes = {index.name for index in calls.indexes}
+    assert {
+        "ix_llm_calls_created_brin",
+        "ix_llm_calls_model_created",
+        "ix_llm_calls_level_created",
+    } <= indexes
 
 
 def test_moves_index_and_embedding_dimension() -> None:

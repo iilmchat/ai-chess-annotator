@@ -1,8 +1,12 @@
-"""Тесты LLM-адаптера (T-013).
+"""Тесты LLM-адаптера (T-013, T-030).
 
 Сеть не используется: `httpx.MockTransport` эмулирует LM Studio и DeepSeek.
 Проверяется: маршрутизация уровней, заголовки/ключи, разбор ответа, расход
 токенов, ретраи на 429/5xx, ошибки 4xx, таймаут, кривой ответ.
+
+T-030: клиент обязан сообщать метрики вызова в recorder `llm_calls` —
+проверяем статусы (ok/error/timeout/invalid), стрим (включая отмену) и
+отсутствие текстов промпта/ответа в записи.
 """
 
 from __future__ import annotations
@@ -351,3 +355,225 @@ def test_factory_requires_deepseek_key() -> None:
 def test_factory_rejects_unknown_level() -> None:
     with pytest.raises(InvalidLevelError):
         get_llm_client("master", _settings())
+
+
+# --- T-030: запись вызова в llm_calls -------------------------------------
+
+
+def _captured_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Перехватить вызовы recorder-а (без фоновой задачи и без БД)."""
+    captured: list[dict[str, Any]] = []
+
+    def fake_record(**kwargs: Any) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.llm.openai_client.record_llm_call", fake_record)
+    return captured
+
+
+def _stream_body(*deltas: str) -> bytes:
+    lines = [
+        "data: "
+        + json.dumps({"choices": [{"delta": {"content": delta}}]})
+        + "\n\n"
+        for delta in deltas
+    ]
+    lines.append("data: [DONE]\n\n")
+    return "".join(lines).encode()
+
+
+async def test_complete_reports_metrics_to_recorder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _captured_calls(monkeypatch)
+    client = _mock_client(lambda request: httpx.Response(200, json=_completion()))
+    llm = OpenAICompatibleClient(
+        base_url="http://local/v1",
+        model="m",
+        provider_name="test",
+        client=client,
+        price_in_usd_per_1m=0.27,
+        price_out_usd_per_1m=1.10,
+    )
+    llm.set_level("club")
+
+    await llm.generate("секретный промпт")
+
+    assert len(recorded) == 1
+    call = recorded[0]
+    assert call["provider"] == "test"
+    assert call["model"] == "m"
+    assert call["status"] == "ok"
+    assert call["tokens_in"] == 12
+    assert call["tokens_out"] == 7
+    assert call["cost_usd"] == pytest.approx(0.000011)
+    assert call["error_code"] is None
+    assert call["level"] == "club"
+    assert call["cache_hit"] is False
+    assert call["latency_ms"] >= 0
+    # Privacy: ни текста промпта, ни ответа в записи быть не должно.
+    assert not {"prompt", "text", "system_prompt", "response"} & set(call)
+
+    await client.aclose()
+
+
+async def test_complete_reports_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _captured_calls(monkeypatch)
+    client = _mock_client(lambda request: httpx.Response(400, text="bad"))
+    llm = OpenAICompatibleClient(
+        base_url="http://local/v1",
+        model="m",
+        provider_name="test",
+        client=client,
+        max_retries=0,
+    )
+
+    with pytest.raises(LLMError):
+        await llm.generate("x")
+
+    assert recorded[0]["status"] == "error"
+    assert recorded[0]["error_code"] == "llm_error"
+    assert recorded[0]["tokens_in"] == 0
+    assert recorded[0]["tokens_out"] == 0
+
+    await client.aclose()
+
+
+async def test_complete_reports_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _captured_calls(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    client = _mock_client(handler)
+    llm = OpenAICompatibleClient(
+        base_url="http://local/v1",
+        model="m",
+        provider_name="test",
+        timeout_s=1.0,
+        client=client,
+    )
+
+    with pytest.raises(LLMTimeoutError):
+        await llm.generate("x")
+
+    assert recorded[0]["status"] == "timeout"
+    assert recorded[0]["error_code"] == "llm_timeout"
+
+    await client.aclose()
+
+
+async def test_complete_reports_invalid_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _captured_calls(monkeypatch)
+    client = _mock_client(lambda request: httpx.Response(200, json={"foo": "bar"}))
+    llm = OpenAICompatibleClient(
+        base_url="http://local/v1", model="m", provider_name="test", client=client
+    )
+
+    with pytest.raises(LLMError, match="неожиданный ответ"):
+        await llm.generate("x")
+
+    assert recorded[0]["status"] == "invalid"
+    assert recorded[0]["error_code"] == "invalid_response"
+
+    await client.aclose()
+
+
+async def test_stream_reports_metrics_after_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _captured_calls(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=_stream_body("Привет", ", шахматы!"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _mock_client(handler)
+    llm = OpenAICompatibleClient(
+        base_url="http://local/v1",
+        model="m",
+        provider_name="test",
+        client=client,
+        price_in_usd_per_1m=1.0,
+        price_out_usd_per_1m=2.0,
+    )
+    llm.set_level("club")
+
+    chunks = [chunk async for chunk in llm.stream_generate("prompt")]
+
+    assert chunks == ["Привет", ", шахматы!"]
+    call = recorded[0]
+    assert call["status"] == "ok"
+    assert call["tokens_in"] > 0  # estimate_tokens(prompt)
+    assert call["tokens_out"] > 0  # оценка по символам
+    assert call["level"] == "club"
+    assert call["cache_hit"] is False
+
+    await client.aclose()
+
+
+async def test_stream_reports_error_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _captured_calls(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="bad model")
+
+    client = _mock_client(handler)
+    llm = OpenAICompatibleClient(
+        base_url="http://local/v1",
+        model="m",
+        provider_name="test",
+        client=client,
+        max_retries=0,
+    )
+
+    with pytest.raises(LLMError):
+        _ = [chunk async for chunk in llm.stream_generate("prompt")]
+
+    call = recorded[0]
+    assert call["status"] == "error"
+    assert call["error_code"] == "llm_error"
+    assert call["tokens_out"] == 0
+
+    await client.aclose()
+
+
+async def test_stream_reports_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Закрытие стрима потребителем — тоже вызов, статус error."""
+    recorded = _captured_calls(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=_stream_body("e4"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _mock_client(handler)
+    llm = OpenAICompatibleClient(
+        base_url="http://local/v1", model="m", provider_name="test", client=client
+    )
+
+    stream = llm.stream_generate("prompt")
+    assert await stream.__anext__() == "e4"
+    await stream.aclose()
+
+    call = recorded[0]
+    assert call["status"] == "error"
+    assert call["error_code"] == "client_disconnect"
+
+    await client.aclose()
+

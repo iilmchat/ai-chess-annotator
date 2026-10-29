@@ -76,9 +76,14 @@ def configure_telemetry(settings: Settings) -> TracerProvider | None:
     return provider
 
 
-def get_tracer() -> trace.Tracer:
-    """Трейсер приложения (no-op, пока провайдер не настроен)."""
-    return trace.get_tracer("app.llm")
+def get_tracer(name: str = "app.llm") -> trace.Tracer:
+    """Трейсер приложения (no-op, пока провайдер не настроен).
+
+    Args:
+        name: имя инструментария (`app.llm` для клиента, `app.http` для
+            trace-middleware) — попадает в `InstrumentationScope` спанов.
+    """
+    return trace.get_tracer(name)
 
 
 def shutdown_telemetry(provider: TracerProvider | None) -> None:

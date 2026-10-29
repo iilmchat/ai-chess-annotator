@@ -43,6 +43,7 @@ from app.observability import configure_telemetry, shutdown_telemetry
 from app.prompts import seed_prompts, warm_prompt_cache
 from app.prompts.pubsub import watch_prompt_updates
 from app.rag.context import make_rag_context_builder
+from app.tracing import TraceMiddleware
 from app.web import SPAStaticFiles
 
 logger = structlog.get_logger(__name__)
@@ -204,6 +205,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     # `/admin` → `/admin/` до маршрутизации: Mount не матчит точный префикс.
     app.add_middleware(AdminPathNormalizer)
+    # T-030: trace-контекст должен быть самым внешним, чтобы X-Trace-Id
+    # получали и ответы остальных middleware (429/404), и SSE.
+    app.add_middleware(TraceMiddleware)
 
     app.add_exception_handler(AppError, _app_error_handler)
 

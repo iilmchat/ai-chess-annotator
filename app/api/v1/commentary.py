@@ -27,6 +27,7 @@ from app.commentary import RagContextBuilder, edit_commentary, generate_commenta
 from app.commentary.streaming import stream_commentary
 from app.db.models import Commentary, Level, User
 from app.db.session import get_session
+from app.llm.calls import llm_call_context, stream_in_call_context
 
 router = APIRouter(tags=["commentary"])
 
@@ -114,14 +115,21 @@ async def create_commentary(
     """
     await get_accessible_game(session, payload.analysis_id, user)
     rag_context = _rag_builder(request) if payload.level == "gm" else None
-    result = await generate_commentary(
-        session,
-        payload.analysis_id,
-        payload.level,
-        payload.style,
-        rag_context=rag_context,
-        settings=getattr(request.app.state, "settings", None),
-    )
+    # T-030: метрики вызова LLM в llm_calls (операция + владелец + партия).
+    with llm_call_context(
+        operation="commentary",
+        actor_id=user.id,
+        game_id=payload.analysis_id,
+        prompt_slug=payload.level,
+    ):
+        result = await generate_commentary(
+            session,
+            payload.analysis_id,
+            payload.level,
+            payload.style,
+            rag_context=rag_context,
+            settings=getattr(request.app.state, "settings", None),
+        )
 
     row = Commentary(
         game_id=payload.analysis_id,
@@ -161,14 +169,22 @@ async def create_commentary_stream(
     партии проверяется до запуска стрима (и до LLM) — KI-035.
     """
     await get_accessible_game(session, payload.analysis_id, user)
+    # T-030: генератор исполняется после возврата ответа, поэтому контекст
+    # вызова LLM выставляется обёрткой вокруг итерации стрима.
     return EventSourceResponse(
-        stream_commentary(
-            session,
-            payload.analysis_id,
-            payload.level,
-            payload.style,
-            settings=getattr(request.app.state, "settings", None),
-            user_id=user.id,
+        stream_in_call_context(
+            stream_commentary(
+                session,
+                payload.analysis_id,
+                payload.level,
+                payload.style,
+                settings=getattr(request.app.state, "settings", None),
+                user_id=user.id,
+            ),
+            operation="commentary",
+            actor_id=user.id,
+            game_id=payload.analysis_id,
+            prompt_slug=payload.level,
         )
     )
 

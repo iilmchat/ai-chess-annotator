@@ -1,4 +1,4 @@
-"""OTel-спаны LLM-клиента (T-030, частично).
+"""OTel-спаны LLM-клиента и trace-контекста запроса (T-030).
 
 Провайдер локальный (с `InMemorySpanExporter`), глобальный не трогаем:
 так тест не зависит от порядка запуска и не конфликтует с `OTEL_ENABLED`.
@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -20,6 +21,14 @@ from app.config import Settings
 from app.errors import LLMError
 from app.llm.openai_client import OpenAICompatibleClient
 from app.observability import configure_telemetry
+from app.tracing import (
+    TraceContext,
+    current_request_id,
+    current_span_id,
+    current_trace_id,
+    request_span,
+    trace_context,
+)
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -107,3 +116,69 @@ async def test_llm_error_span_is_marked_failed() -> None:
 
 def test_telemetry_disabled_by_default() -> None:
     assert configure_telemetry(Settings(otel_enabled=False)) is None
+
+
+# --- T-030: trace-контекст запроса ----------------------------------------
+
+
+def test_trace_context_binds_and_resets_contextvars() -> None:
+    context = TraceContext(
+        trace_id=uuid4(), span_id="abcdef0123456789", request_id="req-42"
+    )
+
+    assert current_trace_id() is None
+    with trace_context(context):
+        assert current_trace_id() == context.trace_id_str
+        assert current_span_id() == "abcdef0123456789"
+        assert current_request_id() == "req-42"
+    assert current_trace_id() is None
+    assert current_span_id() is None
+    assert current_request_id() is None
+
+
+async def test_request_span_has_trace_id_from_w3c_context() -> None:
+    """`http_request`-span: атрибут trace.id и OTel trace id из traceparent."""
+    provider, exporter = _provider()
+    trace_id = uuid4()
+    context = TraceContext(trace_id=trace_id, span_id="0123456789abcdef")
+    try:
+        with request_span(context, tracer=provider.get_tracer("test")):
+            with provider.get_tracer("test").start_as_current_span("child"):
+                pass
+        spans = {span.name: span for span in exporter.get_finished_spans()}
+        request = spans["http_request"]
+        attrs = request.attributes
+        assert attrs is not None
+        assert attrs["trace.id"] == str(trace_id)
+        assert attrs["trace.span_id"] == "0123456789abcdef"
+        assert request.context.trace_id == int(trace_id.hex, 16)
+    finally:
+        provider.shutdown()
+
+
+async def test_llm_span_is_nested_under_request_span() -> None:
+    """LLM-спан вложен в `http_request` и делит с ним trace id (корреляция)."""
+    provider, exporter = _provider()
+    trace_id = uuid4()
+    context = TraceContext(trace_id=trace_id, span_id="fedcba9876543210")
+    try:
+        with request_span(context, tracer=provider.get_tracer("test")):
+            client = _client(
+                lambda request: httpx.Response(200, json=_completion()), provider
+            )
+            client.set_level("club")
+            await client.complete("prompt")
+
+        spans = exporter.get_finished_spans()
+        assert [span.name for span in spans] == ["llm_generate", "http_request"]
+        llm_span, request = spans
+        assert llm_span.context.trace_id == int(trace_id.hex, 16)
+        assert request.context.trace_id == int(trace_id.hex, 16)
+        assert llm_span.parent is not None
+        assert llm_span.parent.span_id == request.context.span_id
+        attrs = request.attributes
+        assert attrs is not None
+        assert attrs["trace.id"] == str(trace_id)
+    finally:
+        provider.shutdown()
+

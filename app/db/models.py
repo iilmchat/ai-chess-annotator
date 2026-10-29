@@ -18,6 +18,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -39,6 +40,7 @@ from sqlalchemy import (
 )
 from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -51,6 +53,7 @@ __all__ = [
     "Edit",
     "Game",
     "Level",
+    "LlmCall",
     "LlmEvaluation",
     "Motif",
     "Move",
@@ -450,3 +453,96 @@ class AuditLog(Base):
     )
     prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     current_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class LlmCall(Base):
+    """Durable-история вызовов LLM (T-030, DESIGN_ADMIN_AND_OPS §4.4).
+
+    Пишется best-effort **после** ответа LLM (recorder `app.llm.calls`):
+    один ряд — один вызов провайдера. Тексты промптов/ответов сюда не
+    попадают (privacy): только операция, модель, токены, стоимость и
+    статус. `trace_id` связывает вызов с HTTP-запросом (`X-Trace-Id`) и
+    OTel-трейсом; `span_id` — синтетический идентификатор попытки вызова
+    (16 hex), не равен OTel span id и нужен для UNIQUE(trace, span) при
+    retry/нескольких вызовах в одном запросе.
+
+    `level` — нативный enum `level`, NULL для вызовов без уровня
+    (warmup/классификатор). `UNIQUE (trace_id, span_id)` защищает от
+    дублей при ретраях доставки; каждая попытка LLM получает свой
+    `span_id`.
+    """
+
+    __tablename__ = "llm_calls"
+    __table_args__ = (
+        UniqueConstraint("trace_id", "span_id", name="uq_llm_calls_trace_span"),
+        # BRIN дешёв для append-only истории; DESC-индексы — под выборки
+        # «последние вызовы по модели/уровню» в админ-дашборде.
+        Index(
+            "ix_llm_calls_created_brin",
+            "created_at",
+            postgresql_using="brin",
+        ),
+        Index(
+            "ix_llm_calls_model_created",
+            "model",
+            sql_text("created_at DESC"),
+        ),
+        Index(
+            "ix_llm_calls_level_created",
+            "level",
+            sql_text("created_at DESC"),
+        ),
+        CheckConstraint("tokens_in >= 0", name="ck_llm_calls_tokens_in_nonnegative"),
+        CheckConstraint(
+            "tokens_out >= 0", name="ck_llm_calls_tokens_out_nonnegative"
+        ),
+        CheckConstraint(
+            "cost_usd >= 0", name="ck_llm_calls_cost_usd_nonnegative"
+        ),
+        CheckConstraint(
+            "latency_ms >= 0", name="ck_llm_calls_latency_ms_nonnegative"
+        ),
+    )
+
+    id: Mapped[int] = _pk()
+    trace_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    span_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actor_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    game_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("games.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    commentary_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("commentaries.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    level: Mapped[Level | None] = mapped_column(level_enum, nullable=True)
+    prompt_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    prompt_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_in: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sql_text("0")
+    )
+    tokens_out: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sql_text("0")
+    )
+    cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), nullable=False, server_default=sql_text("0")
+    )
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    cache_hit: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=sql_text("false")
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = _created_at()
+

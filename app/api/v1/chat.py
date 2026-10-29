@@ -24,6 +24,7 @@ from app.chat.streaming import stream_chat
 from app.db.models import User
 from app.db.session import get_session
 from app.errors import PromptInjectionError
+from app.llm.calls import llm_call_context, stream_in_call_context
 from app.security.guardrails import inspect_user_input, sanitize_user_input
 
 router = APIRouter(tags=["chat"])
@@ -90,14 +91,22 @@ async def chat_stream(
     question = await _guard_message(request, payload.message)
     history = await _history(request, payload)
     await get_accessible_game(session, payload.analysis_id, user)
+    # T-030: генератор исполняется после возврата ответа — контекст LLM
+    # выставляется обёрткой вокруг итерации стрима.
     return EventSourceResponse(
-        stream_chat(
-            session,
-            payload.analysis_id,
-            payload.level,
-            question,
-            history=history,
-            settings=getattr(request.app.state, "settings", None),
+        stream_in_call_context(
+            stream_chat(
+                session,
+                payload.analysis_id,
+                payload.level,
+                question,
+                history=history,
+                settings=getattr(request.app.state, "settings", None),
+            ),
+            operation="chat",
+            actor_id=user.id,
+            game_id=payload.analysis_id,
+            prompt_slug=payload.level,
         )
     )
 
@@ -123,14 +132,21 @@ async def chat(
     question = await _guard_message(request, payload.message)
     history = await _history(request, payload)
     await get_accessible_game(session, payload.analysis_id, user)
-    result = await answer_question(
-        session,
-        payload.analysis_id,
-        payload.level,
-        question,
-        history=history,
-        settings=getattr(request.app.state, "settings", None),
-    )
+    # T-030: метрики вызова LLM в llm_calls (операция + владелец + партия).
+    with llm_call_context(
+        operation="chat",
+        actor_id=user.id,
+        game_id=payload.analysis_id,
+        prompt_slug=payload.level,
+    ):
+        result = await answer_question(
+            session,
+            payload.analysis_id,
+            payload.level,
+            question,
+            history=history,
+            settings=getattr(request.app.state, "settings", None),
+        )
     return ChatResponse(
         reply=result.reply,
         tokens_used=result.usage.tokens_in + result.usage.tokens_out,

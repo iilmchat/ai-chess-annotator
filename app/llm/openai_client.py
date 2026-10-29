@@ -33,6 +33,7 @@ from opentelemetry.trace import Span, Status, StatusCode, Tracer
 from app.errors import LLMError, LLMTimeoutError
 from app.finops import compute_cost_usd, record_token_usage
 from app.llm.base import BaseLLMClient, LLMResult, LLMUsage
+from app.llm.calls import CallStatus, record_llm_call
 from app.llm.tokens import estimate_tokens
 from app.observability import get_tracer
 
@@ -45,6 +46,19 @@ _CHAT_PATH = "/chat/completions"
 
 #: Максимальная пауза из `Retry-After`, которую мы готовы ждать.
 _MAX_RETRY_AFTER_S = 30.0
+
+
+def _status_for_error(exc: BaseException) -> tuple[CallStatus, str]:
+    """Статус вызова для `llm_calls` по исключению клиента.
+
+    Отдельный `timeout` важен для LLMOps: таймауты считаются иначе, чем
+    прочие ошибки (SLA провайдера против «неверного ответа»).
+    """
+    if isinstance(exc, LLMTimeoutError):
+        return "timeout", "llm_timeout"
+    if isinstance(exc, LLMError):
+        return "error", exc.code
+    return "error", type(exc).__name__
 
 
 class OpenAICompatibleClient(BaseLLMClient):
@@ -122,34 +136,68 @@ class OpenAICompatibleClient(BaseLLMClient):
         """
         payload = self._build_payload(prompt, system_prompt)
         started = time.perf_counter()
-        with self._tracer.start_as_current_span("llm_generate") as span:
-            self._set_span_attributes(span)
-            try:
-                response = await self._post_with_retries(payload)
-                result = self._parse(response)
-            except Exception as exc:
-                self._record_span_error(span, exc, started)
-                raise
+        tokens_in = 0
+        tokens_out = 0
+        cost_usd = 0.0
+        status: CallStatus = "ok"
+        error_code: str | None = None
+        try:
+            with self._tracer.start_as_current_span("llm_generate") as span:
+                self._set_span_attributes(span)
+                try:
+                    response = await self._post_with_retries(payload)
+                except Exception as exc:
+                    status, error_code = _status_for_error(exc)
+                    self._record_span_error(span, exc, started)
+                    raise
+                try:
+                    result = self._parse(response)
+                except Exception as exc:
+                    # Ответ пришёл, но не разобрался — это «invalid», а не
+                    # сетевая/HTTP-ошибка.
+                    status, error_code = "invalid", "invalid_response"
+                    self._record_span_error(span, exc, started)
+                    raise
 
-            span.set_attribute("llm.tokens_in", result.usage.tokens_in)
-            span.set_attribute("llm.tokens_out", result.usage.tokens_out)
-            span.set_attribute("llm.cost_usd", result.usage.cost_usd)
-            span.set_attribute("llm.status", "ok")
-            span.set_attribute("llm.latency_ms", self._elapsed_ms(started))
-            span.set_status(Status(StatusCode.OK))
-            logger.info(
-                "llm_completed",
+                span.set_attribute("llm.tokens_in", result.usage.tokens_in)
+                span.set_attribute("llm.tokens_out", result.usage.tokens_out)
+                span.set_attribute("llm.cost_usd", result.usage.cost_usd)
+                span.set_attribute("llm.status", "ok")
+                span.set_attribute(
+                    "llm.latency_ms", self._elapsed_ms(started)
+                )
+                span.set_status(Status(StatusCode.OK))
+                tokens_in = result.usage.tokens_in
+                tokens_out = result.usage.tokens_out
+                cost_usd = result.usage.cost_usd
+                logger.info(
+                    "llm_completed",
+                    provider=self.provider,
+                    model=result.usage.model,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    cost_usd=cost_usd,
+                    elapsed_ms=self._elapsed_ms(started),
+                )
+                await record_token_usage(tokens_in, tokens_out)
+                return result
+        except asyncio.CancelledError:
+            status, error_code = "error", "cancelled"
+            raise
+        finally:
+            # T-030: durable-история LLMOps — метрики без текстов/PII.
+            record_llm_call(
                 provider=self.provider,
-                model=result.usage.model,
-                tokens_in=result.usage.tokens_in,
-                tokens_out=result.usage.tokens_out,
-                cost_usd=result.usage.cost_usd,
-                elapsed_ms=self._elapsed_ms(started),
+                model=self.model,
+                status=status,
+                latency_ms=self._elapsed_ms(started),
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cost_usd=cost_usd,
+                error_code=error_code,
+                level=self._level,
+                cache_hit=False,
             )
-            await record_token_usage(
-                result.usage.tokens_in, result.usage.tokens_out
-            )
-            return result
 
     async def stream_generate(
         self, prompt: str, system_prompt: str | None = None
@@ -158,6 +206,9 @@ class OpenAICompatibleClient(BaseLLMClient):
 
         Отдаёт только текстовые дельты. Токены в stream-ответе могут
         отсутствовать; вызывающая сторона оценивает их эвристикой.
+
+        T-030: при завершении, ошибке **и отмене** (клиент закрыл стрим)
+        вызов попадает в `llm_calls` со статусом ok/error/timeout.
         """
         payload = self._build_payload(prompt, system_prompt, stream=True)
         started = time.perf_counter()
@@ -167,82 +218,113 @@ class OpenAICompatibleClient(BaseLLMClient):
             system_prompt or ""
         )
         tokens_out_est = 0
-        with self._tracer.start_as_current_span("llm_stream") as span:
-            self._set_span_attributes(span)
-            try:
-                client = self._http_client()
-                async with client.stream(
-                    "POST", self.endpoint, json=payload, headers=self._headers()
-                ) as response:
-                    if response.status_code != httpx.codes.OK:
-                        body = (await response.aread()).decode(
-                            "utf-8", errors="replace"
-                        )
-                        raise LLMError(
-                            f"{self.provider}: HTTP {response.status_code}: "
-                            f"{body[:300]}"
-                        )
-                    async for line in response.aiter_lines():
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            delta = chunk["choices"][0].get("delta") or {}
-                            content = delta.get("content")
-                        except (
-                            json.JSONDecodeError,
-                            KeyError,
-                            IndexError,
-                            TypeError,
-                        ):
-                            continue
-                        if isinstance(content, str) and content:
-                            chars += len(content)
-                            yield content
-            except httpx.TimeoutException as exc:
-                failed = True
-                self._record_span_error(span, exc, started)
-                raise LLMTimeoutError(
-                    f"{self.provider}: таймаут стрима {self.timeout_s:.0f} с"
-                ) from exc
-            except httpx.HTTPError as exc:
-                failed = True
-                self._record_span_error(span, exc, started)
-                raise LLMError(
-                    f"{self.provider}: сеть недоступна: {exc}"
-                ) from exc
-            except Exception as exc:
-                failed = True
-                self._record_span_error(span, exc, started)
-                raise
-            finally:
-                tokens_out_est = max(1, chars // 4) if chars else 0
-                cost_est = compute_cost_usd(
-                    tokens_in_est,
-                    tokens_out_est,
-                    price_in_per_1m=self._price_in,
-                    price_out_per_1m=self._price_out,
-                )
-                span.set_attribute("llm.chars_out", chars)
-                span.set_attribute("llm.tokens_in", tokens_in_est)
-                span.set_attribute("llm.tokens_out", tokens_out_est)
-                span.set_attribute("llm.cost_usd", cost_est)
-                if not failed:
-                    span.set_attribute("llm.status", "ok")
-                    span.set_status(Status(StatusCode.OK))
-                logger.info(
-                    "llm_stream_completed",
-                    provider=self.provider,
-                    model=self.model,
-                    chars=chars,
-                    tokens_in=tokens_in_est,
-                    tokens_out=tokens_out_est,
-                    cost_usd=cost_est,
-                    elapsed_ms=self._elapsed_ms(started),
-                )
+        cost_est = 0.0
+        status: CallStatus = "ok"
+        error_code: str | None = None
+        try:
+            with self._tracer.start_as_current_span("llm_stream") as span:
+                self._set_span_attributes(span)
+                try:
+                    client = self._http_client()
+                    async with client.stream(
+                        "POST", self.endpoint, json=payload, headers=self._headers()
+                    ) as response:
+                        if response.status_code != httpx.codes.OK:
+                            body = (await response.aread()).decode(
+                                "utf-8", errors="replace"
+                            )
+                            raise LLMError(
+                                f"{self.provider}: HTTP {response.status_code}: "
+                                f"{body[:300]}"
+                            )
+                        async for line in response.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                delta = chunk["choices"][0].get("delta") or {}
+                                content = delta.get("content")
+                            except (
+                                json.JSONDecodeError,
+                                KeyError,
+                                IndexError,
+                                TypeError,
+                            ):
+                                continue
+                            if isinstance(content, str) and content:
+                                chars += len(content)
+                                yield content
+                except httpx.TimeoutException as exc:
+                    failed = True
+                    status, error_code = "timeout", "llm_timeout"
+                    self._record_span_error(span, exc, started)
+                    raise LLMTimeoutError(
+                        f"{self.provider}: таймаут стрима {self.timeout_s:.0f} с"
+                    ) from exc
+                except httpx.HTTPError as exc:
+                    failed = True
+                    status, error_code = _status_for_error(exc)
+                    self._record_span_error(span, exc, started)
+                    raise LLMError(
+                        f"{self.provider}: сеть недоступна: {exc}"
+                    ) from exc
+                except asyncio.CancelledError:
+                    # Отмена задачи/таймаут выше по стеку: запись обязательна.
+                    failed = True
+                    status, error_code = "error", "cancelled"
+                    raise
+                except GeneratorExit:
+                    # Потребитель закрыл стрим раньше времени (disconnect).
+                    failed = True
+                    status, error_code = "error", "client_disconnect"
+                    raise
+                except Exception as exc:
+                    failed = True
+                    status, error_code = _status_for_error(exc)
+                    self._record_span_error(span, exc, started)
+                    raise
+                finally:
+                    tokens_out_est = max(1, chars // 4) if chars else 0
+                    cost_est = compute_cost_usd(
+                        tokens_in_est,
+                        tokens_out_est,
+                        price_in_per_1m=self._price_in,
+                        price_out_per_1m=self._price_out,
+                    )
+                    span.set_attribute("llm.chars_out", chars)
+                    span.set_attribute("llm.tokens_in", tokens_in_est)
+                    span.set_attribute("llm.tokens_out", tokens_out_est)
+                    span.set_attribute("llm.cost_usd", cost_est)
+                    if not failed:
+                        span.set_attribute("llm.status", "ok")
+                        span.set_status(Status(StatusCode.OK))
+                    logger.info(
+                        "llm_stream_completed",
+                        provider=self.provider,
+                        model=self.model,
+                        chars=chars,
+                        tokens_in=tokens_in_est,
+                        tokens_out=tokens_out_est,
+                        cost_usd=cost_est,
+                        elapsed_ms=self._elapsed_ms(started),
+                    )
+        finally:
+            # T-030: запись и при отмене/закрытии стрима (метрики, без текста).
+            record_llm_call(
+                provider=self.provider,
+                model=self.model,
+                status=status,
+                latency_ms=self._elapsed_ms(started),
+                tokens_in=tokens_in_est,
+                tokens_out=tokens_out_est,
+                cost_usd=cost_est,
+                error_code=error_code,
+                level=self._level,
+                cache_hit=False,
+            )
         if not failed:
             await record_token_usage(tokens_in_est, tokens_out_est)
 
