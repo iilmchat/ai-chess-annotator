@@ -18,6 +18,8 @@ Redis и пропускаются без него.
 from __future__ import annotations
 
 import asyncio
+import statistics
+import time
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -421,6 +423,55 @@ def test_login_of_inactive_user_returns_403() -> None:
         assert response.json()["code"] == "forbidden"
     finally:
         asyncio.run(_delete_users([email]))
+
+
+def test_login_timing_does_not_reveal_email_existence() -> None:
+    """KI-043: время 401 не зависит от того, зарегистрирован ли email.
+
+    Порог намеренно широкий (медианы по 7 запросам отличаются не более чем в
+    2 раза, обе медленнее 5 мс), чтобы тест не был флаки на загруженной
+    машине: Argon2id с параметрами по умолчанию занимает десятки мс.
+    """
+    existing_email = _email()
+    samples: dict[str, list[float]] = {"existing": [], "unknown": []}
+    try:
+        with _client() as client:
+            _register(client, existing_email)
+            # Прогрев: первый Argon2 в пуле потоков и соединения БД.
+            for warmup_email in (existing_email, _email()):
+                client.post(
+                    "/auth/login",
+                    json={"email": warmup_email, "password": WRONG_PASSWORD},
+                )
+            for _ in range(7):
+                for kind, email in (
+                    ("existing", existing_email),
+                    ("unknown", _email()),
+                ):
+                    started = time.perf_counter()
+                    response = client.post(
+                        "/auth/login",
+                        json={"email": email, "password": WRONG_PASSWORD},
+                    )
+                    elapsed = time.perf_counter() - started
+                    samples[kind].append(elapsed)
+                    assert response.status_code == 401, response.text
+    finally:
+        asyncio.run(_delete_users([existing_email]))
+
+    median_existing = statistics.median(samples["existing"])
+    median_unknown = statistics.median(samples["unknown"])
+    # Обе ветки реально считают Argon2id: 5 мс — заведомо ниже его стоимости.
+    assert median_existing > 0.005, f"слишком быстро: {median_existing:.4f} с"
+    assert median_unknown > 0.005, f"слишком быстро: {median_unknown:.4f} с"
+    ratio = max(median_existing, median_unknown) / min(
+        median_existing, median_unknown
+    )
+    assert ratio <= 2.0, (
+        "время входа различает существование email: "
+        f"existing={median_existing:.4f} с, unknown={median_unknown:.4f} с, "
+        f"ratio={ratio:.2f}"
+    )
 
 
 def test_login_migrates_legacy_bcrypt_hash_to_argon2id() -> None:

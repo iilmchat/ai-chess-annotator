@@ -29,10 +29,12 @@ from jose import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
+from starlette.requests import Request
 
+from app.admin import LlmCallAdmin
 from app.auth.tokens import create_access_token
 from app.config import Settings, get_settings
-from app.db.models import AdminRole, User
+from app.db.models import AdminRole, LlmCall, Prompt, User
 from app.main import create_app
 
 ADMIN_TOKEN = "test-admin-token"
@@ -99,6 +101,50 @@ async def _delete_users(emails: list[str]) -> None:
         async with engine.begin() as connection:
             await connection.execute(
                 User.__table__.delete().where(User.email.in_(emails))
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _first_prompt() -> tuple[int, str, int]:
+    """`(id, content, version)` первого системного промпта (club и т.п.)."""
+    engine = create_async_engine(_db_url(), poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            prompt = await session.scalar(
+                select(Prompt).order_by(Prompt.id).limit(1)
+            )
+            assert prompt is not None, "промпты не засидены при старте приложения"
+            return prompt.id, prompt.content, int(prompt.version or 0)
+    finally:
+        await engine.dispose()
+
+
+async def _prompt_state(pk: int) -> tuple[str, int]:
+    """Текущие `(content, version)` промпта — для проверки «мутация не прошла»."""
+    engine = create_async_engine(_db_url(), poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            prompt = await session.scalar(
+                select(Prompt).where(Prompt.id == pk)
+            )
+            assert prompt is not None, f"промпт {pk} исчез из БД"
+            return prompt.content, int(prompt.version or 0)
+    finally:
+        await engine.dispose()
+
+
+async def _restore_prompt_content(pk: int, content: str) -> None:
+    """Вернуть исходный content после теста admin-сохранения."""
+    engine = create_async_engine(_db_url(), poolclass=NullPool)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                Prompt.__table__.update()
+                .where(Prompt.__table__.c.id == pk)
+                .values(content=content)
             )
     finally:
         await engine.dispose()
@@ -357,6 +403,7 @@ def test_admin_registered_views(client: TestClient) -> None:
         "/admin/commentary/list",
         "/admin/edit/list",
         "/admin/llm-evaluation/list",
+        "/admin/llm-call/list",
     ):
         response = client.get(path, headers=AUTH)
         assert response.status_code == 200, path
@@ -385,3 +432,196 @@ def test_admin_prompt_view_is_editable(client: TestClient) -> None:
     )
     assert edit_page.status_code == 200
     assert 'name="content"' in edit_page.text
+
+
+# --- KI-045: RBAC (auditor — строго read-only) ----------------------------
+
+
+def _auditor_headers(jwt_users: JwtUsers, settings: Settings) -> dict[str, str]:
+    return _bearer(jwt_users.users["auditor"], settings)
+
+
+def test_auditor_can_read_all_registered_views(
+    client: TestClient, jwt_users: JwtUsers, settings: Settings
+) -> None:
+    """Auditor видит списки всех views — читать он по-прежнему может."""
+    headers = _auditor_headers(jwt_users, settings)
+    for path in (
+        "/admin/annotated-game/list",
+        "/admin/commentary/list",
+        "/admin/edit/list",
+        "/admin/llm-evaluation/list",
+        "/admin/llm-call/list",
+        "/admin/prompt/list",
+        "/admin/audit-log/list",
+        "/admin/audit/verify",
+    ):
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200, f"{path}: {response.text}"
+
+
+def test_auditor_cannot_open_prompt_edit_page(
+    client: TestClient, jwt_users: JwtUsers, settings: Settings
+) -> None:
+    """GET-форма редактирования закрыта role-aware `can_edit` → 403."""
+    pk, _, _ = asyncio.run(_first_prompt())
+    response = client.get(
+        f"/admin/prompt/edit?pk={pk}",
+        headers=_auditor_headers(jwt_users, settings),
+    )
+    assert response.status_code == 403, response.text
+
+
+def test_auditor_cannot_submit_prompt_edit(
+    client: TestClient, jwt_users: JwtUsers, settings: Settings
+) -> None:
+    """POST-мутация отклоняется guard'ом, content/version не меняются."""
+    pk, content, version = asyncio.run(_first_prompt())
+    response = client.post(
+        f"/admin/prompt/edit?pk={pk}",
+        headers=_auditor_headers(jwt_users, settings),
+        data={"content": "auditor must not change this"},
+    )
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "admin_forbidden"
+    assert asyncio.run(_prompt_state(pk)) == (content, version)
+
+
+def test_auditor_cannot_delete_prompt(
+    client: TestClient, jwt_users: JwtUsers, settings: Settings
+) -> None:
+    """Фактические статусы starlette-admin: DELETE-маршрута нет (404),
+    POST-guard (403), batch-action delete (403); промпт остаётся в БД.
+    """
+    pk, content, version = asyncio.run(_first_prompt())
+    headers = _auditor_headers(jwt_users, settings)
+
+    get_delete = client.get(f"/admin/prompt/delete?pk={pk}", headers=headers)
+    post_delete = client.post(f"/admin/prompt/delete?pk={pk}", headers=headers)
+    batch_delete = client.post(
+        f"/admin/_api/prompt/action?name=delete&pks={pk}", headers=headers
+    )
+
+    # Маршрута фронтового delete в starlette-admin 1.0.3 нет — 404;
+    # любые POST-guard'ом запрещены — 403.
+    assert get_delete.status_code in {403, 404, 405}, get_delete.status_code
+    assert get_delete.status_code == 404
+    assert post_delete.status_code == 403, post_delete.text
+    assert batch_delete.status_code == 403, batch_delete.text
+    assert asyncio.run(_prompt_state(pk)) == (content, version)
+
+
+def test_auditor_cannot_delete_or_edit_annotated_game(
+    client: TestClient, jwt_users: JwtUsers, settings: Settings
+) -> None:
+    headers = _auditor_headers(jwt_users, settings)
+    get_delete = client.get("/admin/annotated-game/delete?pk=1", headers=headers)
+    post_delete = client.post(
+        "/admin/annotated-game/delete?pk=1", headers=headers
+    )
+    batch_delete = client.post(
+        "/admin/_api/annotated-game/action?name=delete&pks=1", headers=headers
+    )
+    get_edit = client.get("/admin/annotated-game/edit?pk=1", headers=headers)
+
+    assert get_delete.status_code == 404, get_delete.status_code
+    assert post_delete.status_code == 403, post_delete.text
+    assert batch_delete.status_code == 403, batch_delete.text
+    assert get_edit.status_code == 403, get_edit.text
+
+
+def test_auditor_cannot_create_or_import_prompt(
+    client: TestClient, jwt_users: JwtUsers, settings: Settings
+) -> None:
+    headers = _auditor_headers(jwt_users, settings)
+    get_create = client.get("/admin/prompt/create", headers=headers)
+    post_create = client.post(
+        "/admin/prompt/create", headers=headers, data={"content": "x"}
+    )
+    post_import = client.post(
+        "/admin/_api/prompt/import", headers=headers
+    )
+    post_inline_edit = client.post(
+        "/admin/_api/prompt/inline-edit?pk=1&field=content",
+        headers=headers,
+        data={"content": "x"},
+    )
+
+    assert get_create.status_code == 403, get_create.text
+    assert post_create.status_code == 403, post_create.text
+    assert post_import.status_code == 403, post_import.text
+    assert post_inline_edit.status_code == 403, post_inline_edit.text
+
+
+def test_admin_jwt_can_open_and_save_prompt_edit(
+    client: TestClient, jwt_users: JwtUsers, settings: Settings
+) -> None:
+    """Admin по-прежнему правит промпт: GET 200, POST 303, БД обновилась."""
+    pk, original, version = asyncio.run(_first_prompt())
+    headers = _bearer(jwt_users.users["admin"], settings)
+    try:
+        page = client.get(f"/admin/prompt/edit?pk={pk}", headers=headers)
+        assert page.status_code == 200, page.text
+        assert 'name="content"' in page.text
+        match = re.search(r'name="csrftoken" value="([^"]+)"', page.text)
+        assert match is not None, "edit-форма должна содержать CSRF-токен"
+
+        new_content = f"{original}\n<!-- KI-045 admin save -->"
+        saved = client.post(
+            f"/admin/prompt/edit?pk={pk}",
+            headers=headers,
+            data={"content": new_content, "csrftoken": match.group(1)},
+        )
+        assert saved.status_code == 303, saved.text
+        saved_content, saved_version = asyncio.run(_prompt_state(pk))
+        assert saved_content == new_content
+        assert saved_version > version
+    finally:
+        asyncio.run(_restore_prompt_content(pk, original))
+
+
+# --- T-030: read-only view llm_calls --------------------------------------
+
+
+def _request_with_role(role: str) -> Request:
+    """Минимальный Request только с `state.admin_role` (для проверки hooks)."""
+    return Request({"type": "http", "headers": [], "state": {"admin_role": role}})
+
+
+def test_llm_call_view_is_read_only_for_all_roles() -> None:
+    """LlmCallAdmin — read-only на уровне hooks для любой роли (T-030)."""
+    view = LlmCallAdmin(LlmCall)
+    assert view.page_size == 25
+    for role in ("admin", "auditor", "legacy"):
+        request = _request_with_role(role)
+        assert view.can_create(request) is False, role
+        assert view.can_edit(request) is False, role
+        assert view.can_delete(request) is False, role
+        assert view.can_import(request) is False, role
+
+
+def test_admin_jwt_can_read_llm_calls(
+    client: TestClient, jwt_users: JwtUsers, settings: Settings
+) -> None:
+    headers = _bearer(jwt_users.users["admin"], settings)
+    listing = client.get("/admin/llm-call/list", headers=headers)
+    assert listing.status_code == 200, listing.text
+
+    # Даже admin не может менять журнал вызовов: форма мутаций закрыта.
+    create_page = client.get("/admin/llm-call/create", headers=headers)
+    edit_page = client.get("/admin/llm-call/edit?pk=1", headers=headers)
+    assert create_page.status_code == 403, create_page.text
+    assert edit_page.status_code == 403, edit_page.text
+
+
+def test_auditor_can_read_llm_calls_but_not_mutate(
+    client: TestClient, jwt_users: JwtUsers, settings: Settings
+) -> None:
+    headers = _auditor_headers(jwt_users, settings)
+    listing = client.get("/admin/llm-call/list", headers=headers)
+    assert listing.status_code == 200, listing.text
+
+    delete = client.post(
+        "/admin/_api/llm-call/action?name=delete&pks=1", headers=headers
+    )
+    assert delete.status_code == 403, delete.text

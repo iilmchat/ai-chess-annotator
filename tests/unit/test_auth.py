@@ -22,10 +22,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from argon2 import Type, extract_parameters
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from starlette.responses import Response
 
+import app.api.v1.auth as auth_module
 from app.api.v1.auth import (
     LoginRequest,
     RefreshRequest,
@@ -43,6 +45,7 @@ from app.auth.denylist import (
     revoke_refresh_token,
 )
 from app.auth.passwords import (
+    DUMMY_PASSWORD_HASH,
     MAX_PASSWORD_LENGTH,
     hash_password,
     verify_and_update,
@@ -171,6 +174,99 @@ def test_verify_and_update_handles_broken_or_empty_hash() -> None:
     assert verify_and_update(PASSWORD, "") == (False, None)
     assert verify_and_update(PASSWORD, "not-a-hash") == (False, None)
     assert verify_and_update("", hash_password(PASSWORD)) == (False, None)
+
+
+# --- KI-043: dummy-хеш и одинаковое время входа ---------------------------
+
+
+def test_dummy_password_hash_has_same_argon2_parameters() -> None:
+    """Dummy-хеш должен стоить столько же, сколько проверка реального пароля."""
+    dummy = extract_parameters(DUMMY_PASSWORD_HASH)
+    real = extract_parameters(hash_password(PASSWORD))
+
+    assert dummy.type is Type.ID
+    assert (
+        dummy.version,
+        dummy.time_cost,
+        dummy.memory_cost,
+        dummy.parallelism,
+    ) == (
+        real.version,
+        real.time_cost,
+        real.memory_cost,
+        real.parallelism,
+    )
+    assert verify_password("dummy-password-for-timing", DUMMY_PASSWORD_HASH) is True
+    assert verify_password(PASSWORD, DUMMY_PASSWORD_HASH) is False
+
+
+class _NoUserSession:
+    """Заглушка AsyncSession: пользователя с таким email нет."""
+
+    async def scalar(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+class _ExistingUserSession:
+    """Заглушка AsyncSession: пользователь есть (пароль заведомо неверный)."""
+
+    def __init__(self, user: User) -> None:
+        self._user = user
+
+    async def scalar(self, *_args: Any, **_kwargs: Any) -> User:
+        return self._user
+
+
+def test_login_verifies_dummy_hash_for_unknown_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KI-043: для несуществующего email Argon2 verify всё равно выполняется."""
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_verify(password: str, password_hash: str | None) -> bool:
+        calls.append((password, password_hash))
+        return False
+
+    monkeypatch.setattr(auth_module, "verify_password", fake_verify)
+    request = LoginRequest(email=GOOD_EMAIL, password=PASSWORD)
+
+    with pytest.raises(AuthError):
+        asyncio.run(
+            auth_module.login(  # type: ignore[arg-type]
+                request, Response(), _NoUserSession(), _settings()
+            )
+        )
+
+    assert calls == [(PASSWORD, DUMMY_PASSWORD_HASH)]
+
+
+def test_login_uses_stored_hash_for_existing_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Существующий email проверяется по его хешу, dummy-хеш не участвует."""
+    user = _user()
+    user.password_hash = hash_password(PASSWORD)
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_verify_and_update(
+        password: str, password_hash: str | None
+    ) -> tuple[bool, str | None]:
+        calls.append((password, password_hash))
+        return False, None
+
+    monkeypatch.setattr(
+        auth_module, "verify_and_update", fake_verify_and_update
+    )
+    request = LoginRequest(email=GOOD_EMAIL, password=PASSWORD)
+
+    with pytest.raises(AuthError):
+        asyncio.run(
+            auth_module.login(  # type: ignore[arg-type]
+                request, Response(), _ExistingUserSession(user), _settings()
+            )
+        )
+
+    assert calls == [(PASSWORD, user.password_hash)]
 
 
 # --- Cookie ---------------------------------------------------------------

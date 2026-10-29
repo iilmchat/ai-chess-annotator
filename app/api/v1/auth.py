@@ -10,7 +10,9 @@
   (`$argon2id$`);
 * `POST /auth/login` — проверяет email/пароль, обновляет `last_login_at`,
   при необходимости **перехеширует** legacy bcrypt → Argon2id в той же
-  транзакции, возвращает access-токен в JSON, а refresh — в HttpOnly-cookie;
+  транзакции; для неизвестного email всё равно выполняет Argon2 verify по
+  dummy-хешу (KI-043, timing attack), возвращает access-токен в JSON, а
+  refresh — в HttpOnly-cookie;
 * `POST /auth/refresh` — принимает refresh из cookie (fallback — тело JSON для
   curl/не-браузерных клиентов), проверяет Redis-denylist, **ротирует** cookie
   и выдаёт новый access; новый refresh получает новый `jti`;
@@ -41,10 +43,12 @@ from app.auth.cookies import clear_refresh_cookie, set_refresh_cookie
 from app.auth.denylist import is_refresh_token_revoked, revoke_refresh_token
 from app.auth.deps import get_current_user
 from app.auth.passwords import (
+    DUMMY_PASSWORD_HASH,
     MAX_PASSWORD_LENGTH,
     MIN_PASSWORD_LENGTH,
     hash_password,
     verify_and_update,
+    verify_password,
 )
 from app.auth.tokens import create_access_token, create_refresh_token, decode_token
 from app.config import Settings, get_settings
@@ -246,6 +250,13 @@ async def login(
         select(User).where(User.email == payload.email)
     )
     if user is None:
+        # KI-043 (timing attack): выравниваем время ответа с веткой
+        # существующего email — Argon2 verify по dummy-хешу выполняется и
+        # здесь, поэтому 401 приходит примерно за то же время. Пароль
+        # dummy-хешу не подходит, результат (False) намеренно игнорируется.
+        await asyncio.to_thread(
+            verify_password, payload.password, DUMMY_PASSWORD_HASH
+        )
         raise AuthError(_INVALID_CREDENTIALS)
     password_ok, upgraded_hash = await asyncio.to_thread(
         verify_and_update, payload.password, user.password_hash

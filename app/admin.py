@@ -22,9 +22,23 @@ Guard отдаёт JSON вместо редиректа: нет креденше
 403 ``admin_forbidden``. Публичны только `/admin/login`, `/admin/logout`
 и `/admin/static/*`.
 
-RBAC-фильтров и аудита мутаций пока нет, поэтому все views read-only
-(кроме редактора промптов): любая запись должна появиться вместе с
-аудитом, а не до него.
+RBAC (KI-045). Guard выставляет в `request.state` роль и актора:
+
+* ``admin_role`` — ``"admin"``/``"auditor"`` (из JWT) либо ``"legacy"``
+  (service-token `X-Admin-Token` / парольная сессия);
+* ``admin_actor`` — email пользователя или legacy admin-username.
+
+Роль ``auditor`` строго read-only: hooks ``can_create``/``can_edit``/
+``can_delete``/``can_import`` запрещают мутации, а guard дополнительно
+отклоняет любой небезопасный HTTP-метод (POST/PUT/PATCH/DELETE) в
+`/admin/**` с 403. Роль ``legacy`` и ``admin`` сохраняют прежние права
+(редактор промптов доступен). Остальные views остаются read-only для всех.
+
+Read-only views: `annotated_games`, `commentaries`, `edits`, `audit_logs`,
+`llm_evaluations` и `llm_calls` (T-030). Мутирует только редактор
+промптов, и только через аудируемый edit. Экспорт в starlette-admin —
+POST-действие, поэтому для auditor он закрыт вместе с остальными
+небезопасными методами.
 """
 
 from __future__ import annotations
@@ -61,6 +75,7 @@ from app.db.models import (
     AuditLog,
     Commentary,
     Edit,
+    LlmCall,
     LlmEvaluation,
     Prompt,
     User,
@@ -76,6 +91,7 @@ __all__ = [
     "AdminPathNormalizer",
     "AuditLogAdmin",
     "AuditVerifyView",
+    "LlmCallAdmin",
     "LlmEvaluationAdmin",
     "PromptAdmin",
     "create_admin",
@@ -94,9 +110,20 @@ _ADMIN_ROLES: frozenset[AdminRole] = frozenset(
     {AdminRole.admin, AdminRole.auditor}
 )
 
-#: Атрибут `request.state`: guard кладёт сюда проверенную JWT-идентичность,
-#: чтобы `AdminAuthProvider` не делал повторный запрос в БД.
+#: Значения `request.state.admin_role` (KI-045).
+_ROLE_ADMIN = "admin"
+_ROLE_AUDITOR = "auditor"
+_ROLE_LEGACY = "legacy"
+_ROLE_VALUES = frozenset({_ROLE_ADMIN, _ROLE_AUDITOR, _ROLE_LEGACY})
+
+#: HTTP-методы, не меняющие состояние. Всё остальное для auditor — 403.
+_SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
+
+#: Атрибуты `request.state`: guard кладёт сюда проверенную JWT-идентичность,
+#: роль и актора, чтобы провайдер/views не ходили в БД повторно.
 _JWT_IDENTITY_STATE = "admin_jwt_identity"
+_ADMIN_ROLE_STATE = "admin_role"
+_ADMIN_ACTOR_STATE = "admin_actor"
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,8 +131,35 @@ class _JwtIdentity:
     """Пользователь, подтверждённый access-токеном."""
 
     email: str
-    #: ``False`` — токен валиден, но роль (``user``) не даёт доступа в админку.
-    allowed: bool
+    role: AdminRole
+
+    @property
+    def allowed(self) -> bool:
+        """``True``, если роль пускает в админку (admin/auditor)."""
+        return self.role in _ADMIN_ROLES
+
+    @property
+    def role_name(self) -> str:
+        """Значение для `request.state.admin_role` (``admin``/``auditor``)."""
+        return self.role.value
+
+
+def _set_admin_context(request: Request, *, role: str, actor: str) -> None:
+    """Выставить роль/актора текущего запроса для role-aware views."""
+    setattr(request.state, _ADMIN_ROLE_STATE, role)
+    setattr(request.state, _ADMIN_ACTOR_STATE, actor)
+
+
+def _admin_role(request: Request) -> str:
+    """Роль текущего админа из `request.state` (KI-045).
+
+    Если контекст не выставлен (view вызван в обход guard), возвращаем
+    ``auditor`` — наименьшие права: лучше 403, чем скрытая мутация.
+    """
+    role = getattr(request.state, _ADMIN_ROLE_STATE, None)
+    if isinstance(role, str) and role in _ROLE_VALUES:
+        return role
+    return _ROLE_AUDITOR
 
 
 def _authorization_token(request: Request) -> str | None:
@@ -143,9 +197,7 @@ async def _jwt_identity(settings: Settings, token: str) -> _JwtIdentity | None:
         user = await session.get(User, payload.user_id)
         if user is None or not user.is_active:
             return None
-        return _JwtIdentity(
-            email=user.email, allowed=user.role in _ADMIN_ROLES
-        )
+        return _JwtIdentity(email=user.email, role=user.role)
 
 
 async def _jwt_identity_from_request(
@@ -202,6 +254,11 @@ class AdminAuthProvider(AuthProvider):
             identity = await _jwt_identity_from_request(settings, request)
         if identity is not None:
             if identity.allowed:
+                _set_admin_context(
+                    request,
+                    role=identity.role_name,
+                    actor=identity.email,
+                )
                 return AdminUser(username=identity.email)
             logger.warning(
                 "admin_jwt_role_denied",
@@ -214,11 +271,17 @@ class AdminAuthProvider(AuthProvider):
         token = request.headers.get("x-admin-token")
         expected = settings.admin_api_key
         if token is not None and expected and _same_secret(token, expected):
+            _set_admin_context(
+                request, role=_ROLE_LEGACY, actor=settings.admin_username
+            )
             return AdminUser(username=settings.admin_username)
 
         # Legacy fallback: cookie-сессия после парольной формы /admin/login.
         session_user = request.session.get("admin_user")
         if session_user == settings.admin_username:
+            _set_admin_context(
+                request, role=_ROLE_LEGACY, actor=settings.admin_username
+            )
             return AdminUser(username=settings.admin_username)
         return None
 
@@ -288,7 +351,10 @@ class AdminAuthGuard(BaseHTTPMiddleware):
     * неверный `X-Admin-Token`, битый/просроченный JWT или роль ``user`` —
       403 ``admin_forbidden``;
     * валидный JWT роли ``admin``/``auditor``, legacy service-token или
-      legacy сессия — доступ.
+      legacy сессия — доступ;
+    * auditor дополнительно не может менять состояние: любой небезопасный
+      HTTP-метод (POST/PUT/PATCH/DELETE) в `/admin/**` — 403
+      ``admin_forbidden`` (KI-045).
     """
 
     def __init__(self, app: ASGIApp, *, settings: Settings) -> None:
@@ -313,7 +379,12 @@ class AdminAuthGuard(BaseHTTPMiddleware):
         if token is not None:
             expected = self._settings.admin_api_key
             if expected and _same_secret(token, expected):
-                return await call_next(request)
+                return await self._allow(
+                    request,
+                    call_next,
+                    role=_ROLE_LEGACY,
+                    actor=self._settings.admin_username,
+                )
             return _admin_forbidden("Invalid admin token")
 
         # 2. JWT в Authorization: Bearer. Заголовок есть, но токен не
@@ -323,7 +394,12 @@ class AdminAuthGuard(BaseHTTPMiddleware):
             identity = await _jwt_identity(self._settings, auth_token)
             if identity is not None and identity.allowed:
                 setattr(request.state, _JWT_IDENTITY_STATE, identity)
-                return await call_next(request)
+                return await self._allow(
+                    request,
+                    call_next,
+                    role=identity.role_name,
+                    actor=identity.email,
+                )
             return _admin_forbidden(self._jwt_denied_detail(identity))
 
         # 3. JWT в cookie access_token — та же логика, что и для заголовка.
@@ -332,7 +408,12 @@ class AdminAuthGuard(BaseHTTPMiddleware):
             identity = await _jwt_identity(self._settings, cookie_token)
             if identity is not None and identity.allowed:
                 setattr(request.state, _JWT_IDENTITY_STATE, identity)
-                return await call_next(request)
+                return await self._allow(
+                    request,
+                    call_next,
+                    role=identity.role_name,
+                    actor=identity.email,
+                )
             return _admin_forbidden(self._jwt_denied_detail(identity))
 
         # 4. Legacy fallback: cookie-сессия после парольной формы.
@@ -340,13 +421,38 @@ class AdminAuthGuard(BaseHTTPMiddleware):
         if isinstance(session, dict) and session.get("admin_user") == (
             self._settings.admin_username
         ):
-            return await call_next(request)
+            return await self._allow(
+                request,
+                call_next,
+                role=_ROLE_LEGACY,
+                actor=self._settings.admin_username,
+            )
 
         return JSONResponse(
             {"detail": "Admin authentication required", "code": "admin_unauthorized"},
             status_code=401,
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    async def _allow(
+        self,
+        request: Request,
+        call_next: RequestResponseEndpoint,
+        *,
+        role: str,
+        actor: str,
+    ) -> Response:
+        """Пропустить запрос, выставив RBAC-контекст; auditor — только чтение."""
+        _set_admin_context(request, role=role, actor=actor)
+        if role == _ROLE_AUDITOR and request.method not in _SAFE_METHODS:
+            logger.warning(
+                "admin_auditor_mutation_denied",
+                actor=actor,
+                method=request.method,
+                path=request.url.path,
+            )
+            return _admin_forbidden("Auditor role is read-only")
+        return await call_next(request)
 
     @staticmethod
     def _jwt_denied_detail(identity: _JwtIdentity | None) -> str:
@@ -357,7 +463,11 @@ class AdminAuthGuard(BaseHTTPMiddleware):
 
 
 class _ReadOnlyModelView(ModelView):
-    """Просмотр без создания/изменения/удаления (до появления аудита)."""
+    """Просмотр без создания/изменения/удаления (до появления аудита).
+
+    Read-only для всех ролей; для auditor guard дополнительно отклоняет
+    любые небезопасные HTTP-методы (KI-045).
+    """
 
     page_size = 25
 
@@ -369,6 +479,14 @@ class _ReadOnlyModelView(ModelView):
 
     def can_delete(self, request: Request) -> bool:
         return False
+
+    def can_import(self, request: Request) -> bool:
+        # Импорт вставляет строки в обход аудита — read-only views его не дают.
+        return False
+
+    def can_export(self, request: Request) -> bool:
+        # Экспорт в starlette-admin идёт POST-действием; auditor read-only.
+        return _admin_role(request) != _ROLE_AUDITOR
 
 
 class AnnotatedGameAdmin(_ReadOnlyModelView):
@@ -439,6 +557,11 @@ class PromptAdmin(ModelView):
     Редактируется только `content`; `level` — ключ, `version` и
     `updated_at` обновляются сервером. После коммита кэш сбрасывается, и
     следующий LLM-вызов читает новую версию из БД без рестарта.
+
+    RBAC (KI-045): редактировать может только роль ``admin`` (и legacy
+    service-token/сессия); ``auditor`` видит список, но `can_edit=False`
+    (GET/POST `/admin/prompt/edit` → 403). Создание/удаление/импорт
+    закрыты для всех: изменение промпта идёт только через аудируемый edit.
     """
 
     page_size = 10
@@ -460,6 +583,18 @@ class PromptAdmin(ModelView):
 
     def can_delete(self, request: Request) -> bool:
         return False
+
+    def can_import(self, request: Request) -> bool:
+        # Импорт обошёл бы аудит prompt.update — только через edit.
+        return False
+
+    def can_edit(self, request: Request) -> bool:
+        """Править промпт может admin (или legacy), но не auditor."""
+        return _admin_role(request) != _ROLE_AUDITOR
+
+    def can_export(self, request: Request) -> bool:
+        # Экспорт — POST-действие, для auditor он тоже закрыт (read-only).
+        return _admin_role(request) != _ROLE_AUDITOR
 
     async def validate(
         self, request: Request, data: dict[str, Any]
@@ -529,9 +664,60 @@ class PromptAdmin(ModelView):
         )
 
 
+class LlmCallAdmin(_ReadOnlyModelView):
+    """Durable-история вызовов LLM (T-030, DESIGN_ADMIN_AND_OPS §4.4).
+
+    Read-only: одна строка — один вызов провайдера; текстов промптов и
+    ответов здесь нет (privacy), только операция, модель, токены,
+    стоимость, латентность и статус. ``trace_id``/``span_id`` связывают
+    вызов с HTTP-запросом и OTel-трейсом.
+
+    Поля `request_id`, `commentary_id`, `error_code` в UI не выводим:
+    первые два — служебные id, последний дублируется колонкой `status`
+    (ошибка видна по ней), а список должен оставаться компактным.
+    """
+
+    page_size = 25
+    fields = (  # type: ignore[assignment]
+        "id",
+        "trace_id",
+        "span_id",
+        "operation",
+        "provider",
+        "model",
+        "level",
+        "actor_id",
+        "game_id",
+        "prompt_slug",
+        "prompt_version",
+        "tokens_in",
+        "tokens_out",
+        "cost_usd",
+        "latency_ms",
+        "cache_hit",
+        "status",
+        "created_at",
+    )
+    searchable_fields = ("model", "operation", "status")
+    sortable_fields = (
+        "id",
+        "created_at",
+        "operation",
+        "provider",
+        "model",
+        "level",
+        "tokens_in",
+        "tokens_out",
+        "cost_usd",
+        "latency_ms",
+        "cache_hit",
+        "status",
+    )
+    exclude_fields_from_list = ("trace_id", "span_id", "prompt_slug")
+
+
 class LlmEvaluationAdmin(_ReadOnlyModelView):
     """Таблица LLM-as-judge: модель, уровень, три шкалы (T-039)."""
-
     fields = (  # type: ignore[assignment]
         "id",
         "model",
@@ -628,6 +814,7 @@ def create_admin(settings: Settings) -> Admin:
     admin.add_view(EditAdmin(Edit, icon="fa fa-pen"))
     admin.add_view(PromptAdmin(Prompt, icon="fa fa-file-text"))
     admin.add_view(AuditLogAdmin(AuditLog, icon="fa fa-clipboard-list"))
+    admin.add_view(LlmCallAdmin(LlmCall, icon="fa fa-microchip"))
     admin.add_view(
         LlmEvaluationAdmin(LlmEvaluation, icon="fa fa-chart-line")
     )

@@ -19,6 +19,10 @@ passlib больше не используется. Когда все bcrypt-х�
 Длину пароля проверяем явно: утилита не должна зависеть от Pydantic-схемы
 (её могут вызвать скрипты/админка), а слишком длинный вход — лишняя работа
 для KDF.
+
+KI-043: :data:`DUMMY_PASSWORD_HASH` — заранее посчитанный Argon2id-хеш тех
+же параметров. `/auth/login` при неизвестном email выполняет verify по нему,
+чтобы время ответа не выдавало, зарегистрирован ли email (timing attack).
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from argon2.exceptions import (
 )
 
 __all__ = [
+    "DUMMY_PASSWORD_HASH",
     "MAX_PASSWORD_LENGTH",
     "MIN_PASSWORD_LENGTH",
     "hash_password",
@@ -49,6 +54,16 @@ _BCRYPT_PREFIXES = ("$2a$", "$2b$", "$2y$")
 
 #: Один общий hasher: параметры Argon2id по умолчанию (argon2-cffi).
 _hasher = PasswordHasher()
+
+#: Dummy Argon2id-хеш для выравнивания времени входа при неизвестном email
+#: (KI-043). Сгенерирован локально ``PasswordHasher().hash(...)`` теми же
+#: параметрами, что и :data:`_hasher` (argon2id, m=65536, t=3, p=4), поэтому
+#: verify по нему стоит столько же, сколько проверка реального пароля.
+#: Секрет в хеше фиктивный — пароль к нему не подходит ни у одного клиента.
+DUMMY_PASSWORD_HASH = (
+    "$argon2id$v=19$m=65536,t=3,p=4$DJEAz++cOiJahpTs6r5lbA$"
+    "QTDcy4RqBQzdfrWXgEfA0+QG+F87I21IlYD81PMW3Wo"
+)
 
 
 def hash_password(password: str) -> str:
