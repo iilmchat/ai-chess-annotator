@@ -93,6 +93,7 @@ from app.db.models import (
 )
 from app.db.session import SessionLocal
 from app.errors import AuthError
+from app.llmops_dashboard import LlmOpsDashboardView
 from app.prompts import reset_prompt_cache
 from app.prompts.pubsub import publish_prompt_update
 
@@ -106,6 +107,7 @@ __all__ = [
     "DatasetExportView",
     "LlmCallAdmin",
     "LlmEvaluationAdmin",
+    "LlmOpsDashboardView",
     "PromptAdmin",
     "create_admin",
     "decode_admin_session",
@@ -894,6 +896,7 @@ def create_admin(settings: Settings) -> Admin:
     admin.add_view(EditAdmin(Edit, icon="fa fa-pen"))
     admin.add_view(PromptAdmin(Prompt, icon="fa fa-file-text"))
     admin.add_view(AuditLogAdmin(AuditLog, icon="fa fa-clipboard-list"))
+    admin.add_view(LlmOpsDashboardView())
     admin.add_view(LlmCallAdmin(LlmCall, icon="fa fa-microchip"))
     admin.add_view(
         LlmEvaluationAdmin(LlmEvaluation, icon="fa fa-chart-line")

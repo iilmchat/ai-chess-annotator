@@ -320,10 +320,17 @@ CREATE INDEX ix_llm_calls_level_created ON llm_calls (level, created_at DESC);
 - `UNIQUE (trace_id, span_id)` защищает от дублей при ретраях
   экспортёра.
 - Для масштаба — партиционирование по месяцу (`created_at`) и retention
-  90 дней; агрегаты остаются в `usage_daily`. При партиционировании
-  уникальность делается по `(trace_id, span_id, created_at)` — Postgres
-  требует ключ партиционирования в уникальном индексе; для MVP таблица
-  не партиционирована.
+  90 дней; агрегаты остаются в `usage_daily`.
+- **Retention реализован в итерации 29 (KI-048):**
+  `scripts/prune_llm_calls.py` — батчевый `DELETE` старше
+  `LLM_CALLS_RETENTION_DAYS` (90 по умолчанию): `DELETE ... WHERE id IN
+  (SELECT id ... ORDER BY id LIMIT N)` в цикле, commit на батч.
+  Партиционирование **не сделано** (KI-052): Postgres требует
+  партиционирующий ключ в уникальном индексе, поэтому
+  `UNIQUE (trace_id, span_id)` пришлось бы менять на
+  `(trace_id, span_id, created_at)` и пересоздавать таблицу; для MVP
+  достаточно retention. При партиционировании ключ уникальности делается
+  по `(trace_id, span_id, created_at)`.
 - `cost_usd` считается из `price_book` на момент вызова и фиксируется,
   чтобы смена прайса не переписывала историю.
 - `commentary_id` заполняется после успешного `INSERT` комментария
@@ -835,6 +842,17 @@ Content-Type: application/json
 - Стоимость на комментарий/чат, распределение p50/p95.
 - Экономия кэша (`cost_saved_usd`).
 - Топ-10 расходов и аномалии (3σ от недельного среднего).
+
+**Реализовано в итерации 29 (T-109):** страница `/admin/llmops`
+(`LlmOpsDashboardView`, Jinja2 + Bootstrap) — визуальная сводка без
+Grafana/OTel-бэкенда. Источники: `llm_calls` (latency p50/p95/p99 и avg
+по реальным вызовам, т.е. `cache_hit=false`; ошибки `error`/`timeout` и
+error rate; `cache_hit` и hit rate; суммы токенов/стоимости с разбивкой
+по `model` и `level`) и `usage_daily` (топ-5 субъектов по токенам).
+Окна — последние 24 часа, 7 и 30 дней; «24 часа» для топа пользователей
+означает текущие сутки UTC (гранулярность `usage_daily` — день).
+Read-only, доступна admin и auditor. Grafana/Tempo-дашборды по OTel-спанам
+остаются отдельной задачей (аномалии 3σ, алерты — T-113).
 
 ---
 

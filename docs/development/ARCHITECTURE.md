@@ -44,7 +44,9 @@
 | `app/commentary/` | сборка анализа из БД, генерация, retry, кэш, правка |
 | `app/chat/` | вопрос → контекст → LLM → валидатор → ответ |
 | `app/rag/` | ingest аннотированных партий, эмбеддинги, retrieval, контекст |
-| `app/api/v1/` | `analyze`, `games`, `commentary`, `chat`, `ingest`, `health` |
+| `app/admin.py` | starlette-admin: JWT/legacy-аутентификация, RBAC, read-only views, аудит и экспорт |
+| `app/llmops_dashboard.py` | LLMOps-дашборд `/admin/llmops`: p50/p95/p99, error rate, tokens/cost, cache hit rate, топ-5 пользователей |
+| `app/api/v1/` | `analyze`, `games`, `commentary`, `chat`, `ingest`, `health`, `admin/exports` |
 | `app/db/` | SQLAlchemy-модели, сессии, Alembic-миграции |
 
 ## 3. Потоки

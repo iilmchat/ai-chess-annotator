@@ -1,0 +1,254 @@
+{% extends "layout.html" %}
+{% block header %}
+    <div class="d-flex justify-content-between align-items-center">
+        <h1>{{ title }}</h1>
+        <a class="btn btn-outline-secondary btn-sm"
+           href="{{ url_for(__name__ ~ ':llmops-dashboard') }}">
+            Обновить
+        </a>
+    </div>
+{% endblock %}
+{% block content %}
+    <style>
+        .llmops-table { font-size: 0.875rem; }
+        .llmops-table td, .llmops-table th { vertical-align: middle; }
+        .llmops-metric { font-variant-numeric: tabular-nums; }
+        .llmops-section-title { font-size: 1rem; font-weight: 600; }
+    </style>
+
+    <p class="text-muted">
+        Агрегаты по <code>llm_calls</code> (latency, токены, стоимость,
+        ошибки, cache) и <code>usage_daily</code> (топ пользователей).
+        Латентность считается только по реальным вызовам провайдера:
+        попадания в semantic cache (<code>cache_hit=true</code>) её не
+        занижают. «24 часа» для топа пользователей — текущие сутки UTC
+        (гранулярность <code>usage_daily</code> — день).
+    </p>
+
+    <div class="card mb-4">
+        <div class="card-header llmops-section-title">Сводка</div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm table-striped llmops-table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Окно</th>
+                            <th class="text-end">Вызовы</th>
+                            <th class="text-end">p50, мс</th>
+                            <th class="text-end">p95, мс</th>
+                            <th class="text-end">p99, мс</th>
+                            <th class="text-end">Ошибки</th>
+                            <th class="text-end">Error rate</th>
+                            <th class="text-end">Cache-хиты</th>
+                            <th class="text-end">Hit rate</th>
+                            <th class="text-end">Токены in / out</th>
+                            <th class="text-end">Стоимость</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for metrics in data.periods %}
+                            <tr>
+                                <td>
+                                    <strong>{{ metrics.period.label }}</strong><br>
+                                    <small class="text-muted">
+                                        {{ metrics.period.description }}
+                                    </small>
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    {{ metrics.requests }}
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    {% if metrics.latency.p50_ms is not none %}
+                                        {{ '%.0f'|format(metrics.latency.p50_ms) }}
+                                    {% else %}—{% endif %}
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    {% if metrics.latency.p95_ms is not none %}
+                                        {{ '%.0f'|format(metrics.latency.p95_ms) }}
+                                    {% else %}—{% endif %}
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    {% if metrics.latency.p99_ms is not none %}
+                                        {{ '%.0f'|format(metrics.latency.p99_ms) }}
+                                    {% else %}—{% endif %}
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    {{ metrics.errors }}
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    {{ '%.1f'|format(metrics.error_rate * 100) }}%
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    {{ metrics.cache_hits }}
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    {{ '%.1f'|format(metrics.cache_hit_rate * 100) }}%
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    {{ metrics.tokens_in }} / {{ metrics.tokens_out }}
+                                </td>
+                                <td class="text-end llmops-metric">
+                                    ${{ '%.6f'|format(metrics.cost_usd) }}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <h2 class="h5 mb-3">Токены и стоимость по моделям и уровням</h2>
+    <div class="row g-4 mb-4">
+        {% for metrics in data.periods %}
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header llmops-section-title">
+                        {{ metrics.period.label }}
+                        <span class="text-muted fw-normal">
+                            ({{ metrics.period.description }})
+                        </span>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-lg-6">
+                                <h6>По моделям</h6>
+                                {% if metrics.by_model %}
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover llmops-table mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th>Модель</th>
+                                                    <th class="text-end">Вызовы</th>
+                                                    <th class="text-end">Токены in / out</th>
+                                                    <th class="text-end">Стоимость</th>
+                                                    <th class="text-end">Ошибки</th>
+                                                    <th class="text-end">Cache</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for row in metrics.by_model %}
+                                                    <tr>
+                                                        <td><code>{{ row.key }}</code></td>
+                                                        <td class="text-end llmops-metric">{{ row.requests }}</td>
+                                                        <td class="text-end llmops-metric">
+                                                            {{ row.tokens_in }} / {{ row.tokens_out }}
+                                                        </td>
+                                                        <td class="text-end llmops-metric">
+                                                            ${{ '%.6f'|format(row.cost_usd) }}
+                                                        </td>
+                                                        <td class="text-end llmops-metric">{{ row.errors }}</td>
+                                                        <td class="text-end llmops-metric">{{ row.cache_hits }}</td>
+                                                    </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                {% else %}
+                                    <p class="text-muted mb-0">Нет вызовов за окно.</p>
+                                {% endif %}
+                            </div>
+                            <div class="col-lg-6">
+                                <h6>По уровням</h6>
+                                {% if metrics.by_level %}
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover llmops-table mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th>Уровень</th>
+                                                    <th class="text-end">Вызовы</th>
+                                                    <th class="text-end">Токены in / out</th>
+                                                    <th class="text-end">Стоимость</th>
+                                                    <th class="text-end">Ошибки</th>
+                                                    <th class="text-end">Cache</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for row in metrics.by_level %}
+                                                    <tr>
+                                                        <td><code>{{ row.key }}</code></td>
+                                                        <td class="text-end llmops-metric">{{ row.requests }}</td>
+                                                        <td class="text-end llmops-metric">
+                                                            {{ row.tokens_in }} / {{ row.tokens_out }}
+                                                        </td>
+                                                        <td class="text-end llmops-metric">
+                                                            ${{ '%.6f'|format(row.cost_usd) }}
+                                                        </td>
+                                                        <td class="text-end llmops-metric">{{ row.errors }}</td>
+                                                        <td class="text-end llmops-metric">{{ row.cache_hits }}</td>
+                                                    </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                {% else %}
+                                    <p class="text-muted mb-0">Нет вызовов за окно.</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+
+    <h2 class="h5 mb-3">Топ-5 пользователей по расходу токенов</h2>
+    <div class="row g-4">
+        {% for metrics in data.periods %}
+            <div class="col-lg-4">
+                <div class="card h-100">
+                    <div class="card-header llmops-section-title">
+                        {{ metrics.period.label }}
+                    </div>
+                    <div class="card-body">
+                        {% set rows = data.top_users[metrics.period.key] %}
+                        {% if rows %}
+                            <div class="table-responsive">
+                                <table class="table table-sm llmops-table mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Субъект</th>
+                                            <th class="text-end">Токены</th>
+                                            <th class="text-end">Стоимость</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for row in rows %}
+                                            <tr>
+                                                <td>{{ loop.index }}</td>
+                                                <td><code>{{ row.subject }}</code></td>
+                                                <td class="text-end llmops-metric">
+                                                    {{ row.tokens_total }}
+                                                    <br>
+                                                    <small class="text-muted">
+                                                        {{ row.requests }} запр.
+                                                    </small>
+                                                </td>
+                                                <td class="text-end llmops-metric">
+                                                    ${{ '%.6f'|format(row.cost_usd) }}
+                                                </td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            <p class="text-muted mb-0">
+                                Нет данных в <code>usage_daily</code> за окно.
+                            </p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+
+    <p class="text-muted small mt-4 mb-0">
+        Сгенерировано {{ data.generated_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC.
+        Детальные вызовы — в
+        <a href="{{ url_for(__name__ ~ ':list', key='llm-call') }}">
+            журнале LLM-вызовов
+        </a>.
+    </p>
+{% endblock %}
