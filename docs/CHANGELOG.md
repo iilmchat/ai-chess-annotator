@@ -8,6 +8,35 @@
 
 ### Added
 
+- **LLMOps: durable `llm_calls` и сквозной `trace_id` (T-030, итерация 27):**
+  миграция `d8e9f0a1b2c3` — таблица `llm_calls` по DESIGN §4.4
+  (trace_id/span_id, request_id, actor_id/game_id/commentary_id,
+  operation/provider/model/level, prompt_slug/prompt_version,
+  tokens_in/out, cost_usd, latency_ms, cache_hit, status, error_code,
+  created_at; UNIQUE(trace_id, span_id), BRIN(created_at) и DESC-индексы).
+  `TraceMiddleware` (`app/tracing.py`): W3C `traceparent` (валидация/
+  генерация), `request.state.trace_id`/`span_id`, contextvars, structlog,
+  заголовок **`X-Trace-Id`** в ответе, OTel-span `http_request` с
+  корреляцией. Recorder `app/llm/calls.py` пишет вызовы `complete` и
+  `stream_generate` **best-effort** (`asyncio.create_task` + отдельная
+  сессия, не блокирует ответ; ошибки только в лог); prompt_slug=level,
+  prompt_version из `prompts.version`; без PII/текстов. Контекст
+  operation/actor_id/game_id в `/v1/commentary` и `/v1/chat` (sync+SSE).
+  Read-only view `LlmCallAdmin` в `/admin` (фильтры по модели/операции/
+  статусу).
+- **OTel-спаны validator/RAG (T-030b, итерация 27):** `validator.validate`
+  (moves/valid/illegal_count, Status OK/ERROR) и `rag.retrieve`
+  (top_k/results, OK/ERROR) с `trace.id` из `app.tracing.current_trace_id()`
+  (fallback — активный OTel-span); PII/тексты в атрибуты не пишутся.
+- **Timing-safe login (KI-043, итерация 27):** `DUMMY_PASSWORD_HASH`
+  (Argon2id с параметрами по умолчанию); `/auth/login` для несуществующего
+  email выполняет Argon2-verify и возвращает тот же 401 — медианы времени
+  ответа 55.4 / 54.8 мс (ratio 1.01).
+- **RBAC в Admin Panel (KI-045, итерация 27):** `AdminAuthGuard` выставляет
+  `request.state.admin_role`; auditor строго read-only — любые
+  POST/PUT/PATCH/DELETE в `/admin/**` → 403 `admin_forbidden`; role-aware
+  hooks (`PromptAdmin.can_edit`, `can_import`, `can_export`); admin и
+  legacy-пути сохраняют прежние права; read-only `LlmCallAdmin`.
 - **Auth tech debt (KI-036/KI-037, итерация 26):** пароли — **Argon2id**
   (`argon2-cffi`, `$argon2id$`), legacy bcrypt-хеши перехешируются при
   успешном входе (`verify_and_update`, лог `password_rehashed`). Refresh-токен
@@ -107,6 +136,18 @@
 
 ### Changed
 
+- **HTTP-ответы (итерация 27):** добавляется заголовок `X-Trace-Id`
+  (W3C trace id из `traceparent` или сгенерированный); `X-Request-Id`
+  сохраняется в `llm_calls.request_id`; структурированные логи содержат
+  `trace_id`/`span_id` (structlog contextvars).
+- **`app/observability.py`:** `get_tracer(name)` принимает имя трейсера
+  (для валидатора/RAG/HTTP используются разные имена); `OTEL_ENABLED=false`
+  — no-op, `llm_calls`/`X-Trace-Id` продолжают работать.
+- **Admin (итерация 27):** импорт строк закрыт (`can_import=False`)
+  для всех views — вставка в обход аудита запрещена; auditor не получает
+  export (экспорт — POST-действие, блокируется guard); legacy
+  `X-Admin-Token`/парольная сессия работают как admin (деприкейт —
+  отдельный шаг).
 - **Контракт `/auth` (итерация 26):** `/auth/login` и `/auth/refresh`
   возвращают `{access_token, token_type, expires_in, user}` без
   `refresh_token`; refresh читается из HttpOnly-cookie (fallback — JSON-тело

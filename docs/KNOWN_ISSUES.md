@@ -61,11 +61,14 @@
 | KI-040 | Open | Low | tests, web, ci | E2E-T-036b в CI работают на page.route-моках; реальный backend в CI не поднимается (нет Postgres/Stockfish/LLM), real-режим проверен только локально |
 | KI-041 | Open | Low | auth, security | Остаток KI-037: нет 2FA, верификации email, сброса пароля, отзыва всех сессий; admin RBAC внутри views (auditor ≡ admin) |
 | KI-042 | Open | Low | deps, auth | bcrypt остаётся зависимостью для legacy-verify; rehash в Argon2id только при успешном логине |
-| KI-043 | Open | Low | auth, security | User-enumeration по таймингу `/auth/login` (нет dummy-Argon2 для несуществующего email) |
+| KI-043 | **Closed** | Low | auth, security | User-enumeration по таймингу `/auth/login`. **Закрыт в итерации 27:** dummy-Argon2id для несуществующего email, медианы 55.4/54.8 мс |
 | KI-044 | Open | Low | dataset, export | v2-экспорт: `load_analyses` на каждую правку (N+1 при нескольких правках одной партии) |
-| KI-045 | Open | Low | admin, security | RBAC внутри `/admin` views не разделён: auditor и admin видят одинаково (всё read-only, кроме PromptAdmin) |
+| KI-045 | **Closed** | Low | admin, security | RBAC внутри `/admin`. **Закрыт в итерации 27:** auditor строго read-only (guard + role-aware hooks), admin — PromptAdmin edit |
+| KI-046 | Open | Low | observability, llm | Неполный охват `llm_calls`: warmup не обёрнут контекстом, `commentary_id` NULL (id после INSERT), `cache_hit` не заполняется semantic-cache-путём |
+| KI-047 | Open | Low | observability | Необработанные 500 идут без `X-Trace-Id` (Starlette `ServerErrorMiddleware` вне пользовательских middleware) |
+| KI-048 | Open | Low | db, observability | `llm_calls` без retention/партиционирования и durable-агрегатов (DESIGN §4.4 план: 90 дней, партиции по месяцу, `usage_daily`) |
 
-Всего: **45** (Open: 24, Closed: 21). KI-001…009 — итерация 1 (T-006); KI-010…012 — итерация 2 (T-007); KI-013, KI-014 — итерация 3 (T-008); KI-014 закрыт, KI-015…018 — итерация 4 (T-009); KI-018 закрыт, KI-019, KI-020 — итерация 5 (T-010/T-011); KI-020 закрыт, KI-021, KI-022 — итерация 6 (T-012/T-013); KI-022 закрыт, KI-023, KI-024 — итерация 7 (T-014/T-015); KI-025, KI-026 — итерация 9 (T-017); KI-027…029 — итерация 12 (T-021b/T-022); KI-008, KI-009, KI-024…028 закрыты, KI-030 — итерация 14 (T-023); KI-021 закрыт, KI-031, KI-032 — итерация 17 (T-029/T-031); KI-031/KI-032 закрыты, KI-033 — итерация 18 (T-033/T-035); KI-033 закрыт, KI-034 — итерация 19 (T-032); KI-035 — итерация 20 (T-036); KI-035 закрыт, KI-036…038 — итерация 24 (T-041); KI-030 (прогресс без обучения) и KI-039/KI-040 — итерация 25 (T-104/T-036b); **KI-036, KI-037, KI-038, KI-039 закрыты, +KI-041…045 — итерация 26**.
+Всего: **48** (Open: 25, Closed: 23). KI-001…009 — итерация 1 (T-006); KI-010…012 — итерация 2 (T-007); KI-013, KI-014 — итерация 3 (T-008); KI-014 закрыт, KI-015…018 — итерация 4 (T-009); KI-018 закрыт, KI-019, KI-020 — итерация 5 (T-010/T-011); KI-020 закрыт, KI-021, KI-022 — итерация 6 (T-012/T-013); KI-022 закрыт, KI-023, KI-024 — итерация 7 (T-014/T-015); KI-025, KI-026 — итерация 9 (T-017); KI-027…029 — итерация 12 (T-021b/T-022); KI-008, KI-009, KI-024…028 закрыты, KI-030 — итерация 14 (T-023); KI-021 закрыт, KI-031, KI-032 — итерация 17 (T-029/T-031); KI-031/KI-032 закрыты, KI-033 — итерация 18 (T-033/T-035); KI-033 закрыт, KI-034 — итерация 19 (T-032); KI-035 — итерация 20 (T-036); KI-035 закрыт, KI-036…038 — итерация 24 (T-041); KI-030 (прогресс без обучения) и KI-039/KI-040 — итерация 25 (T-104/T-036b); KI-036, KI-037, KI-038, KI-039 закрыты, +KI-041…045 — итерация 26; **KI-043 и KI-045 закрыты, +KI-046…048 — итерация 27**.
 
 ---
 
@@ -1169,7 +1172,7 @@ reuse-detection; `POST /auth/logout-all`; email-верификация и сбр
 
 ---
 
-## KI-043 · Open · Low · auth, security
+## KI-043 · Closed · Low · auth, security
 
 **Симптом.** User-enumeration по времени ответа: для несуществующего
 email `/auth/login` отвечает 401 почти мгновенно, для существующего
@@ -1187,6 +1190,15 @@ email `/auth/login` отвечает 401 почти мгновенно, для �
 фиктивного Argon2id-хеша (dummy verify) и возвращать тот же 401;
 нормализовать тайминг на тесте с допуском. Опционально — общий лимит
 попыток по (email, IP) — см. KI-041.
+
+**Закрыт в итерации 27.** В `app/auth/passwords.py` добавлен
+`DUMMY_PASSWORD_HASH` (Argon2id с параметрами `PasswordHasher()` по
+умолчанию); `/auth/login` при ненайденном email выполняет
+`asyncio.to_thread(verify_password, password, DUMMY_PASSWORD_HASH)` перед
+тем же 401. Тесты: unit (dummy вызывается ровно с DUMMY_HASH) и
+интеграционный тайминг (7+7 запросов, медианы **55.4 мс** для
+существующего и **54.8 мс** для несуществующего, ratio 1.01 при пороге
+≤2.0 и обе >5 мс). KI-041 (лимит попыток по email) остаётся.
 
 ---
 
@@ -1210,7 +1222,7 @@ email `/auth/login` отвечает 401 почти мгновенно, для �
 
 ---
 
-## KI-045 · Open · Low · admin, security
+## KI-045 · Closed · Low · admin, security
 
 **Симптом.** `AdminAuthProvider`/`AdminAuthGuard` пускают в `/admin`
 роли `admin` и `auditor` одинаково: отдельного read-only режима для
@@ -1228,3 +1240,91 @@ view-by-view политики и аудита мутаций.
 **План закрытия.** Разрешения по view/действию из `users.role`
 (например, `auditor: read-only`, `admin: edit prompts`), аудит мутаций
 (T-035), тесты на запрет edit для auditor.
+
+**Закрыт в итерации 27.** `AdminAuthGuard` выставляет
+`request.state.admin_role` (`admin`/`auditor`/`legacy`) и блокирует
+**любые** небезопасные HTTP-методы auditor'а в `/admin/**` → 403
+`admin_forbidden` («Auditor role is read-only»); role-aware hooks:
+`PromptAdmin.can_edit` только для admin/legacy, `can_import=False`,
+`can_export=False` для auditor, `_ReadOnlyModelView` без изменений.
+Fallback роли без контекста — `auditor` (fail-closed). Тесты
+(`tests/integration/test_admin.py`, 30): auditor GET /admin → 200,
+GET edit → 403, POST edit/delete/action/import/inline-edit → 403,
+БД не меняется; admin edit → 200/303+сохранение; user → 403; legacy
+X-Admin-Token/парольная сессия — как admin. Остаток: legacy service-token
+имеет полный write-доступ (рекомендация — деприкейт после перевода
+автоматизации на JWT), blanket-запрет закрывает auditor'у и export;
+разделение per-view ACL (например, auditor export) — при необходимости
+точечно в guard.
+
+---
+
+## KI-046 · Open · Low · observability, llm
+
+**Симптом.** Durable-таблица `llm_calls` (T-030, итерация 27) покрывает не
+все вызовы/поля: (1) прогрев локальной модели при старте
+(`warmup_local_llm`) не оборачивается в `llm_call_context(operation=
+"warmup")`, поэтому в `llm_calls` не попадает; (2) `commentary_id` всегда
+NULL — комментарий генерируется до INSERT, id ещё неизвестен
+(буферизация телеметрии до коммита из DESIGN §4.4 не реализована);
+(3) `cache_hit` для ответов semantic cache не выставляется (recorder
+всегда получает False от LLM-клиента — кэш отдаёт ответ без вызова LLM).
+
+**Причина.** T-030 закрывался в объёме DoD (запись при generate/stream,
+trace_id, admin view); warmup/связка с commentary_id/cache_hit — сервисные
+доработки за пределами LLM-клиента.
+
+**Обход / текущее поведение.** Охват — все реальные вызовы
+`complete`/`stream_generate` из commentary/chat (sync и SSE); warmup
+виден в structlog/OTel, но не в `llm_calls`. `cache_hit` в семантическом
+кэше можно посчитать по журналу `semantic_cache` (пока только там).
+
+**План закрытия.** Обернуть warmup в `llm_call_context(operation="warmup")`;
+буферизовать `_LlmCallRecord` до INSERT комментария и проставлять
+`commentary_id` (или писать отдельным UPDATE-best-effort); в
+semantic-cache-пути писать запись `llm_calls` с `cache_hit=true` и
+`tokens_*=0`/latency кэша (или отдельная метрика `cache_hits`).
+
+---
+
+## KI-047 · Open · Low · observability
+
+**Симптом.** Необработанные исключения (не `AppError`) в эндпоинте дают
+500 **без** заголовка `X-Trace-Id`: в Starlette `ServerErrorMiddleware`
+стоит снаружи пользовательских middleware, поэтому заголовок, который
+добавляет `TraceMiddleware`, до такого ответа не доходит. Обработанные
+ответы (404/422/429/доменные 4xx/5xx) заголовок имеют.
+
+**Причина.** `X-Trace-Id` добавляется в `http.response.start` внутри
+`TraceMiddleware`; `ServerErrorMiddleware` формирует собственный ответ
+раньше.
+
+**Обход / текущее поведение.** `trace_id` для такого запроса всё равно
+есть в structlog (упавший трейс можно найти по логам), но клиент не
+получает идентификатор для поддержки.
+
+**План закрытия.** App-level exception handler (или внешний
+error-handling middleware) с добавлением `X-Trace-Id` и корреляцией в
+ответе 500; тест на необработанное исключение.
+
+---
+
+## KI-048 · Open · Low · db, observability
+
+**Симптом.** `llm_calls` (T-030) — обычная append-only таблица без
+партиционирования/retention: при росте трафика она будет расти
+неограниченно, нет 90-дневного удержания и durable-агрегатов
+(`usage_daily`), хотя DESIGN §4.4 это предусматривает. Индексы
+BRIN/DESC уже есть, что сглаживает чтение «последних вызовов».
+
+**Причина.** Для MVP (итерация 27) осознанно выбрана непартиционированная
+таблица: партиционирование требует изменения ключа уникальности
+(`trace_id, span_id, created_at`) и фоновой ротации; агрегаты — T-031b.
+
+**Обход / текущее поведение.** Админ-view с page_size 25 и BRIN-индекс;
+объём данных на dev/тестовых прогонах мал. При необходимости — ручная
+чистка `DELETE ... WHERE created_at < now() - interval '90 days'`.
+
+**План закрытия.** Партиционирование по месяцу `created_at` (pg_partman
+или cron-миграция), retention 90 дней, материализованные агрегаты
+`usage_daily` для дашбордов p50/p95/error rate/cost (T-109).

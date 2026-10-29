@@ -324,7 +324,8 @@
   cookie `access_token`): `admin`/`auditor` → 200, `user` → 403
   `admin_forbidden`, битый/просроченный → 403, без кредов → 401.
   Legacy `X-Admin-Token` (service-token) и парольная форма (`ADMIN_PASSWORD`)
-  сохранены как fallback. RBAC внутри views (auditor ≠ admin) — KI-045.
+  сохранены как fallback. RBAC внутри views (auditor ≠ admin) — KI-045
+  (закрыт в итерации 27: auditor read-only, admin — PromptAdmin edit).
 - **Что:** смонтировать `starlette-admin` на `/admin` (AsyncEngine из
   `app.db.session`), добавить роль `admin` в `users` (enum `user/admin/
   auditor`, `password_hash`, миграция), аутентификацию админки через
@@ -371,17 +372,26 @@
   возвращает предыдущую; изменения видны в аудите; тесты версий/кеша.
 - **Оценка:** 2
 
-### [~] T-030. LLMOps Observability (частично, итерация 16)
+### [x] T-030. LLMOps Observability (итерация 27, финал)
 - **Зависит от:** T-013, T-025, T-028
 - **Статус итерации 16:** OTel-спаны `llm_generate`/`llm_stream` в
   `OpenAICompatibleClient` с атрибутами `llm.model`, `llm.level`,
   `llm.tokens_in`, `llm.tokens_out`, `llm.cost_usd`; экспорт
   `console`/`otlp` при `OTEL_ENABLED=true`; тесты
-  `tests/unit/test_observability.py`. Осталось: W3C-пропагация
-  `trace_id`, durable-таблица `llm_calls`, спаны `http.request` /
-  `validator` / `rag.retrieve`, дашборды.
+  `tests/unit/test_observability.py`.
+- **Статус итерации 27 (закрыто):** миграция `d8e9f0a1b2c3` — таблица
+  `llm_calls` по DESIGN §4.4 (trace_id/span_id, actor/game/commentary,
+  operation/provider/model/level, prompt_slug/version, токены/стоимость/
+  латентность/cache_hit/status/error_code, индексы BRIN + DESC);
+  `TraceMiddleware` (W3C traceparent, `X-Trace-Id`, contextvars,
+  structlog; OTel `http_request` с корреляцией); recorder
+  `app/llm/calls.py` пишет вызовы `complete`/`stream_generate`
+  fire-and-forget (best-effort, без PII); контекст operation/actor_id/
+  game_id в commentary/chat (sync+SSE); read-only view `LlmCallAdmin`.
+  Остаток: warmup и commentary_id/cache_hit — KI-046, необработанные 500
+  без `X-Trace-Id` — KI-047, retention/партиционирование — KI-048.
 - **Что:** сквозной `trace_id` (W3C Trace Context) от HTTP-запроса до
-  вызова LLM и валидатора; OTel-спаны `http.request`, `llm.complete`,
+  вызова LLM и валидатора; OTel-спаны `http_request`, `llm.complete`,
   `validator`, `rag.retrieve`; экспорт OTLP в коллектор (Jaeger/Tempo),
   опционально Langfuse; durable-таблица `llm_calls` (`trace_id`, `model`,
   `tokens_in/out`, `cost_usd`, `latency_ms`, `cache_hit`, `status`);
@@ -389,8 +399,21 @@
 - **DoD:** 100% вызовов LLM имеют `trace_id` и запись в `llm_calls`;
   трейс виден в OTel-бэкенде; дашборд p95 и стоимости; sampling
   настраивается; тесты propagation и записи usage; PII в спаны не
-  попадает.
+  попадает. **Выполнено в объёме MVP** (дашборды — T-109, sampling —
+  отдельный шаг).
 - **Оценка:** 4
+
+### [x] T-030b. OTel-спаны validator/RAG (итерация 27)
+- **Зависит от:** T-030
+- **Что:** спаны `validator.validate` (moves/valid/illegal_count,
+  Status OK/ERROR) и `rag.retrieve` (top_k/results, OK/ERROR),
+  `trace.id` из `app.tracing.current_trace_id()` (fallback — OTel span);
+  PII/тексты в атрибуты не пишутся.
+- **DoD:** спаны видны в OTel-экспортере, correlation с `X-Trace-Id`,
+  тесты `tests/unit/test_observability_validator_rag.py`; старые тесты
+  зелёные.
+- **Статус:** выполнено; level в этих сервисах не доступен (нет в
+  сигнатурах) — отмечено в отчёте.
 
 ### [x] T-031. FinOps & Token Rate Limiting (итерация 17)
 - **Зависит от:** T-009, T-013, T-030
@@ -636,7 +659,8 @@
 - **DoD:** login не отдаёт refresh в JSON; logout → reuse 401; bcrypt-хеш
   при логине становится `$argon2id$`; лимиты по user_id; фронтенд-тесты и
   E2E зелёные.
-- **Статус:** выполнено (итерация 26); остатки — KI-041, KI-042, KI-043.
+- **Статус:** выполнено (итерация 26); остатки — KI-041, KI-042
+  (KI-043 закрыт в итерации 27).
 
 ### [x] T-044. Dataset Schema v2: fact_sheet → commentary (KI-039, итерация 26)
 - **Зависит от:** T-104

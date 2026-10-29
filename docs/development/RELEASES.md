@@ -1440,3 +1440,93 @@ RULES §2.18)
 - **KI-030/T-104b:** обучить LoRA на `schema_version=2` (RunPod/Colab) и
   сравнить с baseline `club` 4.40/10 через `evaluate_llm.py
   --source new_samples`.
+
+---
+
+## Итерация 27 — LLMOps Observability и Security Fixes (T-030/T-030b, KI-043, KI-045)
+
+**Дата:** 2026-10-29
+**Статус:** ✅ завершена. KI-043 и KI-045 закрыты; T-030/T-030b закрыты
+в объёме MVP; заведены KI-046…048.
+**Отчёт:** `docs/development/reports/v0.5.0/ITERATION-27.md` (7 разделов,
+RULES §2.18)
+
+### Что сделано
+
+- [x] **T-030, durable `llm_calls`.** Миграция `d8e9f0a1b2c3` (head) —
+  таблица по DESIGN §4.4: trace_id/span_id, request_id, actor/game/
+  commentary, operation/provider/model/level, prompt_slug/version,
+  tokens/cost/latency/cache_hit/status/error_code, created_at;
+  `UNIQUE(trace_id, span_id)`, BRIN+DESC-индексы, FK ON DELETE SET NULL.
+  Модель `LlmCall`, read-only `LlmCallAdmin` (фильтры по model/operation/
+  status).
+- [x] **T-030, trace_id.** `app/tracing.py` + `TraceMiddleware` (самый
+  внешний): W3C `traceparent` (парсинг/генерация, нулевые id → новые),
+  `request.state.trace_id/span_id`, contextvars, structlog
+  (`trace_id`/`span_id` в логах), ответ `X-Trace-Id`, OTel-span
+  `http_request` с тем же trace id, вложенные `llm_*`-спаны.
+- [x] **T-030, запись вызовов.** `app/llm/calls.py`: contextvars +
+  `llm_call_context`/`stream_in_call_context`; `record_llm_call`
+  fire-and-forget в отдельной сессии, best-effort (ошибка записи не
+  ломает ответ); `openai_client` пишет в `finally` для complete и stream
+  (ok|error|timeout|invalid, отмена/закрытие стрима); prompt_slug=level,
+  prompt_version из `prompts.version`; без текстов/PII. Endpoints
+  `/v1/commentary` и `/v1/chat` (sync+SSE) выставляют
+  operation/actor_id/game_id.
+- [x] **T-030b, OTel-спаны validator/RAG.** `validator.validate`
+  (moves/valid/illegal_count) и `rag.retrieve` (top_k/results) с
+  `trace.id`; PII не пишется.
+- [x] **KI-043, timing-safe login.** `DUMMY_PASSWORD_HASH` (Argon2id);
+  для несуществующего email выполняется verify перед тем же 401.
+  Живые медианы: 55.4 мс (existing) / 54.8 мс (unknown), ratio 1.01.
+- [x] **KI-045, RBAC admin.** `request.state.admin_role`; auditor —
+  любые небезопасные методы в `/admin/**` → 403 `admin_forbidden`,
+  role-aware hooks (PromptAdmin edit только admin/legacy, import закрыт,
+  export auditor'у запрещён); admin/legacy сохраняют права; fail-closed
+  fallback auditor.
+- [x] **Документация:** README (обновлены статус/таблицы/Observability/
+  KI), `KNOWN_ISSUES` (KI-043/045 → Closed, +KI-046…048),
+  `TODO` (T-030/T-030b → `[x]`), `CHANGELOG`, `RELEASES`,
+  `ITERATION-27.md`.
+
+### Метрики
+
+- **Backend-тесты:** **592 passed, 1 skipped, 1 xfailed** (53 файла;
+  +70 к итерации 26), **279.32 с**, exit 0. Skip — нет
+  `DEEPSEEK_API_KEY`, xfail — KI-012.
+- **Frontend-тесты:** **42 passed** (6 файлов).
+- **E2E mocked:** **10 passed** (5 сценариев × chromium/mobile).
+- **ruff:** 0 ошибок. **mypy:** 0 ошибок (strict), 71 файл.
+- **Alembic:** head `d8e9f0a1b2c3`; upgrade/downgrade-цикл и
+  `alembic check` — чистые.
+- **Сборка фронтенда:** 4.23 с; JS 464.31 КБ (gzip 146.15), CSS 14.29 КБ
+  (gzip 3.77).
+- **LLMOps smoke:** POST `/v1/chat` с `traceparent` →
+  `X-Trace-Id: 4bf92f35-77b3-4da6-a3ce-929d0e0e4736`; в `llm_calls` —
+  `trace_id` совпадает, operation=chat, provider=lmstudio, level=club,
+  prompt_slug=club, prompt_version=1, tokens 819/29, latency 5176 мс,
+  status ok, actor_id/game_id заполнены.
+- **Admin smoke:** auditor — `/admin` 200, `/admin/prompt/edit` 403,
+  `POST /admin/prompt/delete` 403, `/admin/llm-call/list` 200; admin —
+  edit 200, delete 403 (read-only), llm-call list 200; user — 403;
+  без кредов — 401.
+- **KI:** 48 записей, 25 Open, 23 Closed.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Warmup в `llm_calls`, `commentary_id`, `cache_hit` для semantic-кэша | Запись из LLM-клиента не знает id комментария (до INSERT) и кэш не вызывает LLM; требуют буферизации/сервисных доработок | KI-046 |
+| `X-Trace-Id` на необработанных 500 | Starlette `ServerErrorMiddleware` вне пользовательских middleware | KI-047 |
+| Партиционирование/retention `llm_calls`, `usage_daily` | MVP: таблица append-only с BRIN; партиции и агрегаты — отдельный шаг | KI-048 |
+| Дашборды p50/p95/cost (T-109) | Нужен OTel-бэкенд/Grafana; в итерации — спаны и durable-данные | T-109 |
+| Реальный LoRA-прогон (KI-030) | Нет GPU; schema v2 готова | KI-030 |
+
+### Что дальше
+
+- **KI-046:** охватить warmup, связать `commentary_id`/`cache_hit`.
+- **KI-047/KI-048:** `X-Trace-Id` на 500; retention/партиционирование и
+  агрегаты `usage_daily`.
+- **T-109:** OTel-дашборды (p95 latency, error rate, tokens/cost) в
+  Grafana/Tempo по `llm_calls`/спанам.
+- **KI-030/T-104b:** LoRA на GPU (`schema_version=2`) + eval.
