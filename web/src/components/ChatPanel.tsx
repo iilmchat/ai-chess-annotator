@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 
 import { ApiError, streamChat } from "../api";
 import { useTypewriter } from "../hooks/useTypewriter";
+import { movePrefix } from "../lib/format";
+import { useAnalysisStore } from "../stores/analysisStore";
 import {
   conversationKey,
   useChatStore,
@@ -21,6 +23,11 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
   const appendMessage = useChatStore((state) => state.append);
   const clearMessages = useChatStore((state) => state.clear);
   const visibleMessages = messages ?? [];
+  // T-072: чат отвечает с контекстом выбранного полухода.
+  const selectedPly = useAnalysisStore((state) => state.selectedPly);
+  const analysis = useAnalysisStore((state) => state.analysis);
+  const contextMove =
+    analysis?.moves.find((move) => move.ply === selectedPly) ?? null;
   const [question, setQuestion] = useState("");
   const [streamText, setStreamText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -77,6 +84,7 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
         },
         history,
         i18n.language,
+        selectedPly,
       );
       appendMessage(key, {
         role: "assistant",
@@ -120,6 +128,14 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
           </button>
         ) : null}
       </div>
+
+      {analysisId && selectedPly > 0 && contextMove ? (
+        <p className="muted" data-testid="chat-context">
+          {t("chat.contextPly", {
+            move: `${movePrefix(contextMove.ply)} ${contextMove.san}`,
+          })}
+        </p>
+      ) : null}
 
       {!analysisId ? <p className="empty">{t("chat.needAnalysis")}</p> : null}
 
@@ -174,6 +190,7 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
         }}
       >
         <input
+          data-testid="chat-message-input"
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
           placeholder={

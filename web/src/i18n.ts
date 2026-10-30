@@ -253,6 +253,7 @@ const resources = {
       },
       chat: {
         title: "Чат по партии",
+        contextPly: "Контекст: {{move}}",
         level: "Уровень: {{level}}",
         needAnalysis: "Сначала разберите партию — чат отвечает по её анализу.",
         thinking: "Думаю…",
@@ -539,6 +540,7 @@ const resources = {
       },
       chat: {
         title: "Game chat",
+        contextPly: "Context: {{move}}",
         level: "Level: {{level}}",
         needAnalysis: "Analyze a game first — the chat answers from it.",
         thinking: "Thinking…",

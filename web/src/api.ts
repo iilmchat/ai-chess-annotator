@@ -371,22 +371,45 @@ export async function downloadCommentaryPdf(
   }
 }
 
+/**
+ * Тело запроса чата с контекстом выбранного полухода (T-072).
+ *
+ * `selected_ply` уходит только для реального хода (`ply > 0`): 0 — это
+ * стартовая позиция, `null`/`undefined` — контекста нет. Backend трактует
+ * отсутствие поля как «без контекста», поэтому для 0 поле не отправляем.
+ */
+function chatBody(
+  body: Record<string, unknown>,
+  selectedPly?: number | null,
+): Record<string, unknown> {
+  if (typeof selectedPly !== "number" || selectedPly <= 0) {
+    return body;
+  }
+  return { ...body, selected_ply: selectedPly };
+}
+
 export function askChat(
   analysisId: string,
   level: Level,
   message: string,
   history: ChatHistoryItem[] = [],
   language?: string,
+  selectedPly?: number | null,
 ): Promise<ChatResponse> {
   return request<ChatResponse>("/v1/chat", {
     method: "POST",
-    body: JSON.stringify({
-      analysis_id: Number(analysisId),
-      level,
-      message,
-      history,
-      language: requestLanguage(language),
-    }),
+    body: JSON.stringify(
+      chatBody(
+        {
+          analysis_id: Number(analysisId),
+          level,
+          message,
+          history,
+          language: requestLanguage(language),
+        },
+        selectedPly,
+      ),
+    ),
   });
 }
 
@@ -434,16 +457,20 @@ export async function streamChat(
   handlers: StreamHandlers,
   history: ChatHistoryItem[] = [],
   language?: string,
+  selectedPly?: number | null,
 ): Promise<StreamDone> {
   return streamRequest(
     "/v1/chat/stream",
-    {
-      analysis_id: Number(analysisId),
-      level,
-      message,
-      history,
-      language: requestLanguage(language),
-    },
+    chatBody(
+      {
+        analysis_id: Number(analysisId),
+        level,
+        message,
+        history,
+        language: requestLanguage(language),
+      },
+      selectedPly,
+    ),
     handlers,
   );
 }
