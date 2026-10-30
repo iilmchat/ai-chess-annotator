@@ -1,5 +1,6 @@
-import { Chessboard } from "react-chessboard";
+import { Chessboard, type Arrow } from "react-chessboard";
 
+import type { BoardArrow } from "../lib/arrows";
 import { uciSquares } from "../lib/board";
 
 interface BoardProps {
@@ -12,6 +13,11 @@ interface BoardProps {
    * иначе react-chessboard откатывает фигуру на исходную клетку.
    */
   onPieceDrop?: (from: string, to: string) => boolean;
+  /**
+   * Стрелки поверх доски (T-073): рекомендация и ходы из комментария.
+   * Пустой массив/`undefined` — стрелок нет.
+   */
+  arrows?: BoardArrow[];
 }
 
 export function Board({
@@ -19,6 +25,7 @@ export function Board({
   lastMove,
   interactive = false,
   onPieceDrop,
+  arrows = [],
 }: BoardProps) {
   const move = lastMove ? uciSquares(lastMove) : null;
   const squareStyles = move
@@ -28,11 +35,20 @@ export function Board({
       }
     : undefined;
 
+  // react-chessboard рисует стрелку по паре startSquare/endSquare, а цвет
+  // подставляет в SVG как есть: CSS-имена green/red работают.
+  const boardArrows: Arrow[] = arrows.map((arrow) => ({
+    startSquare: arrow.from,
+    endSquare: arrow.to,
+    color: arrow.color,
+  }));
+
   return (
     <div className="board-shell">
       <Chessboard
         options={{
           position: fen,
+          arrows: boardArrows,
           boardOrientation: "white",
           // В обычном режиме (без разбора) доска остаётся «просмотровой».
           allowDragging: interactive === true,

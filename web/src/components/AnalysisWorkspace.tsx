@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+import { buildArrows } from "../lib/arrows";
 import { formatEval, movePrefix, START_FEN } from "../lib/format";
 import {
   buildAnnotatedPgn,
@@ -10,6 +11,7 @@ import {
   type PgnPosition,
 } from "../lib/pgn";
 import { applyUserMove, formatVariantLine } from "../lib/variant";
+import { useAnalysisStore } from "../stores/analysisStore";
 import type { AnalyzeResponse, Level } from "../types";
 import { Board } from "./Board";
 import { ChatPanel } from "./ChatPanel";
@@ -82,6 +84,26 @@ export function AnalysisWorkspace({
   useEffect(() => {
     setVariant(null);
   }, [selectedPly, analysis]);
+
+  const commentaryText = useAnalysisStore((state) => state.commentaryText);
+
+  /**
+   * T-073: стрелки на доске — рекомендация выбранного полухода и легальные
+   * ходы, упомянутые в комментарии. В режиме варианта стрелки скрываем: они
+   * относятся к основной линии, а не к позиции пользователя.
+   */
+  const arrows = useMemo(
+    () =>
+      variant
+        ? []
+        : buildArrows({
+            fen,
+            moves: analysis?.moves ?? [],
+            selectedPly,
+            commentaryText,
+          }),
+    [fen, analysis, selectedPly, commentaryText, variant],
+  );
 
   /**
    * Перетаскивание фигуры: пробуем применить ход к текущей позиции варианта
@@ -238,6 +260,7 @@ export function AnalysisWorkspace({
                   lastMove={boardLastMove}
                   interactive={Boolean(analysis)}
                   onPieceDrop={handlePieceDrop}
+                  arrows={arrows}
                 />
               </div>
             </div>

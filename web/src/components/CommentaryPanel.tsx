@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { ApiError, downloadCommentaryPdf, streamCommentary, updateCommentary } from "../api";
 import { useTypewriter } from "../hooks/useTypewriter";
+import { useAnalysisStore } from "../stores/analysisStore";
 import type { CommentaryResponse, Level } from "../types";
 
 interface CommentaryPanelProps {
@@ -12,6 +13,9 @@ interface CommentaryPanelProps {
 
 export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
   const { t, i18n } = useTranslation();
+  // T-073: текст комментария нужен доске для стрелок, поэтому он поднят в
+  // общий store (в панели остаётся локальное состояние стрима и черновика).
+  const setCommentaryText = useAnalysisStore((state) => state.setCommentaryText);
   const [commentary, setCommentary] = useState<CommentaryResponse | null>(null);
   const [streamText, setStreamText] = useState("");
   const [draft, setDraft] = useState("");
@@ -30,9 +34,10 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
     setEditing(false);
     setError(null);
     setSavedEdit(null);
+    setCommentaryText(null);
     abortRef.current?.abort();
     abortRef.current = null;
-  }, [analysisId, level]);
+  }, [analysisId, level, setCommentaryText]);
 
   async function handleGenerate() {
     if (!analysisId) {
@@ -47,6 +52,7 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
     setDraft("");
     setEditing(false);
     setSavedEdit(null);
+    setCommentaryText(null);
     let full = "";
     try {
       const done = await streamCommentary(
@@ -70,6 +76,7 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
         attempts: 1,
       });
       setDraft(full);
+      setCommentaryText(full);
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") {
         setError(t("commentary.stopped"));
@@ -98,6 +105,7 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
       setDraft(result.text);
       setEditing(false);
       setSavedEdit(result.edit_id);
+      setCommentaryText(result.text);
     } catch (cause) {
       setError(errorMessage(cause, t("common.unknown")));
     } finally {
