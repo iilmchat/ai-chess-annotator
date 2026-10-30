@@ -348,7 +348,7 @@ view `export_jobs` с фильтром по статусу (итерация 35)
 - Тесты — Vitest: 12 файлов, 129 тестов (FEN/chess.js, board,
   форматирование, SSE-парсер, auth-store/API/flow, PDF-API, eval, PGN,
   варианты, загрузка PGN, стрелки);
-  E2E — Playwright, mocked-режим 46 прогонов (23 сценарий ×
+  E2E — Playwright, mocked-режим 60 прогонов (30 сценариев ×
   chromium/mobile).
 
 ## 7. Развёртывание

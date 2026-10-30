@@ -2416,3 +2416,90 @@ KI-055.
   объяснений.
 - Привязка упомянутых ходов к полуходам и стрелки в режиме варианта.
 - Пост-релизный бэклог: T-111…T-119, KI-030, KI-023 (атрибуция оценок).
+
+## Итерация 39 — GPU Transfer Prep, PWA & User Profile (T-080, T-081, T-082)
+
+**Дата:** 2026-10-30
+**Статус:** ✅ завершена. Версия — **1.2.0** (без бампа: продолжение
+пост-релизной полировки v1.2.0).
+
+### Сделано
+
+- [x] **T-080, подготовка к переносу обучения на GPU.**
+  `.gitignore`: `models/`, `*.safetensors`, `*.pt`, `data/lora_*.jsonl`,
+  `data/*.jsonl` (при сохранённом `!data/.gitkeep`) — веса не попадут в
+  git. Новый `scripts/generate_lora_dataset_from_db.py` (async, CLI:
+  `--limit` 500, `--level`, `--min-words`, `--seed`, `--dry-run`,
+  `--output`) собирает датасет schema v2 из БД, переиспользуя хелперы
+  `scripts/export_dataset.py`, со сводкой экспорта/пропусков и exit code 2
+  на пустых данных. `docs/development/GPU_TRAINING_GUIDE.md`: клонирование,
+  venv, PyTorch CUDA 12.1, БД на `POSTGRES_PORT=5434`, генерация датасета,
+  `train_lora.py`, VRAM-заметки для 12 ГБ, перенос адаптера
+  (`models/lora-club-v1`) архивом или Git LFS, проверка на основном ПК,
+  troubleshooting.
+- [x] **T-081, PWA.** `vite-plugin-pwa` 2.x: манифест (name/short_name
+  «ChessAnnotator», `standalone`, `theme_color`/`background_color` из
+  палитры приложения, иконки 192/512 + maskable, apple-touch-icon),
+  service worker `generateSW` с precache 15 файлов (937.66 KiB) и
+  `navigateFallback: /index.html`; `navigateFallbackDenylist` для
+  `/v1/`, `/auth/`, `/admin`, `/health` — API не кэшируется (комментарий в
+  конфиге); iOS-мета-теги в `index.html`; иконки сгенерированы Pillow и
+  лежат в `web/public/icons/`.
+- [x] **T-082, профиль + реальный SMTP.**
+  Миграция `a9f1f28d4c45` (`users.display_name`, nullable String(120)),
+  `PATCH /auth/me` (имя/уровень, trim, 422 на пустое имя/неизвестный
+  уровень, extra="forbid"), `POST /auth/change-password` (Argon2-проверка
+  текущего, 401 `invalid_credentials`, 422 на короткий/совпадающий новый).
+  Фронтенд: `/profile` (имя, уровень, смена пароля с клиентской
+  валидацией, `PATCH /auth/me`, `POST /auth/change-password`, пункт меню
+  «Профиль»). SMTP: `SMTPEmailSender` на `aiosmtplib>=3`
+  (`SMTP_HOST/PORT/USER/PASSWORD/FROM/STARTTLS/SSL/TIMEOUT`), выбор по
+  `EMAIL_SENDER=mock|smtp`, ошибки конфигурации → `EmailDeliveryError`,
+  `.env.example` обновлён, `aiosmtplib` в зависимостях.
+- [x] **Тесты.** Backend +51 → **1000 passed**: `test_auth_profile.py`
+  (PATCH/change-password, валидации, 401/422, логин новым паролем),
+  `test_email_sender.py` (SMTP-аргументы через мок `aiosmtplib.send`,
+  MIME-заголовки, ошибки, выбор sender, неизменный mock-outbox),
+  `test_generate_lora_dataset.py` (формат v2, фильтры/лимит/seed,
+  dry-run, exit 2), расширен `test_auth_api.py` (display_name в payload).
+  Frontend: без новых unit-файлов; E2E +7 сценариев: `pwa` (манифест,
+  иконки, theme-color, регистрация SW) и `profile` (6 кейсов: открытие,
+  уровень, имя, несовпадение/короткий пароль без запроса, успешная смена,
+  неверный текущий пароль).
+- [x] **Документация.** README (PWA/профиль/SMTP/GPU-перенос, версия
+  v1.2.0, счётчики), CHANGELOG `[1.2.0]` дополнен, TODO
+  T-080/T-081/T-082, отчёт `reports/v1.2.0/ITERATION-39.md`,
+  GPU_TRAINING_GUIDE.
+
+### Метрики
+
+- **Backend-тесты:** **1000 passed, 3 skipped, 1 xfailed** (83 файла,
+  **295.90 с**, exit 0; +51 к итерации 38). Skip: 2 cairo-кейса +
+  `DEEPSEEK_API_KEY`; xfail — KI-012.
+- **Frontend-тесты:** **129 passed** (12 файлов; без изменений).
+- **Сборка:** main chunk **113.64 kB gzip** (365.55 kB), async
+  workspace-чанк 143.95 gzip, CSS 4.81 gzip, 8.07 с; **PWA**: сгенерирован
+  `sw.js` + `workbox-*.js`, precache 15 записей (937.66 KiB).
+- **E2E mocked:** **60 passed** (30 сценариев × chromium/mobile), 36.6 с.
+- **ruff / mypy:** 0 / 0 (86 файлов); **alembic:** новая ревизия
+  `a9f1f28d4c45`, `upgrade head` + `check` чисто; `pip check` — без
+  конфликтов (aiosmtplib 5.1.3).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Само LoRA-обучение на GPU | Нужна машина с RTX 3060; подготовлены скрипт, гайд и защита весов | T-080 → KI-030 |
+| Реальная отправка письма через SMTP | Нет SMTP-провайдера/кредов в этой среде; sender покрыт unit-тестами с моком `aiosmtplib` | T-082 |
+| Проверка PWA в Safari/iOS | Нет iOS-устройства; мета-теги и apple-touch-icon добавлены, проверено в Chromium | T-081 |
+| Офлайн-режим сверх статики | SW кэширует только статику; офлайн-данные (анализ/чат) осознанно не поддерживаются | T-081 |
+| Отзыв сессий при смене пароля | `revoked_before`/`iat_ms` используется в reset-password; для change-password не подключали, чтобы не менять контракт | бэклог |
+
+### Что дальше
+
+- Перенести обучение на RTX 3060 по `GPU_TRAINING_GUIDE.md`, привезти
+  адаптер `models/lora-club-v1` и прогнать LLM-evals (метрика объяснений
+  уже есть).
+- Настроить реальный SMTP-провайдер (`EMAIL_SENDER=smtp`).
+- Проверить установку PWA на iOS/Android вручную.
+- Пост-релизный бэклог: T-111…T-119, KI-030, KI-023 (атрибуция оценок).

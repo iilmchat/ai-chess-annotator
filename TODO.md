@@ -852,6 +852,42 @@
 - **Статус:** выполнено (итерация 38); стрелки скрыты в режиме варианта
   и не перерисовываются на каждом SSE-дельте.
 
+### [x] T-080. Подготовка к переносу LoRA-обучения на GPU (итерация 39)
+- **Зависит от:** T-104, T-110
+- **Что:** `.gitignore` закрывает веса и датасеты (`models/`,
+  `*.safetensors`, `*.pt`, `data/lora_*.jsonl`, `data/*.jsonl`);
+  `scripts/generate_lora_dataset_from_db.py` собирает датасет schema v2
+  из БД (`--limit 500`, `--level`, `--min-words`, `--seed`, `--dry-run`);
+  `docs/development/GPU_TRAINING_GUIDE.md` — пошаговый перенос обучения на
+  RTX 3060 (CUDA-PyTorch, БД `POSTGRES_PORT=5434`, датасет, `train_lora.py`,
+  перенос адаптера архивом/Git LFS, проверка).
+- **DoD:** скрипт + гайд готовы; веса не попадают в git;
+  unit-тесты скрипта; ruff/mypy зелёные.
+- **Статус:** выполнено (итерация 39); само обучение — на GPU-машине
+  (KI-030 остаётся Open).
+
+### [x] T-081. PWA (итерация 39)
+- **Что:** `vite-plugin-pwa` (манифест «ChessAnnotator», standalone,
+  иконки 192/512/maskable, theme-color), service worker с precache статики
+  и `navigateFallback` для SPA; `/v1/*`, `/auth/*`, `/admin`, `/health`
+  не кэшируются; iOS-мета-теги и apple-touch-icon; иконки в
+  `web/public/icons/`.
+- **DoD:** в Chrome доступна установка приложения; манифест и SW в
+  собранном `dist`; E2E `pwa` зелёный; API не кэшируется.
+- **Статус:** выполнено (итерация 39); проверка установки на iOS/Android —
+  вручную.
+
+### [x] T-082. Профиль пользователя и реальный SMTP (итерация 39)
+- **Что:** `PATCH /auth/me` (имя/уровень, миграция
+  `users.display_name`), `POST /auth/change-password` (проверка текущего
+  пароля), страница `/profile` (имя, уровень, смена пароля) + пункт меню
+  «Профиль»; `SMTPEmailSender` на `aiosmtplib` (`EMAIL_SENDER=smtp`,
+  `SMTP_*`), mock остаётся дефолтом.
+- **DoD:** смена пароля и уровня работают (тесты), SMTP-класс покрыт
+  unit-тестами с моком `aiosmtplib`, E2E `profile` зелёный.
+- **Статус:** выполнено (итерация 39); реальная отправка письма требует
+  SMTP-кредов (в этой среде — mock).
+
 ## Backlog (после MVP)
 
 - **T-101.** Leela Chess Zero как второй движок для гроссмейстерского

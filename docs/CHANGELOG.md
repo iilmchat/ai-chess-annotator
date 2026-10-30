@@ -10,6 +10,30 @@
 
 ### Added
 
+- **Подготовка к GPU-обучению (T-080, итерация 39):** `.gitignore`
+  закрывает веса и датасеты (`models/`, `*.safetensors`, `*.pt`,
+  `data/lora_*.jsonl`, `data/*.jsonl` при сохранённом `!data/.gitkeep`);
+  новый `scripts/generate_lora_dataset_from_db.py` собирает датасет
+  schema v2 из БД (`--limit 500`, `--level`, `--min-words`, `--seed`,
+  `--dry-run`, `--output`); пошаговая инструкция переноса обучения на
+  RTX 3060 — `docs/development/GPU_TRAINING_GUIDE.md` (CUDA-PyTorch,
+  датасет, `train_lora.py`, перенос адаптера через архив/Git LFS).
+- **PWA (T-081, итерация 39):** `vite-plugin-pwa` — манифест
+  («ChessAnnotator», `display: standalone`, иконки 192/512/maskable,
+  `theme-color`), service worker с precache статики (15 файлов) и
+  `navigateFallback` для SPA; `/v1/*` и `/auth/*` исключены из кэша;
+  iOS-мета-теги (`apple-mobile-web-app-capable`), `apple-touch-icon`.
+- **Профиль пользователя (T-082, итерация 39):** `PATCH /auth/me`
+  (отображаемое имя + предпочитаемый уровень), `POST /auth/change-password`
+  (проверка текущего пароля); миграция `users.display_name`
+  (`a9f1f28d4c45`); страница `/profile` в UI (имя, уровень, смена пароля с
+  валидацией) и пункт меню «Профиль».
+- **Реальный SMTP (T-082, итерация 39):** `SMTPEmailSender` на
+  `aiosmtplib` (STARTTLS/SSL, таймаут, MIMEText UTF-8) включается
+  `EMAIL_SENDER=smtp` при заданных `SMTP_HOST`/`SMTP_FROM`; в логах нет
+  ссылки/токена; `mock` остаётся дефолтом, неизвестный backend и неполная
+  конфигурация — `EmailDeliveryError`; `SMTP_*` добавлены в `.env.example`.
+
 - **Контекст выбранного хода в чате (T-072, итерация 38):** фронтенд
   передаёт `selected_ply` в `POST /v1/chat` и `/v1/chat/stream`; бэкенд
   добавляет в пользовательский промпт строку «Пользователь сейчас смотрит

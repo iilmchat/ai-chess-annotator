@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-949_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-1000_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-129_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -111,6 +111,13 @@ observability-стек Grafana/Tempo/Prometheus.
 - **Email-верификация и восстановление**: mock-письмо, `/auth/verify-email`,
   `/auth/forgot-password`, `/auth/reset-password`, `/auth/logout-all`;
   генерация закрыта для неподтверждённых (403 `email_not_verified`).
+- **Профиль (T-082)**: страница `/profile` — отображаемое имя и
+  предпочитаемый уровень (`PATCH /auth/me`), смена пароля с проверкой
+  текущего (`POST /auth/change-password`); имя хранится в
+  `users.display_name` (миграция `a9f1f28d4c45`).
+- **Реальный SMTP (T-082)**: `SMTPEmailSender` на `aiosmtplib` включается
+  `EMAIL_SENDER=smtp` + `SMTP_HOST/PORT/USER/PASSWORD/FROM`; по умолчанию
+  остаётся mock (ссылка в structlog для dev).
 - **Роли**: `user` / `admin` / `auditor`; изоляция партий по `games.user_id`;
   админка с RBAC (auditor строго read-only).
 - **Приватность**: партии не уходят во внешние LLM при уровне «новичок»
@@ -133,6 +140,10 @@ observability-стек Grafana/Tempo/Prometheus.
 - **LLM-evals**: `llm_evaluations` и `scripts/evaluate_llm.py`
   (LLM-as-judge); LoRA-пайплайн `scripts/export_dataset.py` +
   `train_lora.py` (обучение не выполнялось — нет GPU, KI-030).
+- **GPU-перенос (T-080)**: `.gitignore` закрывает веса (`models/`,
+  `*.safetensors`), `scripts/generate_lora_dataset_from_db.py` собирает
+  датасет v2 из БД (по умолчанию 500 партий), пошаговая инструкция —
+  [GPU_TRAINING_GUIDE.md](docs/development/GPU_TRAINING_GUIDE.md).
 
 ### 🛠 Админка, LLMOps и фоновые выгрузки
 
@@ -174,6 +185,16 @@ observability-стек Grafana/Tempo/Prometheus.
   ошибки API** — RU/EN (`language`/`Accept-Language`, `DEFAULT_LANGUAGE`).
 - Английские промпты лежат файлами (не редактируются в админке),
   факт-пакет остаётся русским — остатки зафиксированы в закрытом KI-058.
+
+### 📱 Установка (PWA)
+
+- **Манифест + Service Worker** (`vite-plugin-pwa`): приложение
+  устанавливается из Chrome/Edge («Установить приложение»), открывается в
+  отдельном окне (`display: standalone`), иконки 192/512 и maskable,
+  `theme-color`, iOS-мета-теги (`apple-mobile-web-app-capable`).
+- **Кэш — только статика**: workbox precache JS/CSS/HTML/иконок;
+  `/v1/*`, `/auth/*`, `/admin`, `/health` исключены из навигационного
+  fallback и не кэшируются (устаревшие данные/сессии недопустимы).
 
 ### 🧪 Качество и релиз
 
@@ -361,9 +382,9 @@ docker compose -f docker-compose.observability.yml up -d
 
 | Показатель | Значение |
 |---|---|
-| Версия | **v1.0.0** (качество LLM по-прежнему ниже 7/10 — KI-030 Open) |
-| Итерация | **35 — v1.0.0 release finalization: английские PDF/чат/ошибки API, плейсхолдер `/history`, admin `export_jobs`, blind-test script, финальные docs (KI-058 закрыт)**; итерации 1–34 закрыты |
-| Backend-тесты | **949 passed, 3 skipped, 1 xfailed** (81 файл, прогон итерации 38, 247.08 с; skip — 2 cairo-кейса на Windows-dev и `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
+| Версия | **v1.2.0** (качество LLM по-прежнему ниже 7/10 — KI-030 Open; LoRA-обучение вынесено на GPU-машину — [GPU_TRAINING_GUIDE.md](docs/development/GPU_TRAINING_GUIDE.md)) |
+| Итерация | **39 — GPU transfer prep (T-080), PWA (T-081), профиль + реальный SMTP (T-082)**; итерации 1–38 закрыты |
+| Backend-тесты | **1000 passed, 3 skipped, 1 xfailed** (83 файла, прогон итерации 39, 295.90 с; skip — 2 cairo-кейса на Windows-dev и `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
 | Frontend-тесты | **129 passed** (12 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, auth-flow, PDF-API, eval, PGN-экспорт, варианты, загрузка PGN, стрелки; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **16** (13 ревизий, head `dcf1da1421cd`; `llm_calls` — durable-история вызовов LLM, `usage_daily` — FinOps-агрегат, `engine_cache` — кэш MultiPV Stockfish, `export_jobs` — фоновые выгрузки, `users.is_verified` — email-верификация) |
@@ -378,7 +399,7 @@ docker compose -f docker-compose.observability.yml up -d
 | Audit | Append-only `audit_logs` с hash-chain, advisory-lock, триггером `UPDATE/DELETE/TRUNCATE`; аудит промптов (атомарно с правкой), правок комментариев, инъекций и **выгрузки датасета (`dataset.export`: актор, фильтры, число строк, completed)**; read-only view + страница проверки целостности |
 | Semantic cache | `semantic_cache` (vector 768, HNSW): exact `fen_hash+level+prompt_hash`, semantic cosine < 0.05, TTL 30 дней; `/commentary`, `/chat` и SSE; второй запрос — 0.030 с |
 | LoRA | `scripts/export_dataset.py` — **schema_version=2** по умолчанию: `user` = пакет фактов (`build_fact_package`), `assistant` = `edited_text`, `metadata`/`fact_sheet_chars`; v1 — legacy-флаг. `scripts/train_lora.py` — реальный SFT (peft/transformers, QLoRA 4-bit, r=16/alpha=32/q_proj,v_proj, маскирование на assistant, `--dry-run`/`--check-env`, поддержка schema {1,2}); `LORA_ADAPTER_PATH` → adapter basename для vLLM; инструкция — [LORA_TRAINING.md](docs/development/reports/LORA_TRAINING.md); обучение на GPU не выполнялось (нет CUDA, KI-030 Open) |
-| E2E | Playwright 1.64.1: **23 сценарий** (`auth`, `auth-flow`, `analyze`, `board-arrows`, `board-variant`, `chat-context`, `commentary`, `history`, `limits`, `pgn-export`, `pgn-upload`) × chromium/mobile; mocked-режим **46 passed**, real-backend 5 passed (chromium, итерация 32); CI job `e2e` + trace/screenshot при падении; локально на Windows/DSH — `E2E_PREVIEW=1` (esbuild-кэш заблокирован); ограничение — KI-040 |
+| E2E | Playwright 1.64.1: **30 сценариев** (`auth`, `auth-flow`, `analyze`, `board-arrows`, `board-variant`, `chat-context`, `commentary`, `history`, `limits`, `pgn-export`, `pgn-upload`, `profile`, `pwa`) × chromium/mobile; mocked-режим **60 passed**, real-backend 5 passed (chromium, итерация 32); CI job `e2e` + trace/screenshot при падении; локально на Windows/DSH — `E2E_PREVIEW=1` (esbuild-кэш заблокирован); ограничение — KI-040 |
 | Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `language`/`Accept-Language` (`ru`/`en`, T-106, английские промпты `*_en.txt`); `PATCH` пишет правку в `edits`; **PDF-экспорт** (`GET .../export/pdf?language=ru\|en`, fpdf2 + TTF-шрифт, английские подписи с итерации 35, диаграммы доски: финальная позиция + критические моменты, кнопка «Скачать PDF» в UI) |
 | Chat | `POST /v1/chat`: вопрос → контекст анализа → LLM → валидатор → `{reply, tokens_used}`; `language` (`ru`/`en`, `app/prompts/chat_en.txt`, итерация 35), SSE-вариант |
 | Локализация | UI RU/EN (`react-i18next`); комментарий, чат и PDF — `ru`/`en` (`language` → `Accept-Language` → `DEFAULT_LANGUAGE`); `detail` ошибок API — английский для известных `code` при `Accept-Language: en`; en-промпты файлами, факт-пакет ru; KI-058 **Closed** (остатки — в записи KI-058) |
