@@ -21,6 +21,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import sys
+import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from app import __version__
 from app.admin import AdminPathNormalizer, create_admin
 from app.api.ratelimit import RateLimitMiddleware, RedisRateLimiter
