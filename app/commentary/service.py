@@ -3,6 +3,10 @@
 Поток: `analysis_id` → партия и ходы из БД → «пакет фактов» → LLM →
 валидатор (с retry) → текст.
 
+KI-023 (итерация 37): retry-цикл проверяет не только легальность SAN-ходов,
+но и семантические утверждения о позиции («слон на e6», «связка пешки f7»);
+на последней попытке offending-предложения вырезаются вместо ошибки 502.
+
 Почему отдельный модуль, а не всё в эндпоинте: генерация — это сценарий
 (несколько шагов, ретраи, валидация), который хочется тестировать без HTTP
 и без реальной модели.
@@ -11,11 +15,12 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import cast
 
 import chess
+import structlog
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +32,12 @@ from app.cache import (
     make_prompt_hash,
     model_for_level,
     store,
+)
+from app.commentary.semantic import (
+    semantic_retry_prompt,
+    semantic_warning,
+    strip_invalid_claims,
+    validate_semantic_claims,
 )
 from app.config import Settings, get_settings
 from app.db.models import Commentary, Edit, Game, Move
@@ -60,6 +71,8 @@ __all__ = [
 RagContextBuilder = Callable[
     [ParsedGame, list[MoveAnalysis]], Awaitable[str | None]
 ]
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +294,7 @@ async def generate_commentary(
             analyses,
             cfg.commentary_max_retries,
             language=lang,
+            semantic_validation_enabled=cfg.semantic_validation_enabled,
         )
     finally:
         if owns_client:
@@ -308,19 +322,40 @@ async def _generate_with_validation(
     max_retries: int,
     *,
     language: str = "ru",
+    semantic_validation_enabled: bool = True,
 ) -> tuple[str, LLMUsage, int]:
-    """Сгенерировать текст; при нелегальных ходах — переспросить (до retry)."""
+    """Сгенерировать текст; переспросить при нелегальных ходах или фактах.
+
+    KI-023: после проверки легальности SAN выполняется семантическая
+    проверка утверждений о позиции («слон на e6», «связка пешки f7»).
+    Невалидные утверждения — повод переспросить; если проблема осталась на
+    последней попытке, а ходы легальны, невалидные предложения вырезаются
+    (:func:`strip_invalid_claims`), а не поднимается 502: пользователь
+    получает безопасный, хоть и более короткий текст. Нелегальные ходы
+    обрабатываются как раньше — retry, затем :class:`LLMValidationError`.
+
+    Args:
+        llm: клиент LLM.
+        package: пакет фактов (исходный промпт).
+        system_prompt: системная роль.
+        parsed: разобранная партия (mainline + стартовая позиция).
+        analyses: анализы ходов (PV-линии для extra_fens).
+        max_retries: сколько раз переспрашивать (0 — одна попытка).
+        language: язык retry-подсказок (``ru``/``en``).
+        semantic_validation_enabled: флаг ``SEMANTIC_VALIDATION_ENABLED``.
+
+    Returns:
+        ``(текст, расход, число_попыток)``.
+    """
     mainline = [move.san for move in parsed.moves]
     # Модель имеет право цитировать PV из пакета фактов — добавляем позиции
     # этих линий в «разрешённое» множество, иначе валидатор ложно ругается.
     extra_fens = pv_positions(parsed, analyses)
+    last_attempt = max_retries + 1
     illegal: list[str] = []
-    for attempt in range(1, max_retries + 2):
-        prompt = (
-            package
-            if not illegal
-            else _retry_prompt(package, illegal, language)
-        )
+    semantic_problems: list[str] = []
+    for attempt in range(1, last_attempt + 1):
+        prompt = _attempt_prompt(package, illegal, semantic_problems, language)
         result = await llm.complete(prompt, system_prompt=system_prompt)
         moves = extract_moves_from_text(result.text)
         legal, illegal = validate_moves(
@@ -329,12 +364,42 @@ async def _generate_with_validation(
             mainline_san=mainline,
             extra_fens=extra_fens,
         )
-        if legal:
+        if not legal:
+            # Семантические проблемы прошлого ответа сохраняем: в подсказке
+            # следующей попытки уживаются оба предупреждения (combined).
+            continue
+        semantic_problems = []
+        if not semantic_validation_enabled:
             return result.text, result.usage, attempt
+        all_ok, semantic_problems = validate_semantic_claims(
+            result.text,
+            parsed.initial_fen,
+            mainline_san=mainline,
+            extra_fens=extra_fens,
+        )
+        if all_ok:
+            return result.text, result.usage, attempt
+        if attempt >= last_attempt:
+            # Не 502: вырезаем предложения с выдуманными фигурами.
+            stripped = strip_invalid_claims(result.text, semantic_problems)
+            # В лог — только счётчики и факт обрезки, без текста LLM.
+            logger.warning(
+                "commentary_semantic_stripped",
+                attempt=attempt,
+                problems=len(semantic_problems),
+                stripped=stripped != result.text,
+            )
+            return stripped, result.usage, attempt
+        logger.warning(
+            "commentary_semantic_rejected",
+            attempt=attempt,
+            problems=len(semantic_problems),
+            retry_left=last_attempt - attempt,
+        )
 
     raise LLMValidationError(
         "LLM вернула нелегальные ходы после "
-        f"{max_retries + 1} попыток: {', '.join(illegal)}"
+        f"{last_attempt} попыток: {', '.join(illegal)}"
     )
 
 
@@ -374,17 +439,40 @@ def _with_style(system_prompt: str, style: str | None, language: str) -> str:
     return f"{system_prompt}\n\n{label}: {style}"
 
 
-def _retry_prompt(package: str, illegal: list[str], language: str = "ru") -> str:
+def _attempt_prompt(
+    package: str,
+    illegal: Sequence[str],
+    semantic_problems: Sequence[str],
+    language: str,
+) -> str:
+    """Собрать промпт попытки с учётом ошибок предыдущего ответа.
+
+    KI-023: подсказки комбинируются. Если в прошлом ответе были нелегальные
+    ходы — сохраняется прежний текст предупреждения о ходах; семантические
+    проблемы (например, «слон на e6», которого нет) добавляются отдельным
+    блоком. Если проблемы только семантические — пакет фактов берётся как
+    есть, чтобы не дублировать его в промпте.
+    """
+    if illegal:
+        prompt = f"{package}\n\n{_moves_warning(illegal, language)}"
+        if semantic_problems:
+            prompt = f"{prompt}\n\n{semantic_warning(semantic_problems, language)}"
+        return prompt
+    if semantic_problems:
+        return semantic_retry_prompt(package, semantic_problems, language)
+    return package
+
+
+def _moves_warning(illegal: Sequence[str], language: str = "ru") -> str:
+    """Предупреждение о нелегальных ходах для повторной генерации."""
     bad = ", ".join(illegal)
     if language == "en":
         return (
-            f"{package}\n\n"
             "WARNING: the previous answer contained moves that are not in the "
             f"fact sheet: {bad}. Rewrite the commentary using ONLY moves from "
             "the fact sheet. Do not mention moves that are not there."
         )
     return (
-        f"{package}\n\n"
         "ВНИМАНИЕ: в предыдущем ответе были ходы, которых нет в пакете фактов: "
         f"{bad}. Перепиши комментарий, используя ТОЛЬКО ходы из пакета. "
         "Не упоминай ходы, которых там нет."
