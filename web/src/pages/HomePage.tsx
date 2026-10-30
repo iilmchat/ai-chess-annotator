@@ -1,10 +1,15 @@
-import { useState } from "react";
+import { type ChangeEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { analyzeGame, ApiError } from "../api";
 import { AnalysisWorkspace } from "../components/AnalysisWorkspace";
 import { DEMO_PGN, positionsFromPgn } from "../lib/pgn";
+import {
+  pgnFileErrorMessageKey,
+  readPgnFile,
+  type PgnFileError,
+} from "../lib/pgnFile";
 import { useAnalysisStore } from "../stores/analysisStore";
 import type { Level } from "../types";
 
@@ -26,6 +31,31 @@ export default function HomePage() {
   } = useAnalysisStore();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * T-071: прочитать выбранный PGN-файл и подставить текст в редактор.
+   * Уровень анализа не меняется, ошибка прошлого действия сбрасывается.
+   */
+  async function loadPgnFile(file: File) {
+    setError(null);
+    try {
+      const text = await readPgnFile(file);
+      setPgn(text);
+    } catch (cause) {
+      setError(t(pgnFileErrorMessageKey(asPgnFileError(cause))));
+    }
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    // Сброс значения позволяет повторно выбрать тот же самый файл.
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    void loadPgnFile(file);
+  }
 
   async function handleAnalyze() {
     if (!pgn.trim()) {
@@ -72,6 +102,26 @@ export default function HomePage() {
         placeholder={t("pgn.placeholder")}
         aria-label={t("pgn.placeholder")}
       />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pgn,application/x-chess-pgn,text/plain"
+        data-testid="pgn-file-input"
+        onChange={handleFileChange}
+        hidden
+      />
+      <div className="actions">
+        <button
+          type="button"
+          className="button"
+          data-testid="pgn-upload"
+          aria-label={t("pgn.upload")}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <span aria-hidden="true">📎</span> {t("pgn.upload")}
+        </button>
+        <span className="muted">{t("pgn.uploadHint")}</span>
+      </div>
       <label className="field">
         <span>{t("pgn.level")}</span>
         <select
@@ -135,4 +185,14 @@ function errorMessage(cause: unknown, fallback: string): string {
     return cause.code ? `${cause.message} (${cause.code})` : cause.message;
   }
   return cause instanceof Error ? cause.message : fallback;
+}
+
+/** `readPgnFile` реджектит строкой-причиной — сужаем `unknown` до PgnFileError. */
+function asPgnFileError(cause: unknown): PgnFileError {
+  return cause === "too_large" ||
+    cause === "wrong_type" ||
+    cause === "empty" ||
+    cause === "read_error"
+    ? cause
+    : "read_error";
 }
