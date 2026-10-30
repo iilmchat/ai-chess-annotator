@@ -52,6 +52,8 @@ REFRESH_MAX_AGE_S = 7 * 24 * 60 * 60
 PROFILE_KEYS = {
     "id",
     "email",
+    # T-082: необязательное отображаемое имя профиля.
+    "display_name",
     "level",
     "role",
     "is_active",

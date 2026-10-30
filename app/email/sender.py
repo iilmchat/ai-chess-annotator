@@ -1,17 +1,23 @@
-"""Отправка писем: mock-реализация и интерфейс для SMTP (KI-041).
+"""Отправка писем: mock-реализация, SMTP и интерфейс (KI-041, T-082).
 
 Почему mock первым: в проекте нет SMTP-провайдера и секретов, а сценарии
 верификации/сброса пароля должны быть полностью тестируемы. `MockEmailSender`
 складывает письма в `outbox` (тесты проверяют ссылку/токен) и пишет
 `structlog`-событие с `to`/`subject`/`link` — в dev ссылку видно в логе
-uvicorn. Реальный SMTP подключится реализацией того же Protocol-а.
+uvicorn.
+
+`SMTPEmailSender` (T-082) отправляет те же письма через `aiosmtplib` по
+настройкам `SMTP_*`; включается ``EMAIL_SENDER=smtp``. В его логах ссылки
+и токена **нет** (секрет), только `kind`/`to`/`subject`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, Literal, Protocol
+from email.message import EmailMessage as MIMEMessage
+from typing import Annotated, Any, Literal, Protocol
 
+import aiosmtplib
 import structlog
 from fastapi import Depends, Request
 
@@ -23,6 +29,7 @@ __all__ = [
     "EmailMessage",
     "EmailSender",
     "MockEmailSender",
+    "SMTPEmailSender",
     "create_email_sender",
     "get_email_sender",
     "password_reset_message",
@@ -71,14 +78,86 @@ class MockEmailSender:
         )
 
 
+class SMTPEmailSender:
+    """Реальная отправка писем через SMTP (aiosmtplib, T-082).
+
+    Письмо собирается как `email.message.EmailMessage` с MIMEText
+    (``text/plain``, UTF-8), поэтому кириллица в теме/теле кодируется
+    стандартным email-кодеком. Параметры подключения — из `SMTP_*`:
+    ``start_tls``/``use_tls`` взаимоисключающие по смыслу (587 vs 465),
+    ``username``/``password`` передаются только при заданном `smtp_user`
+    (иначе — анонимная отправка).
+
+    В логах — только `kind`/`to`/`subject`: ссылка и токен из письма
+    являются секретом (в отличие от mock, где ссылка нужна в dev).
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def _build_message(self, message: EmailMessage) -> MIMEMessage:
+        """Собрать MIME-письмо: From/To/Subject + text/plain UTF-8."""
+        mime = MIMEMessage()
+        mime["From"] = self._settings.smtp_from
+        mime["To"] = message.to
+        mime["Subject"] = message.subject
+        mime.set_content(message.body, subtype="plain", charset="utf-8")
+        return mime
+
+    async def send(self, message: EmailMessage) -> None:
+        """Отправить письмо; ошибка транспорта → `EmailDeliveryError`."""
+        settings = self._settings
+        mime = self._build_message(message)
+        send_kwargs: dict[str, Any] = {
+            "hostname": settings.smtp_host,
+            "port": settings.smtp_port,
+            "start_tls": settings.smtp_starttls,
+            "use_tls": settings.smtp_ssl,
+            "timeout": settings.smtp_timeout,
+        }
+        if settings.smtp_user:
+            send_kwargs["username"] = settings.smtp_user
+            send_kwargs["password"] = settings.smtp_password
+        try:
+            await aiosmtplib.send(mime, **send_kwargs)
+        except Exception as exc:
+            logger.warning(
+                "email_smtp_failed",
+                to=message.to,
+                kind=message.kind,
+                error=str(exc),
+            )
+            raise EmailDeliveryError(
+                f"Не удалось отправить письмо на {message.to}: {exc}"
+            ) from exc
+        logger.info(
+            "email_smtp_sent",
+            to=message.to,
+            subject=message.subject,
+            kind=message.kind,
+        )
+
+
 def create_email_sender(settings: Settings) -> EmailSender:
-    """Собрать sender по `EMAIL_SENDER` (пока только ``mock``)."""
+    """Собрать sender по `EMAIL_SENDER`: ``mock`` или ``smtp`` (T-082).
+
+    Raises:
+        EmailDeliveryError: ``smtp`` без `SMTP_HOST`/`SMTP_FROM` или
+            неизвестный backend (→ 503 на уровне API, ошибка на старте
+            приложения).
+    """
     name = settings.email_sender.strip().lower()
     if name == "mock":
         return MockEmailSender()
+    if name == "smtp":
+        if not settings.smtp_host.strip() or not settings.smtp_from.strip():
+            raise EmailDeliveryError(
+                "EMAIL_SENDER=smtp требует SMTP_HOST и SMTP_FROM"
+            )
+        return SMTPEmailSender(settings)
     raise EmailDeliveryError(
         f"EMAIL_SENDER={settings.email_sender!r} не поддерживается "
-        "(доступно: mock)"
+        "(доступно: mock, smtp)"
     )
 
 

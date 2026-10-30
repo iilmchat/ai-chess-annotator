@@ -150,6 +150,9 @@ class User(Base):
         default=True,
         server_default=sql_text("true"),
     )
+    #: Отображаемое имя (T-082): необязательное, задаётся в профиле.
+    #: Пробелы по краям обрезаются API; пустая строка не сохраняется.
+    display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     #: bcrypt-хеш; NULL — вход по паролю не настроен (SSO/служебный аккаунт).
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(

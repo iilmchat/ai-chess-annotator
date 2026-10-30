@@ -41,6 +41,9 @@ dependencies = [
     # только HS256, для которого PyJWT достаточно и не тянет ecdsa.
     "PyJWT>=2.8",
     "email-validator>=2.2",
+    # T-082: реальная отправка писем по SMTP (EMAIL_SENDER=smtp).
+    # aiosmtplib — асинхронный клиент без нативных зависимостей.
+    "aiosmtplib>=3.0",
     "sse-starlette>=2.1",
     "starlette-admin>=1.0",
     "itsdangerous>=2.2",

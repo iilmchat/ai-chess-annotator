@@ -29,7 +29,10 @@
   без раскрытия существования email);
 * `POST /auth/reset-password` — меняет хеш, отзывает старые refresh и
   делает токен одноразовым;
-* `GET /auth/me` — профиль по access-токену.
+* `GET /auth/me` — профиль по access-токену;
+* `PATCH /auth/me` — правка профиля (`display_name`, `level`, T-082);
+* `POST /auth/change-password` — смена пароля по текущему паролю (T-082):
+  хеш перезаписывается, все refresh-сессии отзываются.
 
 Хеширование/проверка Argon2id — CPU-дорогая операция, поэтому в event loop
 она не блокирует: вызывается через :func:`asyncio.to_thread`.
@@ -44,7 +47,14 @@ from typing import Annotated, Any, Literal, cast
 import redis.asyncio as aioredis
 import structlog
 from fastapi import APIRouter, Depends, Query, Request, Response, status
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -90,12 +100,17 @@ logger = structlog.get_logger(__name__)
 #: Сообщение для неверной пары email/пароль (не раскрывает, что именно не так).
 _INVALID_CREDENTIALS = "Неверный email или пароль"
 
+#: Максимальная длина display_name (T-082) — совпадает с `users.display_name`.
+_DISPLAY_NAME_MAX_LENGTH = 120
+
 
 class UserProfile(BaseModel):
     """Публичный профиль пользователя (без хеша пароля и служебных полей)."""
 
     id: int
     email: str
+    #: T-082: необязательное отображаемое имя; `None` — не задано.
+    display_name: str | None
     level: Level
     role: AdminRole
     is_active: bool
@@ -176,6 +191,70 @@ class ResetPasswordRequest(BaseModel):
     )
 
 
+class ProfileUpdateRequest(BaseModel):
+    """Тело `PATCH /auth/me` (T-082): необязательные поля профиля.
+
+    `None` (явный JSON-``null``) означает «не менять». Запрос без изменений
+    (пустое тело или оба поля ``null``) отклоняется 422: иначе клиент получал
+    бы «обновлено», хотя ничего не обновилось. Лишние поля запрещены
+    (``extra="forbid"``), чтобы опечатка в имени поля не игнорировалась молча.
+
+    ``display_name`` обрезается по краям; пустое после trim имя — 422
+    (стереть имя через API нельзя, только заменить на непустое). ``level``
+    валидируется enum-ом `Level` (beginner/club/gm), иначе 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(
+        default=None, max_length=_DISPLAY_NAME_MAX_LENGTH
+    )
+    level: Level | None = None
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _normalize_display_name(cls, value: Any) -> Any:
+        """Обрезать пробелы и отклонить пустое имя (до проверки длины)."""
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if not trimmed:
+                raise ValueError("display_name не может быть пустым")
+            return trimmed
+        return value
+
+    @model_validator(mode="after")
+    def _require_at_least_one_change(self) -> ProfileUpdateRequest:
+        """Хотя бы одно не-``None`` поле — иначе запрос бессмысленен."""
+        if self.display_name is None and self.level is None:
+            raise ValueError("Укажите display_name и/или level")
+        return self
+
+
+class ChangePasswordRequest(BaseModel):
+    """Тело `POST /auth/change-password` (T-082).
+
+    Длины те же, что у регистрации: новый пароль — 8..256 символов.
+    Текущий пароль проверяется Argon2-верификатором входа; его длина не
+    ограничена снизу (неверный короткий пароль даёт 401, а не 422).
+    Новый пароль обязан отличаться от текущего — сравнение до хеширования
+    даёт понятную 422 вместо бессмысленной перезаписи тем же значением.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
+    new_password: str = Field(
+        min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH
+    )
+
+    @model_validator(mode="after")
+    def _reject_same_password(self) -> ChangePasswordRequest:
+        """Новый пароль должен отличаться от текущего (422)."""
+        if self.current_password == self.new_password:
+            raise ValueError("Новый пароль должен отличаться от текущего")
+        return self
+
+
 class MessageResponse(BaseModel):
     """Нейтральный ответ (не раскрывает существование email)."""
 
@@ -194,6 +273,7 @@ def _to_profile(user: User) -> UserProfile:
     return UserProfile(
         id=user.id,
         email=user.email,
+        display_name=user.display_name,
         level=user.level,
         role=user.role,
         is_active=user.is_active,
@@ -583,6 +663,61 @@ async def reset_password(
 
 
 @router.post(
+    "/change-password",
+    response_model=MessageResponse,
+    summary="Сменить пароль, зная текущий",
+)
+async def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    response: Response,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> MessageResponse:
+    """Сменить пароль аутентифицированного пользователя (T-082).
+
+    Текущий пароль проверяется тем же Argon2-верификатором, что и вход
+    (`verify_and_update`, включая legacy bcrypt). После успешной смены
+    обновляется `password_hash`, старые refresh-токены глобально отзываются
+    тем же механизмом, что у `reset-password` (``revoked_before:<user_id>``),
+    а текущая refresh-cookie очищается. Access-токен доживает свой TTL
+    (≤ 15 минут) — отдельного denylist для access в проекте нет.
+
+    Raises:
+        AuthError: нет/битый access-токен, либо неверный текущий пароль
+            (→ HTTP 401, код `unauthorized`).
+    """
+    password_ok, _ = await asyncio.to_thread(
+        verify_and_update, payload.current_password, user.password_hash
+    )
+    if not password_ok:
+        # Тот же код/семантика, что у входа: не раскрываем деталей.
+        raise AuthError("Неверный текущий пароль")
+    user.password_hash = await asyncio.to_thread(
+        hash_password, payload.new_password
+    )
+    await session.commit()
+    redis_client = _redis_client(request)
+    revoked = False
+    if redis_client is not None and settings.refresh_denylist_enabled:
+        revoked = await revoke_all_refresh_tokens(
+            redis_client,
+            user.id,
+            ttl_s=_global_revocation_ttl_s(settings),
+        )
+    # Своя refresh-cookie тоже отозвана — без очистки клиент хранил бы
+    # заведомо нерабочий токен до первого 401.
+    clear_refresh_cookie(response, settings)
+    logger.info(
+        "password_changed", user_id=user.id, refresh_revoked=revoked
+    )
+    return MessageResponse(
+        detail="Пароль обновлён; войдите заново на всех устройствах"
+    )
+
+
+@router.post(
     "/logout-all",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Выйти со всех устройств (отозвать все refresh-токены)",
@@ -631,4 +766,38 @@ async def me(
         AuthError: заголовка `Authorization: Bearer` нет или токен невалиден
             (→ HTTP 401, код `unauthorized`).
     """
+    return _to_profile(user)
+
+
+@router.patch(
+    "/me",
+    response_model=UserProfile,
+    summary="Обновить профиль текущего пользователя",
+)
+async def update_me(
+    payload: ProfileUpdateRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> UserProfile:
+    """Обновить `display_name` и/или `level` (T-082).
+
+    Присланные поля применяются к пользователю из access-токена и
+    сохраняются в сессии. Ответ — тот же профиль, что у `GET /auth/me`,
+    поэтому UI не нужен отдельный запрос после сохранения.
+
+    Raises:
+        AuthError: нет/битый access-токен (→ HTTP 401).
+        pydantic.ValidationError: пустое или длиннее 120 символов имя,
+            недопустимый уровень, лишнее поле либо запрос без изменений
+            (→ HTTP 422).
+    """
+    changed: list[str] = []
+    if payload.display_name is not None:
+        user.display_name = payload.display_name
+        changed.append("display_name")
+    if payload.level is not None:
+        user.level = payload.level
+        changed.append("level")
+    await session.commit()
+    logger.info("profile_updated", user_id=user.id, fields=changed)
     return _to_profile(user)

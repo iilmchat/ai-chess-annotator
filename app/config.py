@@ -1,8 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -141,14 +141,38 @@ class Settings(BaseSettings):
     #: (5173), в prod — тот же origin, что и API (SPA раздаётся `app.web`).
     #: Без завершающего `/`.
     app_base_url: str = "http://localhost:5173"
-    #: `mock` — лог в structlog; SMTP-реализация появится отдельным шагом.
-    email_sender: str = "mock"
+    #: `mock` — письмо в structlog; `smtp` — реальная отправка (T-082).
+    email_sender: Literal["mock", "smtp"] = "mock"
     email_from: str = "noreply@chessannotator.local"
     #: Время жизни ссылки подтверждения email.
     email_verification_ttl_hours: int = 24
     #: Время жизни ссылки сброса пароля.
     password_reset_ttl_min: int = 30
 
+    #: SMTP (T-082): используется только при ``EMAIL_SENDER=smtp``.
+    #: Пустые `smtp_host`/`smtp_from` — ошибка конфигурации на старте
+    #: (`create_email_sender` → `EmailDeliveryError`), а не «тихий» отказ
+    #: при регистрации.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    #: Логин/пароль SMTP; пустой `smtp_user` — анонимная отправка (без auth).
+    smtp_user: str = ""
+    smtp_password: str = ""
+    #: Адрес отправителя в заголовке `From` (обязателен для smtp).
+    smtp_from: str = ""
+    #: STARTTLS для порта 587 (по умолчанию) и неявный TLS для 465.
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    #: Таймаут SMTP-операции в секундах (aiosmtplib).
+    smtp_timeout: float = 30.0
+
+    @field_validator("email_sender", mode="before")
+    @classmethod
+    def _normalize_email_sender(cls, value: Any) -> Any:
+        """`EMAIL_SENDER` не зависит от регистра и пробелов (``MOCK`` → ``mock``)."""
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
 
     # Engine
     stockfish_path: str = "/usr/bin/stockfish"
