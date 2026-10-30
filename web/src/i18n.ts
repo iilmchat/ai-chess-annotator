@@ -103,6 +103,8 @@ const resources = {
       usage: {
         label: "{{tier}}: {{used}}/{{limit}}",
         details: "Осталось {{remaining}} токенов сегодня",
+        tooltip:
+          "Израсходовано токенов LLM: {{used}} из {{limit}} (дневной лимит)",
         tier: { free: "Free", pro: "Pro" },
         modal: {
           title: "Дневной лимит токенов",
@@ -139,6 +141,27 @@ const resources = {
         backToHistory: "К истории",
         missingId: "Не указан ID партии.",
         notFound: "Партия не найдена или ещё не разобрана.",
+        nav: {
+          label: "Навигация по партии",
+          toStart: "В начало",
+          prev: "Назад",
+          next: "Вперёд",
+          toEnd: "В конец",
+        },
+        evalBar: {
+          label: "Шкала оценки",
+          white: "Белые",
+          black: "Чёрные",
+          mate: "Мат {{count}}",
+        },
+        graph: {
+          title: "График оценки",
+          hint: "Клик по точке переключает доску на этот ход.",
+          axisPly: "Полуход",
+          axisEval: "Оценка, cp",
+        },
+        downloadPgn: "Скачать PGN",
+        pgnPreparing: "Готовлю PGN…",
       },
       errorBoundary: {
         title: "Что-то сломалось",
@@ -168,6 +191,19 @@ const resources = {
         title: "Ходы",
         count: "{{count}} полуходов",
         start: "Начало",
+        toggleEvals: "Показывать оценки",
+      },
+      motifs: {
+        title: "Мотивы",
+        passed_pawn: "Проходная пешка",
+        weak_square: "Слабое поле",
+        open_file: "Открытая линия",
+        open_diagonal: "Открытая диагональ",
+        king_safety: "Безопасность короля",
+        fork: "Вилка",
+        pin: "Связка",
+        mate_threat: "Угроза мата",
+        winning_capture: "Выигрывающее взятие",
       },
       board: {
         startTitle: "Начальная позиция",
@@ -346,6 +382,7 @@ const resources = {
       usage: {
         label: "{{tier}}: {{used}}/{{limit}}",
         details: "{{remaining}} tokens left today",
+        tooltip: "LLM tokens spent: {{used}} of {{limit}} (daily limit)",
         tier: { free: "Free", pro: "Pro" },
         modal: {
           title: "Daily token budget",
@@ -382,6 +419,27 @@ const resources = {
         backToHistory: "Back to history",
         missingId: "Game id is missing.",
         notFound: "Game not found or not analyzed yet.",
+        nav: {
+          label: "Game navigation",
+          toStart: "To start",
+          prev: "Previous",
+          next: "Next",
+          toEnd: "To end",
+        },
+        evalBar: {
+          label: "Evaluation bar",
+          white: "White",
+          black: "Black",
+          mate: "Mate {{count}}",
+        },
+        graph: {
+          title: "Evaluation graph",
+          hint: "Click a point to jump the board to that move.",
+          axisPly: "Ply",
+          axisEval: "Eval, cp",
+        },
+        downloadPgn: "Download PGN",
+        pgnPreparing: "Preparing PGN…",
       },
       errorBoundary: {
         title: "Something went wrong",
@@ -411,6 +469,19 @@ const resources = {
         title: "Moves",
         count: "{{count}} plies",
         start: "Start",
+        toggleEvals: "Show evaluations",
+      },
+      motifs: {
+        title: "Motifs",
+        passed_pawn: "Passed pawn",
+        weak_square: "Weak square",
+        open_file: "Open file",
+        open_diagonal: "Open diagonal",
+        king_safety: "King safety",
+        fork: "Fork",
+        pin: "Pin",
+        mate_threat: "Mate threat",
+        winning_capture: "Winning capture",
       },
       board: {
         startTitle: "Starting position",

@@ -1,12 +1,12 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AuthGate } from "./components/AuthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
-import AnalysisPage from "./pages/AnalysisPage";
+import { Skeleton } from "./components/Skeleton";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import HistoryPage from "./pages/HistoryPage";
-import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import VerifyEmailPage from "./pages/VerifyEmailPage";
@@ -16,46 +16,57 @@ import { bootstrapAuth } from "./stores/authStore";
 // до первого рендера; access-токен в localStorage не хранится (KI-037).
 void bootstrapAuth();
 
+/**
+ * Route-level code-split: и главная, и страница анализа рендерят
+ * AnalysisWorkspace, который тянет recharts (график оценки). Выносим их в
+ * отдельные чанки, чтобы не раздувать основной бандл
+ * (RULES §3.2: основной чанк ≤ 200 kB gzip).
+ */
+const HomePage = lazy(() => import("./pages/HomePage"));
+const AnalysisPage = lazy(() => import("./pages/AnalysisPage"));
+
 export default function App() {
   return (
     <ErrorBoundary>
       <BrowserRouter>
         <Layout>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            {/* KI-055: публичные auth-страницы. Ссылки из писем ведут сюда,
-                а не на JSON-эндпоинты API. */}
-            <Route path="/verify-email" element={<VerifyEmailPage />} />
-            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route
-              path="/"
-              element={
-                <AuthGate>
-                  <HomePage />
-                </AuthGate>
-              }
-            />
-            <Route
-              path="/history"
-              element={
-                // Итерация 35: страница сама показывает placeholder для
-                // неподтверждённого пользователя (без запроса партий).
-                <AuthGate allowUnverified>
-                  <HistoryPage />
-                </AuthGate>
-              }
-            />
-            <Route
-              path="/analysis/:id"
-              element={
-                <AuthGate>
-                  <AnalysisPage />
-                </AuthGate>
-              }
-            />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <Suspense fallback={<Skeleton lines={6} />}>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              {/* KI-055: публичные auth-страницы. Ссылки из писем ведут сюда,
+                  а не на JSON-эндпоинты API. */}
+              <Route path="/verify-email" element={<VerifyEmailPage />} />
+              <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+              <Route path="/reset-password" element={<ResetPasswordPage />} />
+              <Route
+                path="/"
+                element={
+                  <AuthGate>
+                    <HomePage />
+                  </AuthGate>
+                }
+              />
+              <Route
+                path="/history"
+                element={
+                  // Итерация 35: страница сама показывает placeholder для
+                  // неподтверждённого пользователя (без запроса партий).
+                  <AuthGate allowUnverified>
+                    <HistoryPage />
+                  </AuthGate>
+                }
+              />
+              <Route
+                path="/analysis/:id"
+                element={
+                  <AuthGate>
+                    <AnalysisPage />
+                  </AuthGate>
+                }
+              />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
         </Layout>
       </BrowserRouter>
     </ErrorBoundary>

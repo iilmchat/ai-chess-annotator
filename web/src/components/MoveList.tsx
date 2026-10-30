@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { classificationLabel, formatEval, movePrefix } from "../lib/format";
@@ -11,12 +12,24 @@ interface MoveListProps {
 
 export function MoveList({ moves, selectedPly, onSelect }: MoveListProps) {
   const { t } = useTranslation();
+  const [showEvals, setShowEvals] = useState(true);
 
   return (
     <section className="moves" aria-label={t("moves.title")}>
       <div className="moves__header">
         <h2>{t("moves.title")}</h2>
-        <span className="muted">{t("moves.count", { count: moves.length })}</span>
+        <div className="moves__header-right">
+          <span className="muted">{t("moves.count", { count: moves.length })}</span>
+          <label className="moves__toggle">
+            <input
+              type="checkbox"
+              data-testid="toggle-evals"
+              checked={showEvals}
+              onChange={(event) => setShowEvals(event.target.checked)}
+            />
+            <span>{t("moves.toggleEvals")}</span>
+          </label>
+        </div>
       </div>
       <div className="moves__grid">
         <button
@@ -38,13 +51,19 @@ export function MoveList({ moves, selectedPly, onSelect }: MoveListProps) {
                 selectedPly === move.ply ? "move--active" : ""
               }`}
               onClick={() => onSelect(move.ply)}
-              title={`${move.san}: ${label}, ${move.delta_cp} cp`}
+              title={
+                showEvals
+                  ? `${move.san}: ${label}, ${move.delta_cp} cp`
+                  : `${move.san}: ${label}`
+              }
             >
               <span className="move__prefix">{movePrefix(move.ply)}</span>
               <span className="move__san">{move.san}</span>
-              <span className="move__eval">
-                {formatEval(move.eval_cp, move.mate)}
-              </span>
+              {showEvals ? (
+                <span className="move__eval">
+                  {formatEval(move.eval_cp, move.mate)}
+                </span>
+              ) : null}
             </button>
           );
         })}
