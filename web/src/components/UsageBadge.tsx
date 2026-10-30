@@ -14,8 +14,17 @@ function compact(value: number): string {
   return `${value}`;
 }
 
+/**
+ * Полные числа для tooltip/модалки: разделитель тысяч берётся из языка
+ * интерфейса (ru → «9 300», en → «9,300»), а не из локали системы.
+ */
+function formatAmount(value: number, language: string): string {
+  const locale = language.toLowerCase().startsWith("en") ? "en-US" : "ru-RU";
+  return value.toLocaleString(locale);
+}
+
 export function UsageBadge() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [open, setOpen] = useState(false);
   const warned = useRef(false);
@@ -57,6 +66,9 @@ export function UsageBadge() {
     used: compact(usage.used_tokens),
     limit: compact(usage.limit_tokens),
   });
+  const usedTokens = formatAmount(usage.used_tokens, i18n.language);
+  const limitTokens = formatAmount(usage.limit_tokens, i18n.language);
+  const remainingTokens = formatAmount(usage.remaining_tokens, i18n.language);
 
   return (
     <>
@@ -64,9 +76,11 @@ export function UsageBadge() {
         type="button"
         className={`usage-badge ${over ? "usage-badge--over" : ""}`}
         onClick={() => setOpen(true)}
-        title={t("usage.details", {
-          remaining: compact(usage.remaining_tokens),
+        title={t("usage.tooltip", {
+          used: usedTokens,
+          limit: limitTokens,
         })}
+        data-testid="usage-badge"
       >
         <span className="usage-badge__dot" />
         {label}
@@ -92,6 +106,9 @@ export function UsageBadge() {
                 used: compact(usage.used_tokens),
                 limit: compact(usage.limit_tokens),
               })}
+            </p>
+            <p className="muted">
+              {t("usage.details", { remaining: remainingTokens })}
             </p>
             {over ? <p className="muted">{t("usage.modal.proHint")}</p> : null}
             <div className="modal__actions">

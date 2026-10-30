@@ -2,12 +2,21 @@ import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { formatEval, movePrefix, START_FEN } from "../lib/format";
-import type { PgnPosition } from "../lib/pgn";
+import {
+  buildAnnotatedPgn,
+  buildPgnFilename,
+  buildPgnFromSan,
+  downloadTextFile,
+  type PgnPosition,
+} from "../lib/pgn";
 import type { AnalyzeResponse, Level } from "../types";
 import { Board } from "./Board";
 import { ChatPanel } from "./ChatPanel";
 import { CommentaryPanel } from "./CommentaryPanel";
+import { EvalBar } from "./EvalBar";
+import { EvalGraph } from "./EvalGraph";
 import { MoveList } from "./MoveList";
+import { NavigationControls } from "./NavigationControls";
 import { Skeleton } from "./Skeleton";
 
 interface AnalysisWorkspaceProps {
@@ -19,6 +28,17 @@ interface AnalysisWorkspaceProps {
   onSelectPly: (ply: number) => void;
   leftPanel?: ReactNode;
   busy?: boolean;
+  /**
+   * Сырой PGN партии, если страница им располагает.
+   *
+   * `AnalysisPage` получает из store только `analysis`/`positions`/`initialFen`
+   * и не передаёт PGN (её правка — вне этой итерации), поэтому для кнопки
+   * «Скачать PGN» реализован запасной путь `buildPgnFromSan(analysis.moves)`:
+   * партия восстанавливается по SAN, а затем `buildAnnotatedPgn` добавляет
+   * комментарии. Когда PGN передан явно, заголовки исходной партии (Event,
+   * игроки, ECO, Result) сохраняются как есть.
+   */
+  pgn?: string;
 }
 
 export function AnalysisWorkspace({
@@ -30,6 +50,7 @@ export function AnalysisWorkspace({
   onSelectPly,
   leftPanel,
   busy = false,
+  pgn = "",
 }: AnalysisWorkspaceProps) {
   const { t } = useTranslation();
   const selectedPosition = useMemo(
@@ -43,6 +64,36 @@ export function AnalysisWorkspace({
   const fen =
     selectedPosition?.fen ??
     (initialFen || analysis?.initial_fen || START_FEN);
+
+  /**
+   * Скачать аннотированный PGN. Синхронно: оценки/классификации уже есть в
+   * `analysis.moves`, поэтому состояние «Готовлю PGN…» не требуется.
+   */
+  function handlePgn(): void {
+    if (!analysis) {
+      return;
+    }
+    const sans = analysis.moves.map((move) => move.san);
+    const filename = buildPgnFilename(analysis.analysis_id);
+    try {
+      const source = pgn.trim() ? pgn : buildPgnFromSan(sans, initialFen);
+      let text: string;
+      try {
+        text = buildAnnotatedPgn({ pgn: source, moves: analysis.moves });
+      } catch {
+        // Переданный PGN не разобрался (или в нём нет ходов) — собираем
+        // партию из SAN, заголовки будут минимальными.
+        text = buildAnnotatedPgn({
+          pgn: buildPgnFromSan(sans, initialFen),
+          moves: analysis.moves,
+        });
+      }
+      downloadTextFile(filename, text);
+    } catch {
+      // Совсем без комментариев, но пользователь всё равно получит PGN.
+      downloadTextFile(filename, buildPgnFromSan(sans, initialFen));
+    }
+  }
 
   return (
     <main className="layout">
@@ -58,11 +109,22 @@ export function AnalysisWorkspace({
           <section className="panel summary">
             <div className="panel__header">
               <h2>{t("summary.title")}</h2>
-              <span className="muted">
-                {t("common.seconds", {
-                  value: (analysis.time_taken_ms / 1000).toFixed(1),
-                })}
-              </span>
+              <div className="actions actions--inline">
+                <span className="muted">
+                  {t("common.seconds", {
+                    value: (analysis.time_taken_ms / 1000).toFixed(1),
+                  })}
+                </span>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handlePgn}
+                  disabled={busy}
+                  data-testid="download-pgn"
+                >
+                  {t("analysis.downloadPgn")}
+                </button>
+              </div>
             </div>
             <p className="summary__players">
               {analysis.meta.white ?? "—"} — {analysis.meta.black ?? "—"}
@@ -101,10 +163,31 @@ export function AnalysisWorkspace({
         {busy && !analysis ? (
           <div className="skeleton skeleton--board" />
         ) : (
-          <div className="board-wrap">
-            <Board fen={fen} lastMove={selectedPosition?.uci ?? null} />
-          </div>
+          <>
+            <div className="board-row">
+              <EvalBar
+                evalCp={selectedMove?.eval_cp ?? null}
+                mate={selectedMove?.mate ?? null}
+              />
+              <div className="board-wrap">
+                <Board fen={fen} lastMove={selectedPosition?.uci ?? null} />
+              </div>
+            </div>
+            <NavigationControls
+              selectedPly={selectedPly}
+              totalPlies={positions.length}
+              onSelectPly={onSelectPly}
+            />
+          </>
         )}
+
+        {analysis ? (
+          <EvalGraph
+            moves={analysis.moves}
+            selectedPly={selectedPly}
+            onSelectPly={onSelectPly}
+          />
+        ) : null}
 
         {selectedMove ? (
           <section className="panel move-detail">
@@ -146,7 +229,12 @@ export function AnalysisWorkspace({
               <ul className="motifs">
                 {selectedMove.motifs.map((motif) => (
                   <li key={`${motif.type}-${motif.description}`}>
-                    <strong>{motif.type}</strong> — {motif.description}
+                    {/* Тип мотива приходит snake_case из API: переводим, а
+                        неизвестный тип оставляем как есть (не теряем данные). */}
+                    <strong>
+                      {t(`motifs.${motif.type}`, { defaultValue: motif.type })}
+                    </strong>{" "}
+                    — {motif.description}
                   </li>
                 ))}
               </ul>
