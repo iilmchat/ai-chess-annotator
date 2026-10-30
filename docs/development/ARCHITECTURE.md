@@ -113,7 +113,7 @@ flowchart TB
 | `app/audit.py` | append-only аудит, hash-chain, advisory-lock, верификация |
 | `app/cache/` | semantic cache: exact FEN-ключ, vector-поиск, TTL |
 | `app/web.py` | SPA static + fallback на `index.html` для `/history`, `/analysis/:id` |
-| `app/commentary/` | сборка анализа из БД, генерация, retry, кэш, правка |
+| `app/commentary/` | сборка анализа из БД, генерация, retry, кэш, правка; `semantic.py` — семантическая проверка утверждений о позиции (KI-023) |
 | `app/chat/` | вопрос → контекст → LLM → валидатор → ответ |
 | `app/rag/` | ingest аннотированных партий, эмбеддинги, retrieval, контекст |
 | `app/admin.py` | starlette-admin: JWT/legacy-аутентификация, RBAC, read-only views (включая `export_jobs` с фильтром по статусу), аудит и экспорт |
@@ -345,9 +345,10 @@ view `export_jobs` с фильтром по статусу (итерация 35)
   (index.html для `/history` и `/analysis/:id`).
 - UX: skeleton-лоадеры, Error Boundary, mobile 1280/820/640/480,
   usage-badge.
-- Тесты — Vitest: 9 файлов, 81 тест (FEN/chess.js, board,
-  форматирование, SSE-парсер, auth-store/API/flow, PDF-API, eval, PGN);
-  E2E — Playwright, mocked-режим 32 прогона (16 сценариев ×
+- Тесты — Vitest: 11 файлов, 111 тестов (FEN/chess.js, board,
+  форматирование, SSE-парсер, auth-store/API/flow, PDF-API, eval, PGN,
+  варианты, загрузка PGN);
+  E2E — Playwright, mocked-режим 42 прогона (21 сценарий ×
   chromium/mobile).
 
 ## 7. Развёртывание

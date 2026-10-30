@@ -1,16 +1,16 @@
 # ChessAnnotator AI Commentary Engine
 
 [![CI](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-869_passed-brightgreen.svg)](docs/development/RELEASES.md)
-[![Frontend tests](https://img.shields.io/badge/frontend_tests-81_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](docs/CHANGELOG.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-919_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Frontend tests](https://img.shields.io/badge/frontend_tests-111_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
 > **Ассистент-комментатор шахматных партий.** Загрузите PGN — получите
 > разбор уровня гроссмейстера, адаптированный под ваш уровень: новичок,
 > клубный игрок или гроссмейстер.
 
-**Версия:** `v1.0.0` · **Стек:** Python 3.12 + FastAPI · React 19 · PostgreSQL 17 + pgvector ·
+**Версия:** `v1.1.0` · **Стек:** Python 3.12 + FastAPI · React 19 · PostgreSQL 17 + pgvector ·
 Redis · Stockfish 17 · LM Studio / DeepSeek · `arq` · OpenTelemetry/Grafana ·
 Docker Compose
 **© 2026 RuChating (iilmchat)**
@@ -66,6 +66,18 @@ observability-стек Grafana/Tempo/Prometheus.
   уровень пользователя (не просто top-1 движка).
 - **Валидатор**: каждый вариант из LLM-ответа прогоняется через движок;
   нелегальные/ошибочные отбрасываются, LLM переписывает.
+- **Семантическая валидация (KI-023)**: помимо ходов проверяются
+  утверждения о позиции — «слон на e6», «связка пешки f7» (RU/EN);
+  неверные факты ведут к retry, а на последней попытке предложение
+  вырезается вместо ошибки 502.
+
+### 🖱️ Интерактивный разбор
+
+- **Доска**: фигуры можно перетаскивать — легальный ход открывает
+  вариант («Вариант: 3. Ng5 Nd4»), кнопка «Сбросить на партию»
+  возвращает позицию из базы (T-070).
+- **Загрузка PGN**: кнопка «Загрузить файл» (📎) читает `.pgn` до 1 МБ
+  через `FileReader` и подставляет текст в поле (T-071).
 
 ### 💬 Комментарий, чат и PDF
 
@@ -345,8 +357,8 @@ docker compose -f docker-compose.observability.yml up -d
 |---|---|
 | Версия | **v1.0.0** (качество LLM по-прежнему ниже 7/10 — KI-030 Open) |
 | Итерация | **35 — v1.0.0 release finalization: английские PDF/чат/ошибки API, плейсхолдер `/history`, admin `export_jobs`, blind-test script, финальные docs (KI-058 закрыт)**; итерации 1–34 закрыты |
-| Backend-тесты | **869 passed, 3 skipped, 1 xfailed** (77 файлов, прогон итерации 35, 338.69 с; skip — нет cairo на Windows-dev, `DEEPSEEK_API_KEY` не задан и второй cairo-тест, `xfailed` — маркер KI-012) |
-| Frontend-тесты | **81 passed** (9 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, auth-flow, PDF-API, eval, PGN-экспорт; Vitest) |
+| Backend-тесты | **919 passed, 3 skipped, 1 xfailed** (79 файлов, прогон итерации 37, 249.22 с; skip — 2 cairo-кейса на Windows-dev и `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
+| Frontend-тесты | **111 passed** (11 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, auth-flow, PDF-API, eval, PGN-экспорт, варианты, загрузка PGN; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **16** (13 ревизий, head `dcf1da1421cd`; `llm_calls` — durable-история вызовов LLM, `usage_daily` — FinOps-агрегат, `engine_cache` — кэш MultiPV Stockfish, `export_jobs` — фоновые выгрузки, `users.is_verified` — email-верификация) |
 | Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
@@ -360,7 +372,7 @@ docker compose -f docker-compose.observability.yml up -d
 | Audit | Append-only `audit_logs` с hash-chain, advisory-lock, триггером `UPDATE/DELETE/TRUNCATE`; аудит промптов (атомарно с правкой), правок комментариев, инъекций и **выгрузки датасета (`dataset.export`: актор, фильтры, число строк, completed)**; read-only view + страница проверки целостности |
 | Semantic cache | `semantic_cache` (vector 768, HNSW): exact `fen_hash+level+prompt_hash`, semantic cosine < 0.05, TTL 30 дней; `/commentary`, `/chat` и SSE; второй запрос — 0.030 с |
 | LoRA | `scripts/export_dataset.py` — **schema_version=2** по умолчанию: `user` = пакет фактов (`build_fact_package`), `assistant` = `edited_text`, `metadata`/`fact_sheet_chars`; v1 — legacy-флаг. `scripts/train_lora.py` — реальный SFT (peft/transformers, QLoRA 4-bit, r=16/alpha=32/q_proj,v_proj, маскирование на assistant, `--dry-run`/`--check-env`, поддержка schema {1,2}); `LORA_ADAPTER_PATH` → adapter basename для vLLM; инструкция — [LORA_TRAINING.md](docs/development/reports/LORA_TRAINING.md); обучение на GPU не выполнялось (нет CUDA, KI-030 Open) |
-| E2E | Playwright 1.64.1: **16 сценариев** (`auth`, `auth-flow`, `analyze`, `commentary`, `history`, `limits`, `pgn-export`) × chromium/mobile; mocked-режим **32 passed**, real-backend 5 passed (chromium, итерация 32); CI job `e2e` + trace/screenshot при падении; локально на Windows/DSH — `E2E_PREVIEW=1` (esbuild-кэш заблокирован); ограничение — KI-040 |
+| E2E | Playwright 1.64.1: **21 сценарий** (`auth`, `auth-flow`, `analyze`, `board-variant`, `commentary`, `history`, `limits`, `pgn-export`, `pgn-upload`) × chromium/mobile; mocked-режим **42 passed**, real-backend 5 passed (chromium, итерация 32); CI job `e2e` + trace/screenshot при падении; локально на Windows/DSH — `E2E_PREVIEW=1` (esbuild-кэш заблокирован); ограничение — KI-040 |
 | Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `language`/`Accept-Language` (`ru`/`en`, T-106, английские промпты `*_en.txt`); `PATCH` пишет правку в `edits`; **PDF-экспорт** (`GET .../export/pdf?language=ru\|en`, fpdf2 + TTF-шрифт, английские подписи с итерации 35, диаграммы доски: финальная позиция + критические моменты, кнопка «Скачать PDF» в UI) |
 | Chat | `POST /v1/chat`: вопрос → контекст анализа → LLM → валидатор → `{reply, tokens_used}`; `language` (`ru`/`en`, `app/prompts/chat_en.txt`, итерация 35), SSE-вариант |
 | Локализация | UI RU/EN (`react-i18next`); комментарий, чат и PDF — `ru`/`en` (`language` → `Accept-Language` → `DEFAULT_LANGUAGE`); `detail` ошибок API — английский для известных `code` при `Accept-Language: en`; en-промпты файлами, факт-пакет ru; KI-058 **Closed** (остатки — в записи KI-058) |

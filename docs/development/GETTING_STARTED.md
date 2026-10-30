@@ -355,19 +355,19 @@ pytest -q tests/integration/test_commentary_pdf.py    # PDF-экспорт
 | `ruff check .` | 0 ошибок |
 | `mypy app` | `Success: no issues found` (strict) |
 | `alembic check` | без дрейфа моделей и миграций |
-| `pytest -q` | все passed; на dev-машине итерации 35 — **869 passed, 3 skipped, 1 xfailed** (skip — нет cairo на Windows и `DEEPSEEK_API_KEY`, xfail — KI-012) |
+| `pytest -q` | все passed; на dev-машине итерации 37 — **919 passed, 3 skipped, 1 xfailed** (skip — нет cairo на Windows и `DEEPSEEK_API_KEY`, xfail — KI-012) |
 
 #### 4.2.3. Frontend (Vitest, typecheck, build)
 
 ```bash
-pnpm --dir web test          # Vitest, 81 тестов (9 файлов)
+pnpm --dir web test          # Vitest, 111 тестов (11 файлов)
 pnpm --dir web typecheck     # tsc --noEmit, 0 ошибок
 pnpm --dir web build         # tsc -b && vite build → web/dist/
 ```
 
 | Проверка | Ожидаемо |
 | :--- | :--- |
-| `pnpm --dir web test` | 81 passed (итерация 36; 9 файлов) |
+| `pnpm --dir web test` | 111 passed (итерация 37; 11 файлов) |
 | `pnpm --dir web typecheck` | 0 ошибок |
 | `pnpm --dir web build` | `web/dist/` создан |
 
@@ -389,7 +389,7 @@ $env:E2E_PREVIEW="1"
 pnpm --dir web run test:e2e
 ```
 
-Ожидаемо: **32 passed** (16 сценариев × `chromium`/`mobile`).
+Ожидаемо: **42 passed** (21 сценарий × `chromium`/`mobile`).
 
 С real backend (нужны Postgres, Redis, Stockfish и LLM; новый аккаунт
 создаётся неподтверждённым — KI-040/KI-056):
