@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from importlib import resources
+
 import pytest
 
 from app.cache.semantic import make_prompt_hash
@@ -184,6 +186,44 @@ def test_chat_prompt_hash_differs_by_language() -> None:
 
     assert ru_hash != en_hash
 
+
+# --- объяснение причин (итерация 38) ---------------------------------------
+
+
+def _read_prompt_resource(name: str) -> str:
+    """Прочитать .txt-промпт напрямую (БД может содержать старую версию)."""
+    return (
+        resources.files("app.prompts")
+        .joinpath(name)
+        .read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.parametrize("level", sorted(PROMPT_LEVELS))
+def test_russian_prompt_file_requires_explanation(level: str) -> None:
+    text = _read_prompt_resource(f"{level}.txt")
+
+    assert "ОБЪЯСНЯЙ ПРИЧИНЫ" in text, (
+        "каждый commentary-промпт обязан требовать объяснение причин"
+    )
+    assert "потому что" in text, "в промпте нужен пример объяснения «почему»"
+
+
+@pytest.mark.parametrize("level", sorted(PROMPT_LEVELS))
+def test_english_prompt_file_requires_explanation(level: str) -> None:
+    text = _read_prompt_resource(f"{level}_en.txt")
+
+    assert "ALWAYS EXPLAIN WHY" in text, (
+        "every commentary prompt must require an explanation"
+    )
+    assert "because" in text, "the prompt needs an example explanation"
+
+
+def test_chat_prompt_english_requires_explanation() -> None:
+    text = _read_prompt_resource("chat_en.txt")
+
+    assert "ALWAYS EXPLAIN WHY" in text
+    assert "because" in text
 
 
 # --- пакет фактов ---------------------------------------------------------

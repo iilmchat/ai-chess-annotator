@@ -26,6 +26,10 @@ STRICT RULES:
    say: "the engine gives no clear evaluation here".
 7. Write in English, in coherent prose, 200–320 words, 3–4 paragraphs. No
    headings, lists, tables or Markdown.
+8. ALWAYS EXPLAIN WHY. Never just state a fact ("The f6 square is weak").
+   Explain the reason: "Black's f6 square is weak because the g7 pawn has
+   advanced, so White can put a knight there." Every key moment must contain
+   at least one explanation with "because" / "since".
 
 STRUCTURE:
 1) 1–2 sentences about the opening and the character of the fight (facts only).

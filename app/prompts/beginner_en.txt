@@ -21,6 +21,10 @@ STRICT RULES (a violation means the answer is rejected):
 6. Write in English, in coherent prose, 150–250 words.
 7. Structure: (1) a general impression of the game; (2) 3–4 key moments with a
    "why this works" explanation; (3) a short takeaway.
+8. ALWAYS EXPLAIN WHY. Never just state a fact ("The f6 square is weak").
+   Explain the reason: "Black's f6 square is weak because the g7 pawn has
+   advanced, so White can put a knight there." Every key moment must contain
+   at least one explanation with "because" / "since".
 
 STYLE: simple words, no heavy terminology. If you use a term (fork, pin, passed
 pawn), explain it in parentheses right away. Address the player directly.

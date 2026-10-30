@@ -82,6 +82,46 @@ COMMENTARY>>>
 
 SCALES = ("factual_accuracy", "usefulness", "style")
 
+#: Маркеры объяснения причины в комментарии (RU/EN). «so that» — EN-аналог
+#: «поэтому»/«так что», встречающийся в объяснениях плана.
+EXPLANATION_MARKERS = (
+    "потому что",
+    "так как",
+    "поэтому",
+    "благодаря",
+    "because",
+    "since",
+    "therefore",
+    "so that",
+)
+
+#: Маркеры, нормализованные так же, как текст: несколько пробелов/переводов
+#: строки внутри маркера не должны ломать проверку.
+_NORMALISED_EXPLANATION_MARKERS = tuple(
+    " ".join(marker.casefold().split()) for marker in EXPLANATION_MARKERS
+)
+
+
+def has_explanation(text: str) -> bool:
+    """Содержит ли комментарий объяснение причины (итерация 38).
+
+    Проверка регистронезависимая и устойчивая к вариантам пробелов:
+    несколько пробелов или перевод строки внутри маркера не ломают
+    проверку («Потому  что» = «потому что»).
+
+    Args:
+        text: текст комментария (может быть пустым или None-подобным).
+
+    Returns:
+        True, если найден хотя бы один маркер из `EXPLANATION_MARKERS`.
+    """
+    if not text or not text.strip():
+        return False
+    normalised = " ".join(text.casefold().split())
+    return any(
+        marker in normalised for marker in _NORMALISED_EXPLANATION_MARKERS
+    )
+
 
 @dataclass(slots=True)
 class GameRow:
@@ -102,6 +142,7 @@ class CommentaryRow:
     level: str
     commentary_id: int | None = None
     text: str = ""
+    has_explanation: bool = False
     model: str = ""
     tokens_used: int = 0
     attempts: int = 0
@@ -356,6 +397,7 @@ def _judge_cli(
                     body = commentary.json()
                     row.commentary_id = body["commentary_id"]
                     row.text = body["text"]
+                    row.has_explanation = has_explanation(row.text)
                     row.model = body["model"]
                     row.tokens_used = body["tokens_used"]
                     row.attempts = body["attempts"]
@@ -390,6 +432,25 @@ def _averages_by_level(rows: list[CommentaryRow], level: str) -> dict[str, float
     return _averages([row for row in rows if row.level == level])
 
 
+def _explanation_counts(rows: list[CommentaryRow]) -> tuple[int, int]:
+    """Сколько комментариев объясняют причины: (объяснено, оценено).
+
+    В знаменатель входят только строки с непустым текстом: ошибки генерации
+    не должны занижать долю объяснений.
+    """
+    evaluated = [row for row in rows if row.text.strip()]
+    explained = sum(1 for row in evaluated if row.has_explanation)
+    return explained, len(evaluated)
+
+
+def _explanation_cell(rows: list[CommentaryRow]) -> str:
+    """Ячейка таблицы «Объяснения»: `67% (2/3)` или `—` без данных."""
+    explained, evaluated = _explanation_counts(rows)
+    if not evaluated:
+        return "—"
+    return f"{100.0 * explained / evaluated:.0f}% ({explained}/{evaluated})"
+
+
 def _report(
     rows: list[CommentaryRow],
     games: list[GameRow],
@@ -399,6 +460,8 @@ def _report(
     overall = _averages(rows)
     scored = [row for row in rows if row.scores]
     errors = [row for row in rows if row.error]
+    explained, evaluated = _explanation_counts(rows)
+    explanation_share = 100.0 * explained / evaluated if evaluated else 0.0
     lines = [
         "# LLM-as-judge: оценка комментариев (T-023)",
         "",
@@ -420,6 +483,9 @@ def _report(
         "оценивает по шкалам 1–10 и возвращает JSON.",
         "- Валидатор SAN уже отсекает нелегальные ходы до судьи; судья оценивает "
         "смысл и стиль.",
+        "- Доля объяснений считается по маркерам «потому что» / «так как» / "
+        "«поэтому» / «because» / «since» и их аналогам без учёта регистра; "
+        "в знаменателе — комментарии с непустым текстом.",
         "",
         "## Итоговые оценки",
         "",
@@ -437,16 +503,23 @@ def _report(
 
     lines += [
         "",
+        f"**Доля объяснений (потому что/так как/because): "
+        f"{explanation_share:.0f}% ({explained}/{evaluated})**",
+        "",
         "## По уровням",
         "",
-        "| Уровень | Факт. точность | Полезность | Стиль |",
-        "| :--- | ---: | ---: | ---: |",
+        "| Уровень | Факт. точность | Полезность | Стиль | Объяснения |",
+        "| :--- | ---: | ---: | ---: | ---: |",
     ]
     for level in levels:
         averages = _averages_by_level(rows, level)
+        explanations = _explanation_cell(
+            [row for row in rows if row.level == level]
+        )
         lines.append(
             f"| `{level}` | {averages.get('factual_accuracy', 0):.2f} | "
-            f"{averages.get('usefulness', 0):.2f} | {averages.get('style', 0):.2f} |"
+            f"{averages.get('usefulness', 0):.2f} | {averages.get('style', 0):.2f} | "
+            f"{explanations} |"
         )
 
     lines += [
@@ -528,6 +601,7 @@ def _dump_json(rows: list[CommentaryRow], path: Path) -> None:
             "tokens_used": row.tokens_used,
             "attempts": row.attempts,
             "validated": row.validated,
+            "has_explanation": row.has_explanation,
             "scores": row.scores,
             "judge_comment": row.judge_comment,
             "judge_tokens": row.judge_tokens,
@@ -620,6 +694,9 @@ def main(argv: list[str] | None = None) -> int:
     for scale, value in overall.items():
         print(f"{scale}: {value:.2f}/10")
     print(f"Средняя: {average:.2f}/10")
+    explained, evaluated = _explanation_counts(rows)
+    share = 100.0 * explained / evaluated if evaluated else 0.0
+    print(f"Объяснения: {share:.0f}% ({explained}/{evaluated})")
     print(f"Отчёт: {args.output}")
     print(f"JSON: {args.json_output}")
     return 0
