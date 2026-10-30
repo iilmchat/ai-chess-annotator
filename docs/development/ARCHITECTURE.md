@@ -345,9 +345,10 @@ view `export_jobs` с фильтром по статусу (итерация 35)
   (index.html для `/history` и `/analysis/:id`).
 - UX: skeleton-лоадеры, Error Boundary, mobile 1280/820/640/480,
   usage-badge.
-- Тесты — Vitest: 8 файлов, 58 тестов (FEN/chess.js, board,
-  форматирование, SSE-парсер, auth-store/API/flow, PDF-API); E2E —
-  Playwright, mocked-режим 30 прогонов (15 сценариев × chromium/mobile).
+- Тесты — Vitest: 9 файлов, 81 тест (FEN/chess.js, board,
+  форматирование, SSE-парсер, auth-store/API/flow, PDF-API, eval, PGN);
+  E2E — Playwright, mocked-режим 32 прогона (16 сценариев ×
+  chromium/mobile).
 
 ## 7. Развёртывание
 

@@ -360,14 +360,14 @@ pytest -q tests/integration/test_commentary_pdf.py    # PDF-экспорт
 #### 4.2.3. Frontend (Vitest, typecheck, build)
 
 ```bash
-pnpm --dir web test          # Vitest, 58 тестов (8 файлов)
+pnpm --dir web test          # Vitest, 81 тестов (9 файлов)
 pnpm --dir web typecheck     # tsc --noEmit, 0 ошибок
 pnpm --dir web build         # tsc -b && vite build → web/dist/
 ```
 
 | Проверка | Ожидаемо |
 | :--- | :--- |
-| `pnpm --dir web test` | 58 passed (итерация 35; 8 файлов) |
+| `pnpm --dir web test` | 81 passed (итерация 36; 9 файлов) |
 | `pnpm --dir web typecheck` | 0 ошибок |
 | `pnpm --dir web build` | `web/dist/` создан |
 
@@ -389,7 +389,7 @@ $env:E2E_PREVIEW="1"
 pnpm --dir web run test:e2e
 ```
 
-Ожидаемо: **30 passed** (15 сценариев × `chromium`/`mobile`).
+Ожидаемо: **32 passed** (16 сценариев × `chromium`/`mobile`).
 
 С real backend (нужны Postgres, Redis, Stockfish и LLM; новый аккаунт
 создаётся неподтверждённым — KI-040/KI-056):
