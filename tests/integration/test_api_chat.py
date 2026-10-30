@@ -71,6 +71,19 @@ class ScriptedLLM(BaseLLMClient):
         )
 
 
+class StreamingScriptedLLM(ScriptedLLM):
+    """`ScriptedLLM` + стриминг одним чанком (для `/v1/chat/stream`)."""
+
+    async def stream_generate(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> AsyncIterator[str]:
+        self.prompts.append(prompt)
+        self.system_prompts.append(system_prompt)
+        text = self._texts.pop(0) if len(self._texts) > 1 else self._texts[0]
+        if text:
+            yield text
+
+
 def _db_available() -> bool:
     async def ping() -> None:
         engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
@@ -385,6 +398,67 @@ def test_chat_endpoint_returns_answer_and_tokens(
         assert body["reply"] == NAMES_ANSWER
         assert body["tokens_used"] == 150
         assert "Кто играл белыми?" in fake_llm.prompts[0]
+        # T-072: без selected_ply контекст выбранного хода не добавляется.
+        assert "Пользователь сейчас смотрит" not in fake_llm.prompts[0]
+    finally:
+        asyncio.run(_delete_game(game_id))
+
+
+def test_chat_endpoint_selected_ply_reaches_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-072: выбранный полуход передаётся в user-промпт (не в system)."""
+    game_id = asyncio.run(_seed_game_committed())
+    fake_llm = ScriptedLLM([NAMES_ANSWER])
+    monkeypatch.setattr(
+        "app.chat.service.get_llm_client", lambda level, cfg: fake_llm
+    )
+    try:
+        with _client() as client:
+            response = client.post(
+                "/v1/chat",
+                json={
+                    "analysis_id": game_id,
+                    "level": "club",
+                    "message": "Почему плохо?",
+                    "selected_ply": 4,
+                },
+            )
+        assert response.status_code == 200, response.text
+        prompt = fake_llm.prompts[0]
+        assert "Пользователь сейчас смотрит на ход 2... Nc6" in prompt
+        assert "2-й ход чёрных" in prompt
+        assert "оценка +0.20 за белых" in prompt
+        system_prompt = fake_llm.system_prompts[0]
+        assert system_prompt is not None
+        assert "Пользователь сейчас смотрит" not in system_prompt
+    finally:
+        asyncio.run(_delete_game(game_id))
+
+
+def test_chat_stream_accepts_selected_ply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-072: `/v1/chat/stream` принимает selected_ply и отдаёт его в meta."""
+    game_id = asyncio.run(_seed_game_committed())
+    fake_llm = StreamingScriptedLLM([LEGAL_ANSWER])
+    monkeypatch.setattr(
+        "app.chat.streaming.get_llm_client", lambda level, cfg: fake_llm
+    )
+    try:
+        with _client() as client:
+            response = client.post(
+                "/v1/chat/stream",
+                json={
+                    "analysis_id": game_id,
+                    "level": "club",
+                    "message": "Почему плохо?",
+                    "selected_ply": 3,
+                },
+            )
+        assert response.status_code == 200, response.text
+        assert "Пользователь сейчас смотрит на ход 2. Nf3" in fake_llm.prompts[0]
+        assert '"selected_ply": 3' in response.text
     finally:
         asyncio.run(_delete_game(game_id))
 
@@ -428,10 +502,20 @@ def test_chat_endpoint_validates_request() -> None:
             "/v1/chat",
             json={"analysis_id": 0, "level": "club", "message": "Привет"},
         )
+        bad_ply = client.post(
+            "/v1/chat",
+            json={
+                "analysis_id": 1,
+                "level": "club",
+                "message": "Привет",
+                "selected_ply": -1,
+            },
+        )
 
     assert blank.status_code == 422
     assert bad_level.status_code == 422
     assert bad_id.status_code == 422
+    assert bad_ply.status_code == 422
 
 
 def test_chat_endpoint_unknown_analysis_returns_404() -> None:

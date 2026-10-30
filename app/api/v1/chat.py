@@ -67,6 +67,14 @@ class ChatRequest(BaseModel):
             "DEFAULT_LANGUAGE"
         ),
     )
+    selected_ply: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Полуход, который пользователь сейчас смотрит на доске "
+            "(T-072); 0 — стартовая позиция, None — контекста нет"
+        ),
+    )
 
     @field_validator("message")
     @classmethod
@@ -115,6 +123,7 @@ async def chat_stream(
                 history=history,
                 settings=getattr(request.app.state, "settings", None),
                 language=language,
+                selected_ply=payload.selected_ply,
             ),
             operation="chat",
             actor_id=user.id,
@@ -162,6 +171,7 @@ async def chat(
             history=history,
             settings=getattr(request.app.state, "settings", None),
             language=language,
+            selected_ply=payload.selected_ply,
         )
     return ChatResponse(
         reply=result.reply,

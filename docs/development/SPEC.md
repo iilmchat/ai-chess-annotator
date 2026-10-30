@@ -235,6 +235,11 @@ llm_evaluations(id, model, level, accuracy_score, usefulness_score,
 - `POST /v1/chat` и `/v1/chat/stream` принимают `history` (до 20 реплик
   `user`/`assistant`) и `language` (`ru`/`en`, T-106/KI-058);
   user-реплики повторно проверяются guardrails.
+- `selected_ply` (T-072) — полуход, который пользователь сейчас смотрит на
+  доске (`0` — стартовая позиция, `None` — контекста нет). Ход добавляется в
+  user-промпт как «этот ход» (номер, цвет, SAN, оценка); отрицательные и
+  отсутствующие в сохранённом анализе значения молча игнорируются, чтобы
+  устаревшее состояние клиента не ломало чат.
 
 **Индексы:** `moves(game_id, ply)`,
 `annotated_games USING ivfflat (embedding vector_cosine_ops)`,
@@ -251,7 +256,7 @@ multipv)` — уникальный ключ кэша движка + `engine_cach
 |---|---|---|
 | `POST` | `/v1/analyze` | Принимает PGN/FEN, `level`, возвращает структурированный анализ (moves, evals, motifs). **Без LLM** — быстро. |
 | `POST` | `/v1/commentary` | Принимает `analysis_id` или PGN, `level`, `style`, `language` (`ru`/`en`, T-106), возвращает сгенерированный комментарий. |
-| `POST` | `/v1/chat` | Чат по партии: `{analysis_id, message, language?}` → ответ LLM с проверкой вариантов. |
+| `POST` | `/v1/chat` | Чат по партии: `{analysis_id, message, language?, selected_ply?}` → ответ LLM с проверкой вариантов; `selected_ply` — выбранный на доске полуход (T-072). |
 | `GET` | `/v1/games/{id}` | Метаданные партии и сохранённые комментарии. |
 | `PATCH` | `/v1/commentaries/{id}` | Правка комментария (human-in-the-loop). |
 | `GET` | `/v1/commentaries/{id}/export/pdf` | PDF-экспорт комментария: шапка партии, ходы, текст; диаграмма финальной позиции и критических моментов при доступном `cairosvg` (T-107/T-107b); query `language` (`ru`/`en`) — язык подписей (T-106/KI-058); `Content-Disposition: attachment`. |

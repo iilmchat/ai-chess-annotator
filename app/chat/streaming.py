@@ -23,6 +23,7 @@ from app.cache import (
 from app.chat.service import (
     build_chat_prompt,
     format_chat_history,
+    format_selected_ply_context,
     load_chat_system_prompt,
 )
 from app.commentary.service import load_analyses, load_game, pv_positions
@@ -44,6 +45,24 @@ __all__ = ["stream_chat"]
 logger = structlog.get_logger(__name__)
 
 
+def _meta_event(
+    *,
+    model: str,
+    level: str,
+    language: str,
+    selected_ply: int | None,
+) -> dict[str, str]:
+    """`meta`-событие чата; `selected_ply` — только если он задан (T-072)."""
+    payload: dict[str, object] = {
+        "model": model,
+        "level": level,
+        "language": language,
+    }
+    if selected_ply is not None:
+        payload["selected_ply"] = selected_ply
+    return sse_event("meta", **payload)
+
+
 async def stream_chat(
     session: AsyncSession,
     analysis_id: int,
@@ -54,12 +73,15 @@ async def stream_chat(
     settings: Settings | None = None,
     client: BaseLLMClient | None = None,
     language: str = "ru",
+    selected_ply: int | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Ответить на вопрос потоком SSE-событий.
 
     Args:
         language: ``ru``/``en`` — язык ответа и системного промпта
             (T-106/KI-058).
+        selected_ply: полуход, который пользователь смотрит на доске
+            (T-072); ``None``/вне анализа — без строки контекста.
     """
     cfg = settings or get_settings()
     lang = resolve_language(language, None, cfg.default_language)
@@ -86,11 +108,18 @@ async def stream_chat(
         question = sanitize_user_input(message)
         history_text = format_chat_history(history)
         model = client.model if client is not None else model_for_level(cfg, level)
+        # Строка выбранного полухода входит в user-промпт и в prompt_hash.
+        context_line = format_selected_ply_context(
+            selected_ply, analyses, language=lang
+        )
+        hashed_question = (
+            f"{context_line}\n{question}" if context_line else question
+        )
         prompt_hash_value = make_prompt_hash(
             level,
             model,
             system_prompt,
-            question=question,
+            question=hashed_question,
             history=history_text,
         )
         position_fen = chat_position_fen(parsed)
@@ -106,8 +135,11 @@ async def stream_chat(
         if hit is not None:
             # KI-046: cache-hit в чате — тоже строка llm_calls (operation=chat).
             record_cache_hit(latency_ms=lookup_ms)
-            yield sse_event(
-                "meta", model="semantic-cache", level=level, language=lang
+            yield _meta_event(
+                model="semantic-cache",
+                level=level,
+                language=lang,
+                selected_ply=selected_ply,
             )
             for chunk in chunk_text(hit.text):
                 yield sse_event("delta", text=chunk)
@@ -120,10 +152,22 @@ async def stream_chat(
             return
 
         package = build_fact_package(parsed, analyses, level)
-        prompt = build_chat_prompt(package, question, history, language=lang)
+        prompt = build_chat_prompt(
+            package,
+            question,
+            history,
+            language=lang,
+            selected_ply=selected_ply,
+            analyses=analyses,
+        )
         llm = client if client is not None else get_llm_client(level, cfg)
         llm.set_level(level)
-        yield sse_event("meta", model=llm.model, level=level, language=lang)
+        yield _meta_event(
+            model=llm.model,
+            level=level,
+            language=lang,
+            selected_ply=selected_ply,
+        )
 
         chunks: list[str] = []
         async for chunk in llm.stream_generate(
