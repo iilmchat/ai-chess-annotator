@@ -1,31 +1,97 @@
-# ARCHITECTURE — ChessAnnotator v0.1.0
+# ARCHITECTURE — ChessAnnotator v1.0.0
 
 > Как устроена система сейчас. Источник истины по требованиям — `SPEC.md`;
-> здесь — фактическая реализация MVP и границы.
+> здесь — фактическая реализация v1.0.0 и границы.
 
-## 1. Компоненты
+## 1. Контекст и контейнеры (C4)
 
-```text
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Browser (React SPA)                          │
-│  PGN → /v1/analyze → доска/ходы → /v1/commentary → PATCH → /v1/chat │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │ HTTP/JSON
-┌───────────────────────────────▼─────────────────────────────────────┐
-│                         FastAPI (app/)                              │
-│  rate limit → routers → services → engine pool / LLM / RAG          │
-│  StaticFiles("/") отдаёт web/dist (production)                      │
-└───────┬─────────────────┬─────────────────┬─────────────────────────┘
-        │                 │                 │
-┌───────▼──────┐  ┌───────▼──────┐  ┌───────▼──────────┐
-│ PostgreSQL 17│  │ Redis 7      │  │ Stockfish 17     │
-│ + pgvector   │  │ rate limit   │  │ пул 4 процесса   │
-└──────────────┘  └──────────────┘  └──────────────────┘
-        │
-┌───────▼─────────────────────────────────────────────────────────────┐
-│ LLM: LM Studio (beginner/club) · DeepSeek (gm)                       │
-└─────────────────────────────────────────────────────────────────────┘
+### 1.1. Level 1 — System Context
+
+Кто пользуется системой и с какими внешними системами она общается.
+
+```mermaid
+flowchart LR
+    USER(("Пользователь"))
+    ADMIN(("Админ / аудитор"))
+    OPS(("Оператор / SRE"))
+
+    subgraph SYS["ChessAnnotator v1.0.0"]
+        SPA["SPA<br/>React 19 + Vite"]
+        API["API<br/>FastAPI + uvicorn"]
+        WORKER["ARQ worker"]
+        SPA -->|"HTTP/JSON, SSE, JWT"| API
+        API -->|"enqueue_job"| WORKER
+    end
+
+    USER -->|"PGN, комментарий, чат, PDF"| SPA
+    ADMIN -->|"/admin, /admin/llmops"| API
+    API -->|"UCI"| SF[["Stockfish 17"]]
+    API -->|"OpenAI-совместимый API"| LM[["LM Studio<br/>локальная LLM"]]
+    API -->|"HTTPS"| DS[["DeepSeek<br/>облачная LLM"]]
+    API -.->|"OTLP: спаны, метрики"| OBS[["Observability-стек<br/>Grafana + Prometheus + Tempo"]]
+    OPS -->|"дашборды, алерты"| OBS
 ```
+
+Внешние зависимости: **Stockfish 17** (факты о позициях), **LM Studio**
+(локальная LLM для `beginner`/`club` и эмбеддингов RAG), **DeepSeek**
+(облачная LLM для `gm`), **observability-стек** (трейсы/метрики).
+S3-совместимое хранилище в v1.0.0 не используется (Backlog).
+
+### 1.2. Level 2 — Container
+
+```mermaid
+flowchart TB
+    subgraph CLIENT["Клиент"]
+        SPA["SPA: React 19 + Vite<br/>React Router, react-i18next (RU/EN), Zustand"]
+    end
+
+    subgraph APP["Приложение (docker compose: dev / prod)"]
+        API["API: FastAPI + uvicorn<br/>auth, analyze, commentary, chat,<br/>PDF, admin, SSE"]
+        WORKER["ARQ worker<br/>run_export_job"]
+
+        subgraph DATA["Данные"]
+            PG[("PostgreSQL 17 + pgvector<br/>16 таблиц: games, moves, commentaries,<br/>prompts, audit_logs, llm_calls, export_jobs, …")]
+            RD[("Redis 7<br/>rate limit, semantic/FinOps-счётчики,<br/>refresh-denylist, arq:queue")]
+            EXP[("Volume EXPORT_DIR<br/>data/exports: готовые NDJSON-выгрузки")]
+        end
+
+        subgraph EXTERNAL["Движки и LLM"]
+            SF["Stockfish 17<br/>пул из 4 UCI-процессов"]
+            LM["LM Studio<br/>OpenAI-совместимый API"]
+            DS["DeepSeek<br/>облачная LLM"]
+        end
+    end
+
+    subgraph OBS["Observability (docker-compose.observability.yml)"]
+        OTEL["OTel Collector<br/>:4317 gRPC / :4318 HTTP"]
+        PROM["Prometheus<br/>:9090"]
+        TEMPO["Tempo<br/>:3200"]
+        GRAF["Grafana<br/>:3000"]
+        OTEL -->|"spanmetrics, OTLP metrics"| PROM
+        OTEL -->|"трейсы"| TEMPO
+        PROM --> GRAF
+        TEMPO --> GRAF
+    end
+
+    SPA -->|"HTTP/JSON, SSE, Bearer JWT"| API
+    API --> PG
+    API --> RD
+    API --> SF
+    API --> LM
+    API --> DS
+    API -->|"enqueue_job"| RD
+    RD -->|"arq:queue"| WORKER
+    WORKER --> PG
+    WORKER -->|"NDJSON"| EXP
+    API -->|"download готового файла"| EXP
+    API -.->|"OTLP"| OTEL
+    WORKER -.->|"OTLP"| OTEL
+```
+
+`EXPORT_DIR` — **общий volume** API и worker'а (`data/` в dev,
+`prod_export_data` в prod): API отдаёт готовый файл, worker его создаёт.
+Пара `Redis`/`EXPORT_DIR` связывает процессы; API сам выгрузку не
+выполняет (KI-053).
 
 ## 2. Backend-модули
 
@@ -33,14 +99,15 @@
 | :--- | :--- |
 | `app/ingestion/` | PGN/FEN → `ParsedGame`, ECO, фазы, повторы |
 | `app/engine/` | async UCI-клиент Stockfish, пул, классификация, Policy, валидатор; `engine_cache` (T-108) |
-| `app/export/` | PDF-экспорт комментария: fpdf2 + TTF-шрифт, шапка/ходы/текст; `board.py` — SVG доски → PNG через cairosvg с graceful degradation (T-107/T-107b) |
+| `app/export/` | PDF-экспорт комментария: fpdf2 + TTF-шрифт, подписи RU/EN (`language`), шапка/ходы/текст; `board.py` — SVG доски → PNG через cairosvg с graceful degradation (T-107/T-107b, KI-058) |
 | `app/dataset/` | dataset-экспорт: `records.py` — общая выборка JSONL (фильтры/keyset/сборка записи), `jobs.py` — выгрузка `export_jobs` + recovery (KI-050/KI-053) |
 | `app/worker.py` + `worker.py` | arq-воркер: `WorkerSettings`, задача `run_export_job(ctx, job_id)`, recovery при старте (KI-053) |
 | `app/email/` | `EmailSender` Protocol + `MockEmailSender` (outbox/structlog), письма verify/reset (KI-041) |
 | `app/auth/` | JWT access/refresh/action-tokens, Argon2id, cookie, denylist + global revocation (`revoked_before`), email-verification dependency (KI-041) |
 | `app/motifs/` | эвристики мотивов (слабые поля, линии, вилки, мат и т.д.) |
 | `app/llm/` | OpenAI-совместимый клиент, фабрика по уровню, пакет фактов, прогрев |
-| `app/prompts/` | системные промпты `beginner`/`club`/`gm`: `.txt` — seed/fallback, таблица `prompts` — источник истины, in-memory кэш |
+| `app/prompts/` | системные промпты `beginner`/`club`/`gm` + `chat`: `.txt` — seed/fallback (ru), `*_en.txt`/`chat_en.txt` — английские файлы, таблица `prompts` — источник истины для ru, in-memory кэш, `resolve_language` |
+| `app/i18n.py` | локализация `detail` ошибок API по `Accept-Language` (KI-058, итерация 35) |
 | `app/finops.py` | дневные счётчики токенов в Redis, `TokenBudgetMiddleware` (429), `cost_usd` |
 | `app/security/` | prompt-injection guardrails: нормализация, эвристики, `422 prompt_injection` |
 | `app/audit.py` | append-only аудит, hash-chain, advisory-lock, верификация |
@@ -49,11 +116,11 @@
 | `app/commentary/` | сборка анализа из БД, генерация, retry, кэш, правка |
 | `app/chat/` | вопрос → контекст → LLM → валидатор → ответ |
 | `app/rag/` | ingest аннотированных партий, эмбеддинги, retrieval, контекст |
-| `app/admin.py` | starlette-admin: JWT/legacy-аутентификация, RBAC, read-only views, аудит и экспорт |
+| `app/admin.py` | starlette-admin: JWT/legacy-аутентификация, RBAC, read-only views (включая `export_jobs` с фильтром по статусу), аудит и экспорт |
 | `app/llmops_dashboard.py` | LLMOps-дашборд `/admin/llmops`: p50/p95/p99, error rate, tokens/cost, cache hit rate, топ-5 пользователей |
 | `app/observability.py` | OTel: TracerProvider/MeterProvider, OTLP-экспорт спанов и метрик `llm.*`; `app/tracing.py` — W3C trace-context, HTTP-спан с `http.route`/статусом для spanmetrics |
 | `deploy/` | конфиги observability-стека: `otel-collector`, `tempo`, `prometheus`, `grafana` (datasources + дашборд) |
-| `app/api/v1/` | `analyze`, `games`, `commentary`, `chat`, `ingest`, `health`, `admin/exports`, `auth` |
+| `app/api/v1/` | `analyze`, `games`, `users`, `commentary`, `chat`, `ingest`, `health`, `auth`, `admin_exports` |
 | `app/db/` | SQLAlchemy-модели, сессии, Alembic-миграции |
 
 ## 3. Потоки
@@ -90,9 +157,10 @@ POST /v1/commentary {analysis_id, level, style?, language?}
 ### 3.3. Чат
 
 ```text
-POST /v1/chat
+POST /v1/chat {analysis_id, question, history?, language?}
+  → language = request → Accept-Language → DEFAULT_LANGUAGE (итерация 35)
   → те же load_game/load_analyses + build_fact_package
-  → CHAT_SYSTEM_PROMPT + <вопрос>
+  → CHAT_SYSTEM_PROMPT (ru | en — app/prompts/chat_en.txt) + <вопрос>
   → LLM → validator (mainline + PV positions) → retry
   → JSON: reply, tokens_used
 ```
@@ -107,27 +175,46 @@ PATCH /v1/commentaries/{id}
   → JSON: комментарий + edit_id
 ```
 
-## 4. API v0.1.0
+## 4. API v1.0.0
+
+Все эндпоинты, кроме `/auth/*`, `/v1/health` и `/docs`, требуют
+`Authorization: Bearer <access>`.
 
 | Метод | Путь | Назначение |
 | :--- | :--- | :--- |
+| POST | `/auth/register` | регистрация (`is_verified=false`) |
+| POST | `/auth/login` | access в JSON + refresh в HttpOnly-cookie |
+| POST | `/auth/refresh` | ротация пары по refresh-cookie |
+| POST | `/auth/logout` | отзыв `jti` + очистка cookie |
+| POST | `/auth/logout-all` | `revoked_before` — отзыв всех refresh |
+| GET | `/auth/verify-email` | подтверждение email по токену |
+| POST | `/auth/forgot-password` | 202 без enumeration |
+| POST | `/auth/reset-password` | Argon2id + отзыв старых refresh |
+| GET | `/auth/me` | профиль текущего пользователя |
 | POST | `/v1/analyze` | PGN + level → анализ, `analysis_id`, `analysis_level` |
+| GET | `/v1/games` | список партий (только свои; admin — все) |
 | GET | `/v1/games/{id}` | сохранённый анализ + `commentaries` без Stockfish |
-| POST | `/v1/commentary` | `analysis_id` + level → комментарий |
+| GET | `/v1/users/me/usage` | FinOps: Redis + `usage_daily` |
+| POST | `/v1/commentary` | `analysis_id` + level + `language` → комментарий |
 | POST | `/v1/commentary/stream` | SSE: `meta`/`delta`/`done`/`error` |
 | PATCH | `/v1/commentaries/{id}` | ручная правка + `edits` |
-| GET | `/v1/commentaries/{id}/export/pdf` | PDF комментария + диаграммы доски (T-107/T-107b) |
+| GET | `/v1/commentaries/{id}/export/pdf` | PDF + диаграммы доски (T-107/T-107b); `language=ru\|en` (итерация 35) |
+| POST | `/v1/chat` | вопрос по `analysis_id` (+ `language`, итерация 35) |
+| POST | `/v1/chat/stream` | SSE-ответ чата |
+| POST | `/v1/ingest` | PGN → `annotated_games` (`X-Admin-Token`) |
 | GET | `/v1/admin/exports/edits.jsonl` | streaming NDJSON датасета (admin/auditor) |
 | POST | `/v1/admin/exports/jobs` | фоновая выгрузка (202, admin/legacy) |
 | GET | `/v1/admin/exports/jobs/{id}` | статус джобы |
 | GET | `/v1/admin/exports/jobs/{id}/download` | готовый JSONL (409/410) |
-| POST | `/v1/chat` | вопрос по `analysis_id` |
-| POST | `/v1/chat/stream` | SSE-ответ чата |
-| POST | `/v1/ingest` | PGN → `annotated_games` (`X-Admin-Token`) |
 | GET | `/v1/health` | БД/Redis/Stockfish/LLM |
 | GET | `/docs` | OpenAPI |
+| GET | `/admin`, `/admin/llmops` | starlette-admin: read-only views, `export_jobs` (фильтр по статусу), промпты, LLMOps-дашборд |
 
-Ошибки — `{"detail", "code"}`; коды: 400/404/422/429/500/502/503/504.
+Ошибки — `{"detail", "code"}`; коды: 400/403/404/422/429/500/502/503/504.
+`detail` доменных `AppError` локализуется по `Accept-Language`
+(`app/i18n.py`): при запросе `en` для известного `code` возвращается
+английский текст, иначе — исходное сообщение; `code` и HTTP-статус не
+меняются (итерация 35).
 
 ## 5. База данных
 
@@ -210,41 +297,77 @@ Docker-сервис `worker` (`arq worker.WorkerSettings`) в dev/prod compose,
 общий volume `data`/`prod_export_data`; API-процесс не выполняет выгрузку.
 Если Redis недоступен — 503 `export_queue_unavailable`, джоба `failed`.
 Retention по умолчанию 7 дней (`EXPORT_RETENTION_DAYS`); файлы вне
-`EXPORT_DIR` не удаляются, signed URL — KI-057.
+`EXPORT_DIR` не удаляются, signed URL — KI-057. В `/admin` есть read-only
+view `export_jobs` с фильтром по статусу (итерация 35).
+
+## 5.4. Локализация (RU/EN)
+
+```text
+язык = поле запроса (language) → заголовок Accept-Language → DEFAULT_LANGUAGE
+       (app/prompts/resolve_language)
+```
+
+- **Промпты.** Русские промпты — источник истины в таблице `prompts`
+  (seed из `app/prompts/*.txt`, редактируются в админке, версия,
+  hot-reload). Английские — **файлы** `app/prompts/{beginner,club,gm}_en.txt`
+  и `app/prompts/chat_en.txt`; в админке не редактируются, в БД не
+  хранятся (остаток закрытого KI-058).
+- **Область локализации (v1.0.0):** UI (`react-i18next`), комментарий,
+  чат (sync + SSE), PDF-подписи и `detail` доменных ошибок API.
+- **Что остаётся русским:** «пакет фактов» (оценки, мотивы, SAN-варианты,
+  метаданные партии) — LLM переводит его в текст на выбранном языке;
+  вычитки носителем не было (KI-058 residuals).
+- **PDF.** `language` — query-параметр `GET .../export/pdf`; от него
+  зависят заголовки и подписи, но не PGN/SAN.
 
 ## 6. Frontend
 
 - React 19 + TypeScript + Vite + React Router; `react-chessboard`
   5.12.1 для доски, `chess.js` (`history({verbose:true})`) для FEN из
   PGN, `react-i18next` (RU/EN), Zustand с persist в `sessionStorage`.
-- Маршруты: `/` (PGN + анализ), `/history` (последние 20),
-  `/analysis/:id` (загрузка сохранённого анализа), публичные
-  `/verify-email`, `/forgot-password`, `/reset-password` (KI-055).
-  `AnalysisWorkspace` общий для главной и карточки.
+- Маршруты: `/` (PGN + анализ), `/history` (последние 20; для
+  неподтверждённых — плейсхолдер «Подтвердите email, чтобы увидеть
+  историю», итерация 35), `/analysis/:id` (загрузка сохранённого
+  анализа), публичные `/verify-email`, `/forgot-password`,
+  `/reset-password` (KI-055). `AnalysisWorkspace` общий для главной и
+  карточки.
 - Auth-UX: `AuthGate` при `is_verified=false` показывает экран
   «Подтвердите email»; в шапке — `ProfileMenu` с «Выйти» и «Выйти со всех
   устройств» (`POST /auth/logout-all`).
-- История чата — `chatStore` (Zustand, `sessionStorage`), уходит в
-  `/v1/chat` и `/v1/chat/stream` как `history`; usage-badge опрашивает
-  `/v1/users/me/usage`.
+- Комментарий: inline-редактор + `PATCH`; кнопка «Скачать PDF»
+  (`GET .../export/pdf`, JWT-refresh, передаёт `language` из i18n).
+- Чат: `chatStore` (Zustand, `sessionStorage`), история уходит в
+  `/v1/chat` и `/v1/chat/stream` как `history`; передаётся `language`.
 - API-клиент — `web/src/api.ts`; SSE читается через `ReadableStream`,
-  текст печатается постепенно.
+  текст печатается постепенно. Ошибки API показываются по `code`, текст —
+  локализованный `detail` из ответа.
 - Production: `pnpm build` → `web/dist` → `SPAStaticFiles("/")` в FastAPI
   (index.html для `/history` и `/analysis/:id`).
-- UX: skeleton-лоадеры, Error Boundary, mobile 1280/820/640/480.
-- Тесты — Vitest: FEN/chess.js, SSE-парсер, форматирование (20 тестов).
+- UX: skeleton-лоадеры, Error Boundary, mobile 1280/820/640/480,
+  usage-badge.
+- Тесты — Vitest: 8 файлов, 58 тестов (FEN/chess.js, board,
+  форматирование, SSE-парсер, auth-store/API/flow, PDF-API); E2E —
+  Playwright, mocked-режим 30 прогонов (15 сценариев × chromium/mobile).
 
 ## 7. Развёртывание
 
 - `Dockerfile`: multi-stage — Node собирает SPA, Python-образ получает
-  `web/dist`, Stockfish, зависимости и запускается non-root.
-- `docker-compose.prod.yml`: `app`, `postgres`, `redis`; БД и Redis
-  опубликованы **только на 127.0.0.1** (или не публикуются), API — на
-  loopback за reverse-proxy.
-- `app` при старте выполняет `alembic upgrade head`, затем uvicorn.
-- Healthcheck — `/v1/health`.
+  `web/dist`, Stockfish, `libcairo2`/`fonts-dejavu-core`, зависимости и
+  запускается non-root.
+- `docker-compose.yml` (dev): `postgres`, `redis`, `worker`; опциональные
+  профили `engine` (Stockfish-over-TCP) и `llm-local` (vLLM).
+- `docker-compose.prod.yml`: `app` + `worker` + `postgres` + `redis`;
+  БД и Redis опубликованы **только на 127.0.0.1**, API — на loopback за
+  reverse-proxy; общий volume `prod_export_data`; healthcheck
+  `/v1/health`.
+- `app` при старте выполняет `alembic upgrade head`, затем uvicorn;
+  число воркеров — `WORKERS`.
+- `docker-compose.observability.yml`: `otel-collector`, `tempo`,
+  `prometheus`, `grafana` (отдельный проект `chessannotator-observability`).
+- GHCR: job `publish-docker` в CI по тегу `v*` публикует
+  `ghcr.io/iilmchat/ai-chess-annotator:{vX.Y.Z,X.Y.Z,latest}`.
 
-## 8. Безопасность и ограничения MVP
+## 8. Безопасность и ограничения v1.0.0
 
 - JWT + роли `user/admin/auditor`, refresh в HttpOnly-cookie, Redis-denylist;
   `/v1/ingest` дополнительно защищён `X-Admin-Token` (constant-time).
@@ -253,11 +376,19 @@ Retention по умолчанию 7 дней (`EXPORT_RETENTION_DAYS`); файл
 - Rate limit 10/мин на IP, fail-open при недоступном Redis (KI-015).
 - Валидатор проверяет легальность SAN, не семантику (KI-023).
 - RAG-эмбеддинги — LM Studio 768 (L2); hash — fallback тестов.
-- SSE-стриминг реализован; история чата между запросами не сохраняется.
-- Слепой тест уровней (T-024) не проводился.
+- SSE-стриминг реализован; история чата хранится только на клиенте
+  (`sessionStorage`) и уходит в запрос — серверной истории нет.
+- Слепой тест уровней (T-024) не проводился; генератор материалов
+  `scripts/generate_blind_test.py` готов (итерация 35).
+- Локализация: русский «пакет фактов», en-промпты файлами, без вычитки
+  носителем — остатки закрытого KI-058.
+- LLM-качество ниже целевого 7/10 (KI-030 Open); обучение LoRA не
+  выполнялось (нет GPU).
 
 ## 9. Что дальше
 
-Phase 7 (`docs/development/DESIGN_ADMIN_AND_OPS.md`): admin panel, prompt
-registry, OTel/LLMOps, FinOps, semantic cache, prompt-injection guardrails,
-audit. После этого — multi-tenant и SSO (Backlog T-111…T-119).
+v1.0.0 — стабильный релиз: админка, prompt registry, OTel/LLMOps,
+FinOps, semantic cache, guardrails, audit, фоновые выгрузки и
+observability-стек закрыты. Дальше: живой слепой тест (T-024), вычитка
+EN-промптов носителем, качество LLM/LoRA (KI-030), signed URL (KI-057),
+multi-tenant и SSO (Backlog T-111…T-119).

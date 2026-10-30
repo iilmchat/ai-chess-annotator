@@ -1,17 +1,18 @@
 # ChessAnnotator AI Commentary Engine
 
-[![CI](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/chess-annotator/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-779_passed-brightgreen.svg)](docs/development/RELEASES.md)
-[![Frontend tests](https://img.shields.io/badge/frontend_tests-55_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![CI](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](docs/CHANGELOG.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-869_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Frontend tests](https://img.shields.io/badge/frontend_tests-58_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
 > **Ассистент-комментатор шахматных партий.** Загрузите PGN — получите
 > разбор уровня гроссмейстера, адаптированный под ваш уровень: новичок,
 > клубный игрок или гроссмейстер.
 
-**Версия:** `v0.1.0` · **Стек:** Python 3.12 + FastAPI · React 19 · PostgreSQL 17 + pgvector ·
-Redis · Stockfish 17 · LM Studio / DeepSeek · Docker Compose
+**Версия:** `v1.0.0` · **Стек:** Python 3.12 + FastAPI · React 19 · PostgreSQL 17 + pgvector ·
+Redis · Stockfish 17 · LM Studio / DeepSeek · `arq` · OpenTelemetry/Grafana ·
+Docker Compose
 **© 2026 RuChating (iilmchat)**
 
 ---
@@ -28,6 +29,12 @@ ChessAnnotator — веб-приложение с API, которое прини
 Проект вырос из идеи «LLM пишет комментарии» в **трёхуровневую систему**:
 каждый уровень (новичок / клуб / гроссмейстер) имеет свою глубину анализа,
 свои источники данных и свою политику выбора рекомендуемого хода.
+
+В **v1.0.0** это полноценный сервис: JWT-аккаунты с email-верификацией и
+сбросом пароля, админка с LLMOps-дашбордом и управлением промптами,
+фоновые выгрузки через `arq`-воркер, PDF-экспорт с диаграммами доски,
+локализация RU/EN (комментарий, чат, PDF, ошибки API) и
+observability-стек Grafana/Tempo/Prometheus.
 
 ---
 
@@ -51,7 +58,7 @@ ChessAnnotator — веб-приложение с API, которое прини
   детект транспозиций, разметка фаз (дебют / миттельшпиль / эндшпиль).
 - **Engine Service**: Stockfish 17, MultiPV, классификация ходов
   (blunder / mistake / inaccuracy / good / best), поиск критических
-  моментов.
+  моментов, пул из 4 процессов и кэш `engine_cache`.
 - **Motif Detector**: слабые поля, отсталые и проходные пешки, открытые
   линии и диагонали, безопасность короля, тактические темы (связка,
   вилка, отвлечение, промежуточный шах).
@@ -60,46 +67,106 @@ ChessAnnotator — веб-приложение с API, которое прини
 - **Валидатор**: каждый вариант из LLM-ответа прогоняется через движок;
   нелегальные/ошибочные отбрасываются, LLM переписывает.
 
-### 💬 Комментарий и чат
+### 💬 Комментарий, чат и PDF
 
 - **Commentary Generation**: LLM получает структурированный «пакет
   фактов» (оценки, варианты, мотивы, retrieved-аннотации) и пишет текст
-  в стиле гроссмейстерских аннотаций (Лейтао, Каспаров, Шипов).
-- **Chat**: диалог по партии с уточняющими вопросами («почему не работает
-  этот ход?», «что было бы, если...»), с той же валидацией вариантов.
+  в стиле гроссмейстерских аннотаций.
+- **Язык**: `language` (`ru`/`en`) в `/v1/commentary` и `/v1/chat`
+  (fallback — `Accept-Language` → `DEFAULT_LANGUAGE`); английские
+  промпты — `*_en.txt`, английский чат — `app/prompts/chat_en.txt`.
+- **Чат по партии**: уточняющие вопросы («почему не работает этот ход?»,
+  «что было бы, если...») с той же валидацией вариантов и guardrails.
+- **SSE-стриминг**: `/v1/commentary/stream` и `/v1/chat/stream` —
+  события `meta`/`delta`/`done`/`error`, текст печатается постепенно.
+- **PDF-экспорт**: `GET /v1/commentaries/{id}/export/pdf` — шапка,
+  ходы, комментарий, диаграммы доски (финальная позиция + критические
+  моменты); `language` (`ru`/`en`) меняет подписи; кнопка «Скачать PDF»
+  в UI.
 - **Human-in-the-loop**: веб-редактор правок; правки идут в датасет для
   дообучения и few-shot.
 
-### 📚 RAG и база партий
+### 🔐 Аккаунты, роли и безопасность
 
-- **Источники**: ChessBase Mega Database 2026 (при наличии лицензии),
-  открытые аннотированные партии (Lichess Studies и др.), собственная
-  растущая база через модуль загрузки.
-- **Хранилище**: PostgreSQL 17 + `pgvector`, эмбеддинги позиций и текстов.
-- **Retrieval**: top-k похожих позиций + их аннотации → в контекст LLM
-  как «гроссмейстерский контекст».
-
-### 🔐 Совместная работа и безопасность
-
-- **Auth**: JWT + refresh-токены, сессии, защищённые маршруты.
-- **Rate limiting**: Redis-счётчики, лимиты на login и общий API.
+- **Аутентификация**: JWT (PyJWT, HS256), access 15 минут, refresh 7 дней
+  в HttpOnly-cookie, Redis-denylist, ротация; пароли — Argon2id.
+- **Email-верификация и восстановление**: mock-письмо, `/auth/verify-email`,
+  `/auth/forgot-password`, `/auth/reset-password`, `/auth/logout-all`;
+  генерация закрыта для неподтверждённых (403 `email_not_verified`).
+- **Роли**: `user` / `admin` / `auditor`; изоляция партий по `games.user_id`;
+  админка с RBAC (auditor строго read-only).
 - **Приватность**: партии не уходят во внешние LLM при уровне «новичок»
   (локальная модель); для «гроссмейстера» — опция «только локально».
-- **Секреты**: ENV + Vault/SOPS, AES-256-GCM для ключей провайдеров.
+- **Guardrails**: нормализация, 7 RU/EN-эвристик, `422 prompt_injection`;
+  append-only аудит с hash-chain.
+- **Rate limiting**: Redis-счётчики (login и общий API), дневной token-бюджет.
+
+### 📚 RAG, кэши и качество текста
+
+- **Источники**: открытые аннотированные партии (Lichess Studies и др.),
+  собственная растущая база через модуль загрузки; ChessBase Mega Database
+  2026 — при наличии лицензии (T-103).
+- **Хранилище**: PostgreSQL 17 + `pgvector`, эмбеддинги 768 (LM Studio
+  nomic-embed).
+- **Retrieval**: top-k похожих позиций + их аннотации → в контекст LLM
+  как «гроссмейстерский контекст» (уровень `gm`).
+- **Semantic cache**: exact FEN-ключ + vector-поиск, TTL 30 дней;
+  второй запрос — миллисекунды.
+- **LLM-evals**: `llm_evaluations` и `scripts/evaluate_llm.py`
+  (LLM-as-judge); LoRA-пайплайн `scripts/export_dataset.py` +
+  `train_lora.py` (обучение не выполнялось — нет GPU, KI-030).
+
+### 🛠 Админка, LLMOps и фоновые выгрузки
+
+- **Admin Panel** (`/admin`, starlette-admin): read-only views
+  `annotated_games`, `commentaries`, `edits`, `audit_logs`, `llm_calls`,
+  `llm_evaluations`; редактируемый `PromptAdmin`; импорт закрыт.
+- **LLMOps-дашборд** `/admin/llmops`: p50/p95/p99, error rate,
+  cache-hit rate, токены/стоимость, топ-5 пользователей.
+- **Фоновые выгрузки**: API ставит задачу в `arq`-очередь, отдельный
+  worker пишет NDJSON в `EXPORT_DIR`; `export_jobs` + статус/скачивание,
+  read-only view в админке с фильтром по статусу, retention-скрипт.
+- **Prompts**: промпты в БД (версия, hot-reload), seed из `*.txt`,
+  инвалидация кэша между воркерами через Redis Pub/Sub.
 
 ### 📈 Наблюдаемость
 
-- **OpenTelemetry**: трейсы OTLP/HTTP, span `agent.step`, Pino-логи,
-  per-provider semaphore.
-- **Метрики**: покрытие тестами, время CI, стоимость комментария по
-  уровням, латентность `/v1/analyze` и `/v1/commentary`.
+- **OTel**: спаны `http_request`, `llm_*`, `validator.validate`,
+  `rag.retrieve`; OTLP-метрики `llm.calls/tokens/cost/latency`;
+  сквозной `trace_id` и заголовок `X-Trace-Id`.
+- **Стек**: `docker-compose.observability.yml` — OTel Collector →
+  Prometheus + Tempo → Grafana (дашборд p95/p99, 5xx, tokens/cost),
+  alert rules `HighErrorRate` / `HighLatency` / `LLMBudgetExceeded`.
+- **Durable-история**: `llm_calls` (провайдер, модель, уровень, токены,
+  стоимость, latency, cache_hit, prompt_slug/version) и FinOps
+  `usage_daily`.
 
-### 🗄️ Хранилище
+### 🗄️ Данные и хранение
 
-- **S3-совместимое** (AWS S3, MinIO, R2, Yandex Object Storage):
-  presigned URL, TTL-очистка, multipart-загрузка.
-- **PostgreSQL 17 + pgvector**: партии, ходы, мотивы, аннотации,
-  комментарии, правки, retrieval-кеш.
+- **PostgreSQL 17 + pgvector**: 16 таблиц — партии, ходы, мотивы,
+  аннотации, комментарии, правки, промпты, аудит, semantic cache,
+  `llm_calls`, `usage_daily`, `engine_cache`, `export_jobs`.
+- **Локальная ФС**: `EXPORT_DIR` (`data/exports/`, вне web-root) для
+  готовых выгрузок и PDF; retention — `scripts/prune_export_jobs.py`.
+- **S3-совместимое хранилище** (MinIO/R2 и т.п.) — в Backlog, не в v1.0.0.
+
+### 🌍 Локализация
+
+- **UI** — RU/EN (`react-i18next`); **комментарий, чат, PDF-экспорт,
+  ошибки API** — RU/EN (`language`/`Accept-Language`, `DEFAULT_LANGUAGE`).
+- Английские промпты лежат файлами (не редактируются в админке),
+  факт-пакет остаётся русским — остатки зафиксированы в закрытом KI-058.
+
+### 🧪 Качество и релиз
+
+- **Тесты**: pytest (backend), Vitest (frontend), Playwright E2E
+  (mocked-API и real-backend режим).
+- **CI**: ruff, mypy, alembic (upgrade/check/roundtrip), pytest,
+  typecheck, build, test, E2E, docker build + smoke, `publish-docker`
+  по тегу `v*` → GHCR.
+- **Слепой тест уровней**: `scripts/generate_blind_test.py` готовит
+  3 партии × 3 уровня со слотами A/B/C, бланк и ключ организатора;
+  сам тест с людьми — вручную (T-024, не проведён).
 
 ---
 
@@ -110,32 +177,37 @@ ChessAnnotator — веб-приложение с API, которое прини
 | **Backend** | Python 3.12, FastAPI, `python-chess`, собственный async UCI-клиент Stockfish, Pydantic, structlog |
 | **Frontend** | React 19, Vite 6, TypeScript, `react-chessboard` 5.12.1, `chess.js`, `react-i18next` (RU/EN), Zustand |
 | **Данные** | PostgreSQL 17 + **pgvector**, SQLAlchemy 2 + Alembic |
-| **Очереди** | `arq` (задел), Redis 7 |
+| **Очереди** | `arq` (фоновые выгрузки), Redis 7 (кэш, rate limit, denylist, очередь) |
 | **Движки** | Stockfish 17 (LC0 — Backlog T-101) |
 | **AI / LLM** | Локально: LM Studio + Qwen3-4B. Облако: DeepSeek |
 | **RAG** | `pgvector`, LM Studio `text-embedding-nomic-embed-text-v1.5` (768, L2); hash — fallback тестов |
-| **Хранилище** | локальная ФС (S3 — Backlog) |
-| **Инфраструктура** | Docker Compose, OpenTelemetry-зависимости (трейсинг — Phase 7), SSE-стриминг |
-| **Качество** | pytest, Vitest 2, `ruff`, `mypy` |
+| **Экспорт** | `fpdf2` + TTF (PDF), NDJSON/JSONL (датасет) |
+| **Хранилище** | локальная ФС `EXPORT_DIR` (S3 — Backlog) |
+| **Инфраструктура** | Docker Compose (dev/prod/observability), OpenTelemetry → OTel Collector → Prometheus + Tempo → Grafana, SSE-стриминг |
+| **Качество** | pytest, Vitest 2, Playwright, `ruff`, `mypy` |
 
 ---
 
 ## Быстрый старт
 
 **Требования:** Python 3.12+, Node.js 22+, pnpm 12+, Docker Desktop,
-Stockfish 17 в PATH (или через Docker-контейнер).
+Stockfish 17 в PATH (локальный бинарник; UCI-over-TCP не поддержан —
+KI-013).
+
+### Dev: backend на хосте, инфраструктура в Docker
 
 ```bash
 # 1. Клонировать репозиторий
-git clone https://github.com/iilmchat/chess-annotator.git
-cd chess-annotator
+git clone https://github.com/iilmchat/ai-chess-annotator.git
+cd ai-chess-annotator
 
 # 2. Поднять PostgreSQL 17 + pgvector и Redis
 docker compose up -d postgres redis
 # Stockfish — локально в PATH или в .env: STOCKFISH_PATH=...
+# (на Windows — ASCII-путь, напр. D:\Tools\stockfish\stockfish.exe)
 
 # 3. Установить зависимости и применить миграции
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 cp .env.example .env
 alembic upgrade head
@@ -145,6 +217,12 @@ uvicorn app.main:app --reload
 # → http://127.0.0.1:8000  (OpenAPI: /docs)
 ```
 
+Фоновые выгрузки датасета (JSONL) в dev — отдельный `arq`-воркер:
+
+```bash
+docker compose up -d worker     # общий Redis и ./data с API
+```
+
 Frontend — отдельный пакет:
 
 ```bash
@@ -152,6 +230,8 @@ pnpm --dir web install
 VITE_API_PROXY=http://127.0.0.1:8000 pnpm --dir web dev
 # → http://127.0.0.1:5173
 ```
+
+Тесты и E2E локально — [GETTING_STARTED.md §4.2](docs/development/GETTING_STARTED.md#42-запуск-тестов-и-e2e-локально).
 
 ### Аутентификация (JWT + HttpOnly refresh, итерации 24–26)
 
@@ -190,25 +270,43 @@ Access-токен хранится **только в памяти** SPA, refresh
 `401` клиент делает single-flight refresh по cookie и повторяет запрос.
 Роль `admin`/`auditor` (выдаётся в БД) пускает в `/admin` по access-токену
 (Bearer или cookie `access_token`); для автоматизации сохранён
-`X-Admin-Token`, парольная форма — legacy fallback. Ограничения — KI-041,
-KI-042 (2FA/email-flow, RBAC внутри admin views, legacy bcrypt).
+`X-Admin-Token`, парольная форма — legacy fallback. Ограничения —
+KI-056 (SMTP/2FA/SSO/лимит попыток) и KI-042 (legacy bcrypt).
 
 ### Production: Docker
 
 ```bash
 # .env должен содержать секреты; POSTGRES_PASSWORD смените с dev-дефолта
 docker compose -p chessannotator-prod -f docker-compose.prod.yml up -d --build
-# → http://127.0.0.1:8000 — SPA и API из одного контейнера
+# → http://127.0.0.1:8000 — SPA + API в контейнере `app`;
+#   `worker` (arq) поднимается отдельным сервисом с общим volume экспортов
 ```
 
 Образ собирается multi-stage: backend (`app/`, миграции), frontend
 (`web/dist/`) и production-зависимости. Entrypoint применяет миграции
-**до** старта приложения; SPA отдаёт `StaticFiles`. Порты БД/Redis
+**до** старта приложения; SPA отдаёт `StaticFiles`; в compose также
+`worker` для фоновых выгрузок. Порты БД/Redis
 опубликованы только на `127.0.0.1`. Для нестандартных портов:
 `API_PORT=8011 PROD_POSTGRES_PORT=5435 PROD_REDIS_PORT=6382 docker compose ...`.
 
 Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 `http://127.0.0.1:8000`), поэтому backend должен быть запущен первым.
+
+### Observability: Grafana + Tempo + Prometheus
+
+Стек наблюдаемости поднимается отдельным compose-файлом и не конфликтует
+с основным:
+
+```bash
+docker compose -f docker-compose.observability.yml up -d
+# Grafana → http://localhost:3000 (admin/admin), Prometheus :9090, Tempo :3200
+# OTel Collector: gRPC :4317, HTTP :4318
+```
+
+В `.env` приложения — `OTEL_ENABLED=true`, `OTEL_EXPORTER=otlp`,
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` (в контейнере —
+`http://otel-collector:4318`). Дашборд и alert rules провижинятся
+автоматически; подробнее — [GETTING_STARTED.md §6.2](docs/development/GETTING_STARTED.md#62-observability-стек-grafana--tempo--prometheus-t-109b).
 
 Подробное разворачивание, настройка провайдеров и troubleshooting —
 в [GETTING_STARTED.md](docs/development/GETTING_STARTED.md).
@@ -228,12 +326,12 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | [ASSISTANT_LEVELS.md](docs/user_guide/ASSISTANT_LEVELS.md) | пользователи | Чем отличаются три уровня ассистента |
 | [MANUAL_TESTING_GUIDE.md](docs/qa/MANUAL_TESTING_GUIDE.md) | QA | Ручные кейсы и чек-лист приёмки |
 | [GETTING_STARTED.md](docs/development/GETTING_STARTED.md) | разработчики | Разворачивание проекта за ~20 минут |
-| [ARCHITECTURE.md](docs/development/ARCHITECTURE.md) | разработчики | Архитектура, контракты и Docker-развёртывание |
+| [ARCHITECTURE.md](docs/development/ARCHITECTURE.md) | разработчики | Архитектура v1.0.0: C4-диаграммы, потоки, API, локализация, фоновые выгрузки, Docker |
 | [DESIGN_ADMIN_AND_OPS.md](docs/development/DESIGN_ADMIN_AND_OPS.md) | разработчики | Phase 7: админка, LLMOps, FinOps, guardrails |
 | [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md) | QA / продукт | LLM-as-judge: оценки и ограничения качества |
 | [RULES.md](docs/development/RULES.md) | разработчики | Правила кода, docs, workflow и безопасности |
 | [PROMPT_CURRENT.md](docs/development/PROMPT_CURRENT.md) | ассистент / DSH | Актуальные системные инструкции и метрики |
-| [RELEASES.md](docs/development/RELEASES.md) | релиз-менеджер | Пошаговый чек-лист выпуска версии |
+| [RELEASES.md](docs/development/RELEASES.md) | релиз-менеджер | Журнал итераций, метрики и итоговые отчёты |
 | [CHANGELOG.md](docs/CHANGELOG.md) | все | История версий (Keep a Changelog) |
 | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) | все | Реестр известных проблем и ограничений |
 
@@ -245,15 +343,15 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 
 | Показатель | Значение |
 |---|---|
-| Версия | **v0.1.0** (MVP; качество LLM ниже 7/10 — KI-030) |
-| Итерация | **34 — Release Prep: Security, GHCR, EN localization, Grafana alerts (T-110, T-027, T-106, T-113)**; итерации 1–33 закрыты |
-| Backend-тесты | **779 passed, 1 skipped, 1 xfailed** (73 файла; skip — нет cairo на Windows-dev, `xfailed` — маркер KI-012) |
-| Frontend-тесты | **55 passed** (8 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, auth-flow, PDF-API; Vitest) |
+| Версия | **v1.0.0** (качество LLM по-прежнему ниже 7/10 — KI-030 Open) |
+| Итерация | **35 — v1.0.0 release finalization: английские PDF/чат/ошибки API, плейсхолдер `/history`, admin `export_jobs`, blind-test script, финальные docs (KI-058 закрыт)**; итерации 1–34 закрыты |
+| Backend-тесты | **869 passed, 3 skipped, 1 xfailed** (77 файлов, прогон итерации 35, 338.69 с; skip — нет cairo на Windows-dev, `DEEPSEEK_API_KEY` не задан и второй cairo-тест, `xfailed` — маркер KI-012) |
+| Frontend-тесты | **58 passed** (8 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, auth-flow, PDF-API; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **16** (13 ревизий, head `dcf1da1421cd`; `llm_calls` — durable-история вызовов LLM, `usage_daily` — FinOps-агрегат, `engine_cache` — кэш MultiPV Stockfish, `export_jobs` — фоновые выгрузки, `users.is_verified` — email-верификация) |
 | Ingestion | PGN/FEN → `ParsedGame`; ECO (заголовок + таблица префиксов), фазы, флаги хода, повторы позиций |
 | Engine | Stockfish 17 по UCI: MultiPV (1/3/5), глубина 12/18/28, бюджеты 0.2/1/5 с; классификация ходов; пул из 4 процессов; **кэш `engine_cache` (T-108)** — попадание по `(fen_hash, engine_version, depth, multipv)`, TTL 30 дней, запись best-effort, версия из UCI `id name` |
-| API | `POST /auth/register|login|refresh|logout`, `GET /auth/me`, **`GET /auth/verify-email`**, **`POST /auth/forgot-password`**, **`POST /auth/reset-password`**, **`POST /auth/logout-all`**; защищённые JWT: `POST /v1/analyze`, `GET /v1/games`, `GET /v1/games/{id}`, `GET /v1/users/me/usage`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, **`GET /v1/commentaries/{id}/export/pdf` (T-107/T-107b)**, `POST /v1/chat`, SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest; `GET /v1/admin/exports/edits.jsonl`; **фоновые выгрузки** `POST /v1/admin/exports/jobs` + `GET /jobs/{id}` + `GET /jobs/{id}/download` (arq, KI-050/KI-053); `/admin` (starlette-admin: RAG/комментарии/правки/аудит/LLM-evals + промпты + экспорт + **LLMOps-дашборд `/admin/llmops`**) |
+| API | `POST /auth/register\|login\|refresh\|logout`, `GET /auth/me`, **`GET /auth/verify-email`**, **`POST /auth/forgot-password`**, **`POST /auth/reset-password`**, **`POST /auth/logout-all`**; защищённые JWT: `POST /v1/analyze`, `GET /v1/games`, `GET /v1/games/{id}`, `GET /v1/users/me/usage`, `POST /v1/commentary`, `PATCH /v1/commentaries/{id}`, **`GET /v1/commentaries/{id}/export/pdf?language=ru\|en` (T-107/T-107b, итерация 35)**, `POST /v1/chat` (язык — `language`/`Accept-Language`), SSE-варианты `/commentary/stream` и `/chat/stream`; rate limit 10/мин; `X-Admin-Token` для ingest; `GET /v1/admin/exports/edits.jsonl`; **фоновые выгрузки** `POST /v1/admin/exports/jobs` + `GET /jobs/{id}` + `GET /jobs/{id}/download` (arq, KI-050/KI-053); `/admin` (starlette-admin: RAG/комментарии/правки/аудит/LLM-evals + промпты + экспорт + **read-only `export_jobs` с фильтром по статусу** + **LLMOps-дашборд `/admin/llmops`**) |
 | Auth | JWT access 15 мин + refresh 7 дней (**PyJWT**, HS256; `python-jose` заменён в T-110 из-за PYSEC-2026-4298); refresh — HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`, `Secure` в prod), `/auth/logout` + Redis-denylist, ротация отзывает прежний jti; пароли **Argon2id** (argon2-cffi), legacy bcrypt перехешируется при входе; dummy-Argon2id для несуществующего email; роли `user/admin/auditor`; **email-верификация (KI-041):** `users.is_verified`, mock-письмо, `/auth/verify-email`, 403 `email_not_verified` для analyze/commentary; **сброс пароля** и **logout-all** (`revoked_before` + `iat_ms`); **frontend auth-UX (KI-055):** `/verify-email`, `/forgot-password`, `/reset-password`, экран «Подтвердите email» в `AuthGate`, меню профиля с «Выйти со всех устройств»; prod-валидатор секретов/CORS (T-110); изоляция партий по `games.user_id`; ограничения — KI-056 |
 | LLM | `beginner`/`club` → LM Studio (`qwen/qwen3-4b-2507`), `gm` → DeepSeek (`deepseek-chat`); таймауты, ретраи, токены, прогрев; локальный комментарий 15–120 с |
 | Prompts/Validator | Промпты 3 уровней в таблице `prompts` (seed из `.txt`, версия, редактирование в админке, hot-reload кэша); пакет фактов: `club` — топ-3 без PV, `gm` — до 10 с PV; валидатор SAN с retry |
@@ -262,10 +360,13 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | Audit | Append-only `audit_logs` с hash-chain, advisory-lock, триггером `UPDATE/DELETE/TRUNCATE`; аудит промптов (атомарно с правкой), правок комментариев, инъекций и **выгрузки датасета (`dataset.export`: актор, фильтры, число строк, completed)**; read-only view + страница проверки целостности |
 | Semantic cache | `semantic_cache` (vector 768, HNSW): exact `fen_hash+level+prompt_hash`, semantic cosine < 0.05, TTL 30 дней; `/commentary`, `/chat` и SSE; второй запрос — 0.030 с |
 | LoRA | `scripts/export_dataset.py` — **schema_version=2** по умолчанию: `user` = пакет фактов (`build_fact_package`), `assistant` = `edited_text`, `metadata`/`fact_sheet_chars`; v1 — legacy-флаг. `scripts/train_lora.py` — реальный SFT (peft/transformers, QLoRA 4-bit, r=16/alpha=32/q_proj,v_proj, маскирование на assistant, `--dry-run`/`--check-env`, поддержка schema {1,2}); `LORA_ADAPTER_PATH` → adapter basename для vLLM; инструкция — [LORA_TRAINING.md](docs/development/reports/LORA_TRAINING.md); обучение на GPU не выполнялось (нет CUDA, KI-030 Open) |
-| E2E | Playwright 1.64.1: 14 сценариев (`auth`, `auth-flow`, `analyze`, `commentary`, `history`, `limits`) × chromium/mobile; mocked-режим **28 passed**, real-backend 5 passed (chromium, итерация 32); CI job `e2e` + trace/screenshot при падении; локально на Windows/DSH — `E2E_PREVIEW=1` (esbuild-кэш заблокирован); ограничение — KI-040 |
-| Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `language`/`Accept-Language` (`ru`/`en`, T-106, английские промпты `*_en.txt`); `PATCH` пишет правку в `edits`; **PDF-экспорт** (`GET .../export/pdf`, fpdf2 + TTF-шрифт, диаграммы доски: финальная позиция + критические моменты, кнопка «Скачать PDF» в UI) |
-| Chat | `POST /v1/chat`: вопрос → контекст анализа → LLM → валидатор → `{reply, tokens_used}` |
-| Frontend | React 19 + Vite + React Router: главная, `/history`, `/analysis/:id`, публичные `/verify-email`, `/forgot-password`, `/reset-password`; `react-chessboard` 5.12.1, FEN из PGN через `chess.js`, RU/EN, Zustand + sessionStorage; история чата сохраняется и уходит в LLM; комментарий/чат стримятся постепенно; **кнопка «Скачать PDF»** с JWT-refresh; меню профиля с logout/logout-all |
+| E2E | Playwright 1.64.1: **15 сценариев** (`auth`, `auth-flow`, `analyze`, `commentary`, `history`, `limits`) × chromium/mobile; mocked-режим **30 passed**, real-backend 5 passed (chromium, итерация 32); CI job `e2e` + trace/screenshot при падении; локально на Windows/DSH — `E2E_PREVIEW=1` (esbuild-кэш заблокирован); ограничение — KI-040 |
+| Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `language`/`Accept-Language` (`ru`/`en`, T-106, английские промпты `*_en.txt`); `PATCH` пишет правку в `edits`; **PDF-экспорт** (`GET .../export/pdf?language=ru\|en`, fpdf2 + TTF-шрифт, английские подписи с итерации 35, диаграммы доски: финальная позиция + критические моменты, кнопка «Скачать PDF» в UI) |
+| Chat | `POST /v1/chat`: вопрос → контекст анализа → LLM → валидатор → `{reply, tokens_used}`; `language` (`ru`/`en`, `app/prompts/chat_en.txt`, итерация 35), SSE-вариант |
+| Локализация | UI RU/EN (`react-i18next`); комментарий, чат и PDF — `ru`/`en` (`language` → `Accept-Language` → `DEFAULT_LANGUAGE`); `detail` ошибок API — английский для известных `code` при `Accept-Language: en`; en-промпты файлами, факт-пакет ru; KI-058 **Closed** (остатки — в записи KI-058) |
+| Админка | `/admin` (starlette-admin) + `/admin/llmops`: RAG/комментарии/правки/аудит/LLM-evals/`export_jobs` (read-only, фильтр по статусу), редактируемые промпты с версиями и hot-reload, RBAC (auditor read-only), legacy `X-Admin-Token`/пароль — fallback |
+| Фоновые выгрузки | `export_jobs` (queued/running/done/failed) → `arq`-очередь Redis → worker пишет NDJSON в `EXPORT_DIR` (sha256, размер, строки), recovery `running>15 мин → failed`, retention 7 дней (`scripts/prune_export_jobs.py`), read-only view в админке |
+| Frontend | React 19 + Vite + React Router: главная, `/history` (плейсхолдер «Подтвердите email, чтобы увидеть историю» для неподтверждённых, итерация 35), `/analysis/:id`, публичные `/verify-email`, `/forgot-password`, `/reset-password`; `react-chessboard` 5.12.1, FEN из PGN через `chess.js`, RU/EN, Zustand + sessionStorage; история чата сохраняется и уходит в LLM; комментарий/чат стримятся постепенно; **кнопка «Скачать PDF»** с JWT-refresh; меню профиля с logout/logout-all |
 | UX | Skeleton-лоадеры, Error Boundary, mobile 1280/820/640/480, usage-badge `Free: 12k/50k` + модалка Pro, экран подтверждения email, SPA-fallback в production |
 | LLM-evals | `llm_evaluations` (model, level, accuracy/usefulness/style), read-only view в админке; `scripts/evaluate_llm.py` пишет MD/JSON и БД |
 | RAG | `POST /v1/ingest` (PGN, до 5 МБ, `X-Admin-Token`) → `annotated_games` (LM Studio 768; **624** записи: 102 `my-collection` + 522 `new_samples`, итерация 25); `find_similar_positions` по FEN; контекст для `gm`; eval — `evaluate_llm.py --source new_samples` |
@@ -274,9 +375,10 @@ Vite проксирует `/v1` на `VITE_API_PROXY` (по умолчанию
 | LLM-eval | 5 партий × club/gm, 3 шкалы; база **5.19/10** (9 из 10); после итерации 16 `club` — **4.40/10** (было 3.83), отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md); ниже 7/10 — KI-030 |
 | Streaming | SSE `/v1/commentary/stream` и `/v1/chat/stream`: `meta`/`delta`/`done`/`error`, финальная SAN-валидация; UI печатает постепенно |
 | Observability | **LLMOps (T-030):** durable `llm_calls` (provider/model/level, tokens/cost/latency/cache_hit/status, prompt_slug/version, actor/game/commentary) — запись best-effort после `complete`/`stream_generate` + warmup, `cache_hit=true` для semantic cache; W3C `traceparent` → `trace_id` в `request.state`, contextvars, structlog, заголовок **`X-Trace-Id`** и OTel-спанах (`http_request` + вложенные `llm_*`); спаны `validator.validate` и `rag.retrieve`; OTel-экспорт `console`/`otlp`, admin-view `llm_calls`; **LLMOps-дашборд `/admin/llmops`** (T-109): p50/p95/p99, error rate, токены/стоимость, cache-hit rate, топ-5; **Grafana/Tempo/Prometheus-стек** (T-109b): `docker-compose.observability.yml`, spanmetrics по `http.route`, дашборд p95/p99 + 5xx + tokens/cost, провижининг datasource'ов; **alert rules (T-113)** — HighErrorRate/HighLatency/LLMBudgetExceeded; **retention** — `scripts/prune_llm_calls.py` (KI-048) и `scripts/prune_export_jobs.py` (KI-054); ограничения — KI-052, KI-057 |
-| KI-реестр | **58** записей: 26 Open, 32 Closed (в итерации 34 добавлен KI-058 — English localization ограничена комментариями; KI-030 остаётся Open) |
-| CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, Playwright E2E, docker build + smoke `import app.main` (KI-051); **`publish-docker` по тегу `v*` → GHCR (`:vX.Y.Z`, `:latest`)**; pip + pnpm store cache |
-| Docker | multi-stage образ (Node → Python + SPA), `docker-compose.prod.yml`, loopback-порты БД/Redis; **сервис `worker`** (`arq worker.WorkerSettings`, общий volume экспортов) в dev/prod compose; публикация в GHCR — T-027 |
+| KI-реестр | **58** записей: 25 Open, 33 Closed (KI-058 закрыт в итерации 35: локализация PDF/чата/ошибок API; KI-030 остаётся Open) |
+| CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, Playwright E2E, docker build + smoke `import app.main` (KI-051); **`publish-docker` по тегу `v*` → GHCR (`:vX.Y.Z`, `:X.Y.Z`, `:latest`)**; pip + pnpm store cache |
+| Docker | multi-stage образ (Node → Python + SPA), `docker-compose.prod.yml` (app + worker + postgres + redis, общий volume экспортов), loopback-порты БД/Redis; **сервис `worker`** (`arq worker.WorkerSettings`) в dev/prod compose; публикация в GHCR готово к тегу `v1.0.0` (T-027) |
+| Слепой тест | `scripts/generate_blind_test.py` — 3 партии × 3 уровня, слоты A/B/C (seed), `answer_form.md` + `answers_key.json` (итерация 35); сам тест с 10 шахматистами не проведён (T-024, вручную) |
 
 ---
 

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from app.chat import answer_question
+from app.chat.service import load_chat_system_prompt
 from app.config import get_settings
 from app.db.models import AuditLog, Game, Move
 from app.errors import LLMValidationError, NotFoundError
@@ -297,6 +298,67 @@ async def test_answer_question_unknown_game_returns_not_found(
         )
 
 
+# --- язык чата (T-106/KI-058) --------------------------------------------
+
+
+async def test_answer_question_english_uses_english_prompt(
+    session: AsyncSession,
+) -> None:
+    game = await _seed_game(session)
+    llm = ScriptedLLM(["White played Svidler."])
+
+    result = await answer_question(
+        session,
+        game.id,
+        "club",
+        "Who played white?",
+        client=llm,
+        language="en",
+    )
+
+    assert result.reply == "White played Svidler."
+    assert llm.system_prompts[0] == load_chat_system_prompt("en")
+    prompt = llm.prompts[0]
+    assert "# User question" in prompt
+    assert "Who played white?" in prompt
+    assert "# Вопрос пользователя" not in prompt
+
+
+async def test_answer_question_english_retry_hint(
+    session: AsyncSession,
+) -> None:
+    game = await _seed_game(session)
+    llm = ScriptedLLM([ILLEGAL_ANSWER, LEGAL_ANSWER])
+
+    result = await answer_question(
+        session,
+        game.id,
+        "club",
+        "What happened in the opening?",
+        client=llm,
+        language="en",
+    )
+
+    assert result.attempts == 2
+    assert "Qxf7" in llm.prompts[1]
+    assert "ONLY the moves from the fact package" in llm.prompts[1]
+
+
+async def test_answer_question_default_language_keeps_russian_prompt(
+    session: AsyncSession,
+) -> None:
+    game = await _seed_game(session)
+    llm = ScriptedLLM([NAMES_ANSWER])
+
+    await answer_question(
+        session, game.id, "club", "Кто играл белыми?", client=llm
+    )
+
+    assert llm.system_prompts[0] not in {None, load_chat_system_prompt("en")}
+    assert "# Вопрос пользователя" in llm.prompts[0]
+
+
+
 # --- HTTP-контракт --------------------------------------------------------
 
 
@@ -385,6 +447,86 @@ def test_chat_endpoint_unknown_analysis_returns_404() -> None:
 
     assert response.status_code == 404
     assert response.json()["code"] == "not_found"
+
+
+def test_chat_endpoint_language_field_selects_english_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-106/KI-058: `language: "en"` включает английский системный промпт."""
+    game_id = asyncio.run(_seed_game_committed())
+    fake_llm = ScriptedLLM(["White played Svidler."])
+    monkeypatch.setattr(
+        "app.chat.service.get_llm_client", lambda level, cfg: fake_llm
+    )
+    try:
+        with _client() as client:
+            response = client.post(
+                "/v1/chat",
+                json={
+                    "analysis_id": game_id,
+                    "level": "club",
+                    "message": "Who played white?",
+                    "language": "en",
+                },
+            )
+        assert response.status_code == 200, response.text
+        assert fake_llm.system_prompts[0] == load_chat_system_prompt("en")
+        assert "# User question" in fake_llm.prompts[0]
+    finally:
+        asyncio.run(_delete_game(game_id))
+
+
+def test_chat_endpoint_accept_language_selects_english_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    game_id = asyncio.run(_seed_game_committed())
+    fake_llm = ScriptedLLM(["White played Svidler."])
+    monkeypatch.setattr(
+        "app.chat.service.get_llm_client", lambda level, cfg: fake_llm
+    )
+    try:
+        with _client() as client:
+            response = client.post(
+                "/v1/chat",
+                json={
+                    "analysis_id": game_id,
+                    "level": "club",
+                    "message": "Who played white?",
+                },
+                headers={"Accept-Language": "en-US,en;q=0.9"},
+            )
+        assert response.status_code == 200, response.text
+        assert fake_llm.system_prompts[0] == load_chat_system_prompt("en")
+    finally:
+        asyncio.run(_delete_game(game_id))
+
+
+def test_chat_endpoint_language_field_wins_over_accept_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    game_id = asyncio.run(_seed_game_committed())
+    fake_llm = ScriptedLLM([NAMES_ANSWER])
+    monkeypatch.setattr(
+        "app.chat.service.get_llm_client", lambda level, cfg: fake_llm
+    )
+    try:
+        with _client() as client:
+            response = client.post(
+                "/v1/chat",
+                json={
+                    "analysis_id": game_id,
+                    "level": "club",
+                    "message": "Кто играл белыми?",
+                    "language": "ru",
+                },
+                headers={"Accept-Language": "en-US,en;q=0.9"},
+            )
+        assert response.status_code == 200, response.text
+        assert fake_llm.system_prompts[0] != load_chat_system_prompt("en")
+        assert "# Вопрос пользователя" in fake_llm.prompts[0]
+    finally:
+        asyncio.run(_delete_game(game_id))
+
 
 
 # --- живой тест -----------------------------------------------------------

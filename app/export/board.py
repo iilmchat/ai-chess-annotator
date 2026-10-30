@@ -50,11 +50,34 @@ BOARD_PX: Final[int] = 640
 #: Классификации, которые считаются критическими моментами.
 _CRITICAL_CLASSES: Final[frozenset[str]] = frozenset({"blunder", "mistake"})
 
-#: Подписи классификаций для caption-а диаграммы.
-_CLASS_LABELS: Final[dict[str, str]] = {
-    "blunder": "зевок",
-    "mistake": "ошибка",
-    "inaccuracy": "неточность",
+#: Подписи классификаций для caption-а диаграммы по языку (T-106/KI-058).
+_CLASS_LABELS: Final[dict[str, dict[str, str]]] = {
+    "ru": {
+        "blunder": "зевок",
+        "mistake": "ошибка",
+        "inaccuracy": "неточность",
+    },
+    "en": {
+        "blunder": "blunder",
+        "mistake": "mistake",
+        "inaccuracy": "inaccuracy",
+    },
+}
+
+#: Подпись, если классификация неизвестна/отсутствует.
+_DEFAULT_CLASS_LABEL: Final[dict[str, str]] = {
+    "ru": "ошибка",
+    "en": "mistake",
+}
+
+#: Шаблоны подписей диаграмм; `{...}` заполняются без перевода SAN/номера.
+_FINAL_CAPTION: Final[dict[str, str]] = {
+    "ru": "Финальная позиция (после {count} полуходов)",
+    "en": "Final position (after {count} plies)",
+}
+_CRITICAL_CAPTION: Final[dict[str, str]] = {
+    "ru": "Критический момент: {move} {san} — {label}",
+    "en": "Critical moment: {move} {san} — {label}",
 }
 
 #: Минимальный SVG для проверки, что cairo реально работает (а не только
@@ -230,6 +253,7 @@ def select_diagrams(
     *,
     initial_fen: str,
     max_critical: int = 2,
+    language: str = "ru",
 ) -> tuple[BoardDiagram, ...]:
     """Выбрать диаграммы для PDF: финальная позиция + критические моменты.
 
@@ -238,17 +262,20 @@ def select_diagrams(
         initial_fen: FEN до первого хода (для восстановления UCI).
         max_critical: максимум диаграмм критических моментов (0 — только
             финальная позиция).
+        language: ``ru``/``en`` — язык подписей (T-106, KI-058); SAN и
+            номера ходов не переводятся.
 
     Returns:
         Кортеж диаграмм; пустой, если ходов нет.
     """
     if not moves:
         return ()
+    lang = language if language in _CLASS_LABELS else "ru"
     ucis = _move_ucis(initial_fen, moves)
     final_move = moves[-1]
     final = _safe_diagram(
         final_move,
-        caption=f"Финальная позиция (после {len(moves)} полуходов)",
+        caption=_FINAL_CAPTION[lang].format(count=len(moves)),
         ucis=ucis,
     )
     critical: list[BoardDiagram] = []
@@ -265,12 +292,13 @@ def select_diagrams(
             reverse=True,
         )
         for move in candidates[:max_critical]:
-            label = _CLASS_LABELS.get(move.classification or "", "ошибка")
+            label = _CLASS_LABELS[lang].get(
+                move.classification or "", _DEFAULT_CLASS_LABEL[lang]
+            )
             diagram = _safe_diagram(
                 move,
-                caption=(
-                    f"Критический момент: {_move_number(move.ply)} "
-                    f"{move.san} — {label}"
+                caption=_CRITICAL_CAPTION[lang].format(
+                    move=_move_number(move.ply), san=move.san, label=label
                 ),
                 ucis=ucis,
             )

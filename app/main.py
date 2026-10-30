@@ -45,6 +45,7 @@ from app.engine.cache import EngineCache
 from app.engine.pool import EnginePool
 from app.errors import AppError, EngineError
 from app.finops import TokenBudgetMiddleware, TokenUsageTracker
+from app.i18n import localize_error_detail
 from app.llm.warmup import warmup_local_llm
 from app.observability import (
     configure_metrics,
@@ -303,13 +304,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 def _app_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Единый ответ на доменные ошибки: `{"detail", "code"}` + HTTP-статус."""
+    """Единый ответ на доменные ошибки: `{"detail", "code"}` + HTTP-статус.
+
+    KI-058: `detail` локализуется по `Accept-Language` для известных кодов
+    (`app.i18n`); `code` не зависит от языка, а `internal_error` не
+    переводится никогда.
+    """
     app_error = exc if isinstance(exc, AppError) else AppError(str(exc))
     status = app_error.http_status
     detail = (
         "Engine unavailable"
         if isinstance(app_error, EngineError) and status >= 500
         else app_error.message
+    )
+    detail = localize_error_detail(
+        app_error.code, detail, request.headers.get("accept-language")
     )
     logger.warning(
         "app_error",

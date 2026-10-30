@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.cache.semantic import make_prompt_hash
+from app.chat.service import CHAT_SYSTEM_PROMPT, load_chat_system_prompt
 from app.engine.models import EngineLine, MoveAnalysis
 from app.errors import InvalidLevelError
 from app.ingestion import parse_pgn
@@ -143,6 +145,45 @@ async def test_prompts_are_distinct() -> None:
     gm = await load_system_prompt("gm")
 
     assert len({beginner, club, gm}) == 3
+
+
+# --- промпт чата (T-106/KI-058) -------------------------------------------
+
+
+def test_chat_prompt_russian_is_default_constant() -> None:
+    assert load_chat_system_prompt() == CHAT_SYSTEM_PROMPT
+    assert load_chat_system_prompt("ru") == CHAT_SYSTEM_PROMPT
+
+
+def test_chat_prompt_english_exists_and_has_rules() -> None:
+    text = load_chat_system_prompt("en")
+
+    assert len(text) > 200
+    assert "SAN" in text
+    assert "Markdown" in text
+    assert "Do not invent" in text
+    assert "system instructions" in text
+    assert "English" in text
+
+
+def test_chat_prompt_differs_by_language() -> None:
+    assert load_chat_system_prompt("en") != CHAT_SYSTEM_PROMPT
+
+
+def test_chat_prompt_hash_differs_by_language() -> None:
+    """Разный системный промпт → разный prompt_hash (кэш не смешивается)."""
+    ru_hash = make_prompt_hash(
+        "club", "model", CHAT_SYSTEM_PROMPT, question="Who played white?"
+    )
+    en_hash = make_prompt_hash(
+        "club",
+        "model",
+        load_chat_system_prompt("en"),
+        question="Who played white?",
+    )
+
+    assert ru_hash != en_hash
+
 
 
 # --- пакет фактов ---------------------------------------------------------

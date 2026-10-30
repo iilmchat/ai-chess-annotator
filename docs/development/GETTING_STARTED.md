@@ -2,8 +2,9 @@
 
 > Цель этого документа — довести вас от `git clone` до работающего
 > `curl 127.0.0.1:8000/v1/health` с зелёными `db`, `redis`, `stockfish`.
-> LLM на этом этапе **не требуется**: уровень «новичок» заработает после
-> T-013, а healthcheck покажет `llm: skipped` — это нормально.
+> LLM на этом этапе **не требуется**: `/v1/analyze` и healthcheck работают
+> без неё (`llm: skipped`), а для комментария/чата настройте провайдера по
+> §5. Полный набор тестов и E2E — §4.2.
 
 ## Оглавление
 
@@ -27,16 +28,17 @@
 | **Python** | 3.12+ | Backend |
 | **Node.js** | 22+ | Frontend |
 | **pnpm** | 12+ | Frontend-пакетный менеджер |
-| **Docker Desktop** | 27+ | PostgreSQL, Redis, Stockfish (опционально), vLLM (опционально) |
-| **Stockfish** | 17+ | Движок анализа (локальный бинарник или Docker-сервис) |
+| **Docker Desktop** | 27+ | PostgreSQL, Redis, arq-воркер, observability-стек |
+| **Stockfish** | 17+ | Движок анализа (локальный бинарник; TCP-режим не поддержан, KI-013) |
 | **git** | 2.40+ | Версионирование |
 
 **Опционально:**
 
-- **NVIDIA GPU** + драйверы + `nvidia-container-toolkit` — для локальной
-  LLM через vLLM (уровень «новичок»/«клуб» без облака).
-- **API-ключи** OpenAI / Anthropic / DeepSeek — для облачных LLM (уровень
-  «гроссмейстер» и fallback).
+- **LM Studio** — локальная LLM для уровней «новичок»/«клуб» и
+  эмбеддингов RAG (§5.1); GPU не обязателен.
+- **NVIDIA GPU** + драйверы + `nvidia-container-toolkit` — альтернатива:
+  vLLM в Docker вместо LM Studio (§5.1).
+- **API-ключ DeepSeek** — обязателен для уровня «гроссмейстер» (§5.2).
 
 ### 1.1. Установка Stockfish
 
@@ -61,9 +63,11 @@ which stockfish   # → /opt/homebrew/bin/stockfish
 Скачать с [stockfishchess.org](https://stockfishchess.org/download/) и
 добавить в `PATH`. Проверить: `stockfish.exe --help`.
 
-Если не хочется ставить локально — используйте Docker-сервис `stockfish`
-(см. §6.1). Тогда в `.env` укажите `STOCKFISH_HOST=localhost` и
-`STOCKFISH_PORT=5000`.
+Если не хочется ставить локально — учтите: Docker-профиль `stockfish`
+существует (см. §6.1), но **UCI-over-TCP в клиенте движка не реализован**
+(KI-013), поэтому backend работает только с локальным бинарником через
+`STOCKFISH_PATH`. На Windows путь должен быть **ASCII** (без кириллицы),
+например `D:\Tools\stockfish\stockfish.exe` (`RULES.md` §11.3).
 
 ### 1.2. Установка pnpm
 
@@ -80,10 +84,10 @@ pnpm --version   # → 12.x
 Если всё из §1 уже установлено:
 
 ```bash
-git clone https://github.com/iilmchat/chess-annotator.git
-cd chess-annotator
+git clone https://github.com/iilmchat/ai-chess-annotator.git
+cd ai-chess-annotator
 docker compose up -d postgres redis
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]" && cp .env.example .env && alembic upgrade head
 ```
 
@@ -106,8 +110,8 @@ curl -s http://127.0.0.1:8000/v1/health | python -m json.tool
 ### 3.1. Клонировать репозиторий
 
 ```bash
-git clone https://github.com/iilmchat/chess-annotator.git
-cd chess-annotator
+git clone https://github.com/iilmchat/ai-chess-annotator.git
+cd ai-chess-annotator
 ```
 
 Проверить, что вы на ветке `main` и она зелёная:
@@ -124,12 +128,12 @@ docker compose up -d postgres redis
 docker compose ps
 ```
 
-Ожидаемо:
+Ожидаемо (имя проекта совпадает с каталогом репозитория):
 
 ```
-NAME                SERVICE    STATUS    PORTS
-chess-annotator-postgres-1   postgres   running (healthy)   127.0.0.1:5434->5432/tcp
-chess-annotator-redis-1      redis      running (healthy)   127.0.0.1:6380->6379/tcp
+NAME                               SERVICE    STATUS              PORTS
+ai-chess-annotator-postgres-1      postgres   running (healthy)   127.0.0.1:5434->5432/tcp
+ai-chess-annotator-redis-1         redis      running (healthy)   127.0.0.1:6380->6379/tcp
 ```
 
 Если статус `starting` — подождите 5–10 секунд и повторите
@@ -137,6 +141,8 @@ chess-annotator-redis-1      redis      running (healthy)   127.0.0.1:6380->6379
 
 Порты `5434` и `6380` (а не стандартные `5432`/`6379`) выбраны, чтобы не
 конфликтовать с локальными Postgres/Redis, если они у вас уже есть.
+Хостовый порт Redis переопределяется `REDIS_PORT` (KI-001: в этом
+окружении `6380` занят чужим контейнером → локально `6381`).
 
 ### 3.3. Создать виртуальное окружение и установить зависимости
 
@@ -173,8 +179,11 @@ cp .env.example .env
 
 Откройте `.env` и проверьте:
 
-- `POSTGRES_*` — совпадают с `docker-compose.yml` (по умолчанию — да).
-- `REDIS_URL` — `redis://localhost:6380/0` (по умолчанию — да).
+- `POSTGRES_*` — совпадают с `docker-compose.yml` (по умолчанию — да;
+  хост — `127.0.0.1`, а не `localhost`: на Windows `localhost` резолвится
+  в `::1`, см. `RULES.md` §11.1).
+- `REDIS_URL` — `redis://127.0.0.1:6380/0` (по умолчанию — да); если
+  `6380` занят, задайте `REDIS_PORT` и поправьте URL (KI-001).
 - `STOCKFISH_PATH` — путь к локальному бинарнику
   (`/usr/games/stockfish` на Ubuntu, `/opt/homebrew/bin/stockfish` на
   macOS, `C:\...\stockfish.exe` на Windows). Если используете
@@ -214,9 +223,10 @@ alembic current              # → <revision> (head)
 docker compose exec postgres psql -U chess -d chessannotator -c "\dt"
 ```
 
-Должны быть таблицы: `users`, `games`, `moves`, `motifs`,
-`annotated_games`, `retrieval_cache`, `commentaries`, `edits`,
-`alembic_version`.
+Должны быть все 16 таблиц приложения: `users`, `games`, `moves`, `motifs`,
+`annotated_games`, `retrieval_cache`, `commentaries`, `edits`, `prompts`,
+`audit_logs`, `semantic_cache`, `llm_evaluations`, `llm_calls`,
+`usage_daily`, `engine_cache`, `export_jobs` — плюс `alembic_version`.
 
 ### 3.6. Запустить backend
 
@@ -247,11 +257,13 @@ pnpm --dir web install
 pnpm --dir web dev
 ```
 
-Откройте http://127.0.0.1:5173 — увидите заглушку «ChessAnnotator.
-Скелет фронтенда» (полный UI — в T-019…T-022).
+Откройте http://127.0.0.1:5173 — полноценный UI: `/login`
+(вход/регистрация), главная с полем PGN, доской и панелью комментария,
+`/history`, `/analysis/:id`, публичные `/verify-email`,
+`/forgot-password`, `/reset-password`.
 
-Vite проксирует `/v1/*`, `/auth/*`, `/chat/*`, `/runs/*` на
-`http://127.0.0.1:8000`, поэтому backend должен быть запущен первым.
+Vite проксирует `/v1/*` и `/auth/*` на `http://127.0.0.1:8000`
+(`VITE_API_PROXY`), поэтому backend должен быть запущен первым.
 
 ---
 
@@ -283,119 +295,226 @@ curl -s http://127.0.0.1:8000/v1/health | python -m json.tool
 |---|---|---|---|
 | `db` | Postgres отвечает на `SELECT 1` | Проверьте `docker compose ps postgres`, `POSTGRES_*` в `.env` | — |
 | `redis` | Redis отвечает на `PING` | Проверьте `docker compose ps redis`, `REDIS_URL` в `.env` | — |
-| `stockfish` | Бинарник найден в `PATH` / по `STOCKFISH_PATH` | Установите Stockfish (§1.1) или настройте `STOCKFISH_HOST` | — |
-| `llm` | Есть облачный ключ (`OPENAI_API_KEY` и т.д.) | — | Локальная LLM настроена, но не проверялась |
+| `stockfish` | Бинарник найден в `PATH` / по `STOCKFISH_PATH` | Установите Stockfish (§1.1) и задайте `STOCKFISH_PATH` | — |
+| `llm` | Есть облачный ключ (`DEEPSEEK_API_KEY`) | — | Локальная LLM (LM Studio) настроена, но не проверялась |
 
-**`status: "degraded"` — это нормально** на старте: LLM-провайдер ещё не
-выбран, но `db`, `redis`, `stockfish` = `ok`. Как только вы настроите
-LLM (§5) — `status` станет `ok`.
+**`status: "degraded"` — это нормально** на старте: локальная LLM даёт
+`skipped`, а `db`, `redis`, `stockfish` = `ok`. `status: "ok"` возможен
+только когда все компоненты `ok` (например, настроен DeepSeek, §5).
 
-### 4.2. Тесты
+### 4.2. Запуск тестов и E2E локально
+
+Полный набор проверок, который гоняет CI (`.github/workflows/ci.yml`).
+Порядок — от предпосылок к E2E.
+
+#### 4.2.1. Предпосылки
+
+| Что | Команда / значение |
+| :--- | :--- |
+| PostgreSQL 17 + pgvector, Redis | `docker compose up -d postgres redis` |
+| `.env` | `cp .env.example .env`; `POSTGRES_*`, `REDIS_URL`, `JWT_SECRET`, `STOCKFISH_PATH` |
+| Миграции | `alembic upgrade head` (и `alembic check` — без дрейфа) |
+| Stockfish | локальный бинарник, `STOCKFISH_PATH`; на Windows — **ASCII-путь** (не `%LOCALAPPDATA%` с кириллицей) |
+| Backend-зависимости | `pip install -e ".[dev]"` (pytest, ruff, mypy, pypdf) |
+| Frontend-зависимости | `pnpm --dir web install` (Vitest, Playwright) |
+
+**Windows PowerShell — переменные окружения на сессию** (если `.env` не
+подхватывается или нужны другие порты):
+
+```powershell
+$env:POSTGRES_HOST="127.0.0.1"
+$env:POSTGRES_PORT="5434"
+$env:POSTGRES_DB="chessannotator"
+$env:POSTGRES_USER="chess"
+$env:POSTGRES_PASSWORD="chess_dev_password"
+$env:REDIS_URL="redis://127.0.0.1:6380/0"
+$env:STOCKFISH_PATH="D:\Tools\stockfish\stockfish.exe"
+```
+
+#### 4.2.2. Backend (pytest, ruff, mypy, alembic)
 
 ```bash
 ruff check .
 mypy app
+alembic check
 pytest -q
 ```
 
-Ожидаемо: `ruff` — 0 ошибок, `mypy` — `Success: no issues found`,
-`pytest` — `N passed`.
-
-### 4.3. Frontend
+Точечные прогоны (быстрее полного):
 
 ```bash
-pnpm --dir web typecheck
-pnpm --dir web build
+pytest -q tests/unit                                  # только unit
+pytest -q tests/integration                           # API + БД + Stockfish
+pytest -q tests/unit/test_prompts.py                  # промпты и язык
+pytest -q tests/integration/test_api_commentary.py    # /v1/commentary
+pytest -q tests/integration/test_commentary_pdf.py    # PDF-экспорт
 ```
 
-Ожидаемо: обе команды без ошибок, `web/dist/` создан.
+| Проверка | Ожидаемо |
+| :--- | :--- |
+| `ruff check .` | 0 ошибок |
+| `mypy app` | `Success: no issues found` (strict) |
+| `alembic check` | без дрейфа моделей и миграций |
+| `pytest -q` | все passed; на dev-машине итерации 35 — **869 passed, 3 skipped, 1 xfailed** (skip — нет cairo на Windows и `DEEPSEEK_API_KEY`, xfail — KI-012) |
+
+#### 4.2.3. Frontend (Vitest, typecheck, build)
+
+```bash
+pnpm --dir web test          # Vitest, 58 тестов (8 файлов)
+pnpm --dir web typecheck     # tsc --noEmit, 0 ошибок
+pnpm --dir web build         # tsc -b && vite build → web/dist/
+```
+
+| Проверка | Ожидаемо |
+| :--- | :--- |
+| `pnpm --dir web test` | 58 passed (итерация 35; 8 файлов) |
+| `pnpm --dir web typecheck` | 0 ошибок |
+| `pnpm --dir web build` | `web/dist/` создан |
+
+#### 4.2.4. E2E (Playwright)
+
+По умолчанию — **mocked-режим**: API перехватывается `page.route`, backend
+не нужен (см. `web/e2e/README.md`):
+
+```bash
+pnpm --dir web exec playwright install chromium   # один раз
+pnpm --dir web run test:e2e                       # 14 сценариев × 2 проекта
+```
+
+На Windows/в DSH-песочнице dev-сервер не стартует (esbuild не может писать
+в `node_modules/.vite`), поэтому используется preview:
+
+```powershell
+$env:E2E_PREVIEW="1"
+pnpm --dir web run test:e2e
+```
+
+Ожидаемо: **30 passed** (15 сценариев × `chromium`/`mobile`).
+
+С real backend (нужны Postgres, Redis, Stockfish и LLM; новый аккаунт
+создаётся неподтверждённым — KI-040/KI-056):
+
+```bash
+# bash
+E2E_REAL_BACKEND=1 VITE_API_PROXY=http://127.0.0.1:8000 pnpm --dir web run test:e2e
+```
+
+```powershell
+# PowerShell
+$env:E2E_REAL_BACKEND="1"; $env:VITE_API_PROXY="http://127.0.0.1:8000"
+pnpm --dir web run test:e2e
+```
+
+В real-режиме удобнее сначала `--project=chromium`. Ограничение: регистрация
+даёт `is_verified=false`, ссылка подтверждения — только в structlog-логе
+(`email_mock_sent`), поэтому часть сценариев требует ручного подтверждения
+(KI-040); `limits.spec.ts` и точные цифры — только в mocked-режиме.
+
+#### 4.2.5. Проверка observability-стека
+
+```bash
+docker compose -f docker-compose.observability.yml up -d
+docker compose -f docker-compose.observability.yml ps      # 4 сервиса healthy
+curl -s -u admin:admin http://127.0.0.1:3000/api/health    # Grafana
+curl -s -u admin:admin http://127.0.0.1:3000/api/v1/provisioning/alert-rules
+```
+
+Grafana — http://localhost:3000, Prometheus — :9090, Tempo — :3200;
+подробнее — §6.2.
 
 ---
 
 ## 5. Настройка LLM-провайдеров
 
-LLM нужна для генерации комментария (`/v1/commentary`) и чата
-(`/v1/chat`). Для healthcheck и `/v1/analyze` она не требуется.
+LLM нужна для комментария (`/v1/commentary`), чата (`/v1/chat`) и
+RAG-эмбеддингов. Для healthcheck и `/v1/analyze` она не требуется.
 
-### 5.1. Вариант A — облачная LLM (быстро, но партии уходят наружу)
+Маршрутизация жёстко задана в `app/llm/factory.py`:
 
-Подходит для уровня «гроссмейстер» и fallback.
+| Уровень | Провайдер | Настройки |
+| :--- | :--- | :--- |
+| `beginner` | LM Studio (локально) | `VLLM_BASE_URL`, `VLLM_MODEL`, `VLLM_API_KEY` |
+| `club` | LM Studio (локально) | те же |
+| `gm` | DeepSeek (облако) | `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_API_KEY` |
+
+`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` в `.env` — резерв на будущее, сейчас
+не маршрутизируются.
+
+### 5.1. Локальная LLM: LM Studio (уровни «новичок» и «клуб»)
+
+1. Установите [LM Studio](https://lmstudio.ai/), загрузите модель
+   (по умолчанию `qwen/qwen3-4b-2507`) и включите локальный сервер
+   (OpenAI-совместимый API) на порту **8034**.
+2. В `.env`:
 
 ```dotenv
-# .env
-OPENAI_API_KEY=sk-...
-# или
-ANTHROPIC_API_KEY=sk-ant-...
-# или
-DEEPSEEK_API_KEY=sk-...
+VLLM_BASE_URL=http://127.0.0.1:8034/v1
+VLLM_MODEL=qwen/qwen3-4b-2507
+VLLM_API_KEY=lm-studio          # LM Studio ключ не проверяет, но клиент требует непустой
 ```
 
-После изменения `.env` — перезапустить uvicorn. Healthcheck покажет
-`llm: ok`.
+3. Перезапустите uvicorn. Healthcheck покажет `llm: skipped`
+   (`local vllm configured`) — локальная LLM настроена, но healthcheck её
+   не опрашивает; это нормально.
 
-**Важно:** при уровне «новичок» и `privacy=local` партии **не** уходят в
-облако (см. `RULES.md` §7.3). Облачная LLM используется только для
-уровня «клуб» (опционально) и «гроссмейстер» (или при явном opt-in).
+Тот же сервер используется для эмбеддингов RAG:
 
-### 5.2. Вариант B — локальная LLM через vLLM (приватно, нужен GPU)
+```dotenv
+EMBEDDING_PROVIDER=lmstudio
+EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
+EMBEDDING_DIM=768
+```
 
-Подходит для уровня «новичок» и «клуб» без облака.
+**Альтернатива без LM Studio** — vLLM в Docker (нужен NVIDIA GPU):
 
 ```bash
 docker compose --profile llm-local up -d vllm
+# первый запуск скачает модель (~16 GB), ждите healthy 5–10 минут
 ```
-
-Первый запуск скачает модель (`Qwen/Qwen3-8B` по умолчанию, ~16 GB).
-Дождитесь `vllm` в статусе `healthy` (может занять 5–10 минут на первом
-запуске).
-
-В `.env`:
 
 ```dotenv
 VLLM_BASE_URL=http://localhost:8001/v1
 VLLM_MODEL=Qwen/Qwen3-8B
 ```
 
-Перезапустить uvicorn. Healthcheck покажет `llm: skipped` (локальная LLM
-настроена, но не проверялась) — это нормально.
+### 5.2. Облачная LLM: DeepSeek (уровень «гроссмейстер»)
 
-**Требования к GPU:** ≥ 24 GB VRAM для Qwen3-8B (bf16). Для Qwen3-1.7B
-(Gemma-3-4B) достаточно 8–12 GB.
+```dotenv
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_API_KEY=sk-...        # обязателен: без него gm вернёт 503 llm_not_configured
+```
 
-### 5.3. Вариант C — гибрид (рекомендуется для prod)
+После изменения `.env` перезапустите uvicorn — healthcheck покажет
+`llm: ok` (`cloud key present`).
 
-- **Новичок** → локальная LLM (приватно, дёшево).
-- **Клуб** → локальная LLM или облачная mini (по настройке).
-- **Гроссмейстер** → облачная мощная LLM + RAG.
+**Приватность:** на уровень `gm` уходит только «пакет фактов» (оценки,
+варианты, мотивы) без PGN-метаданных и user_id; `beginner` и `club`
+обслуживаются локальной моделью (см. `RULES.md` §7.3).
 
-Настраивается в `app/config.py` (маппинг `level → provider`) — появится в
-T-013. Пока — просто заполните те ключи, которые планируете использовать.
+### 5.3. Гибрид (значение по умолчанию)
+
+- **Новичок / клуб** → LM Studio: приватно и дёшево.
+- **Гроссмейстер** → DeepSeek + RAG-контекст.
+- LoRA-адаптер: если `LORA_ADAPTER_PATH` указывает на существующий каталог с
+  `adapter_config.json`, локальный клиент запрашивает адаптер по basename
+  (vLLM должен быть запущен с `--lora-modules`); иначе используется базовая
+  модель. Обучение адаптера не выполнялось (нет GPU, KI-030).
 
 ---
 
 ## 6. Опциональные сервисы
 
-### 6.1. Stockfish как Docker-сервис (UCI-over-TCP)
+### 6.1. Stockfish как Docker-сервис — не поддерживается клиентом (KI-013)
 
-Если не хотите ставить Stockfish локально:
-
-```bash
-docker compose --profile engine up -d stockfish
-```
-
-В `.env`:
-
-```dotenv
-# STOCKFISH_PATH=/usr/bin/stockfish   # закомментировать
-STOCKFISH_HOST=localhost
-STOCKFISH_PORT=5000
-```
-
-Перезапустить uvicorn. Healthcheck покажет `stockfish: ok (tcp-mode)`.
-
-**Важно:** TCP-режим не проверяется healthcheck'ом (только констатирует,
-что `STOCKFISH_HOST` задан). Реальная проверка — при первом запросе
-`/v1/analyze`.
+Профиль `engine` в `docker-compose.yml` поднимает контейнер с
+UCI-over-TCP (`docker compose --profile engine up -d stockfish`,
+`127.0.0.1:5000`), и healthcheck умеет показывать `stockfish: ok
+(tcp-mode (not probed))` при заданном `STOCKFISH_HOST`. **Но** клиент
+движка в v1.0.0 работает только с локальным процессом Stockfish по
+`STOCKFISH_PATH` — TCP-режим не реализован (KI-013). Для анализа
+используйте локальный бинарник (§1.1); `/v1/analyze` с `STOCKFISH_HOST`
+без `STOCKFISH_PATH` вернёт ошибку движка.
 
 ### 6.2. Observability-стек: Grafana + Tempo + Prometheus (T-109b)
 
@@ -484,8 +603,9 @@ arq app.worker.WorkerSettings
 
 ### 6.4. MinIO (S3-совместимое хранилище)
 
-Появится в T-019+ (когда понадобится хранилище для аннотированных
-партий и экспортов). Пока не требуется.
+В v1.0.0 не используется: готовые выгрузки и PDF лежат на локальной ФС в
+`EXPORT_DIR` (`data/exports/`, вне web-root), retention — §9.3.
+S3/MinIO — Backlog (не входит в релиз).
 
 ---
 
@@ -595,7 +715,7 @@ docker pull ghcr.io/iilmchat/ai-chess-annotator:latest
 **Симптом:** `Bind for 0.0.0.0:5434 failed: port is already allocated`.
 
 **Причина:** локальный Postgres/Redis уже слушает эти порты (или другой
-экземпляр chess-annotator).
+экземпляр ai-chess-annotator).
 
 **Решение:**
 
@@ -645,7 +765,8 @@ echo "STOCKFISH_PATH=$(which stockfish)" >> .env
 # Перезапустить uvicorn
 ```
 
-Или использовать Docker-сервис (§6.1).
+TCP-режим (`STOCKFISH_HOST`) в v1.0.0 не поддержан клиентом (KI-013) —
+нужен локальный бинарник.
 
 ### 8.4. Healthcheck → `db: error` / `redis: error`
 
@@ -657,7 +778,8 @@ docker compose logs redis | tail -20
 docker compose exec redis redis-cli ping    # → PONG
 ```
 
-Проверить `REDIS_URL` в `.env`: `redis://localhost:6380/0`.
+Проверить `REDIS_URL` в `.env`: `redis://127.0.0.1:6380/0` (не
+`localhost` — на Windows резолвится в `::1`, RULES §11.1).
 
 ### 8.5. `pnpm --dir web install` → ошибки
 
@@ -681,13 +803,13 @@ pnpm --dir web install
 **Решение:**
 
 ```bash
-pwd                  # должен быть .../chess-annotator
+pwd                  # должен быть .../ai-chess-annotator
 source .venv/bin/activate
 which python         # должен указывать на .venv/bin/python
 uvicorn app.main:app --reload
 ```
 
-### 8.7. `mypy` ругается на `stockfish` / `chess`
+### 8.7. `mypy` ругается на `stockfish` / `chess` / `cairosvg`
 
 **Симптом:** `Cannot find implementation or library stub for module named "stockfish"`.
 
@@ -695,12 +817,12 @@ uvicorn app.main:app --reload
 
 ```toml
 [[tool.mypy.overrides]]
-module = ["stockfish.*", "chess.*"]
+module = ["stockfish.*", "chess.*", "cairosvg.*"]
 ignore_missing_imports = true
 ```
 
 Если есть — перезапустить `mypy app`. Если нет — добавить и закоммитить
-отдельным PR (`chore(mypy): add overrides for stockfish and chess`).
+отдельным PR (`chore(mypy): add overrides for stockfish, chess and cairosvg`).
 
 ### 8.8. CI красный, локально зелёный
 
@@ -731,8 +853,8 @@ CI, кэш).
 - Уменьшить `--max-model-len` (по умолчанию 8192 → 4096).
 - Закрыть другие GPU-процессы.
 
-Если GPU нет — использовать облачную LLM (§5.1) или отложить локальную
-LLM до появления GPU.
+Если GPU нет — использовать облачную LLM (§5.2) или LM Studio без GPU
+(§5.1).
 
 ### 8.10. PDF-экспорт → `503 pdf_font_unavailable`
 
@@ -925,8 +1047,9 @@ WHERE status IN ('done', 'failed')
 
 1. **Прочитать `RULES.md`** — правила разработки (обязательно).
 2. **Прочитать `SPEC.md`** — архитектура и контракты.
-3. **Открыть `TODO.md`** — найти текущую задачу (сейчас — T-007:
-   Ingestion на `python-chess`).
+3. **Открыть `TODO.md`** — все фазы 1–8 закрыты (v1.0.0); открыты
+   T-024 (живой слепой тест), T-029b, T-032b, T-033b, T-035b, T-039b и
+   Backlog T-101…T-119.
 4. **Посмотреть `RELEASES.md`** — что уже сделано.
 5. **Проверить `KNOWN_ISSUES.md`** — нет ли блокеров, влияющих на вашу
    задачу.
@@ -935,8 +1058,8 @@ WHERE status IN ('done', 'failed')
 
 - [SPEC.md](SPEC.md) — источник истины.
 - [RULES.md](RULES.md) — правила.
-- [ARCHITECTURE.md](ARCHITECTURE.md) — как устроено (обновляется по мере
-  роста).
-- [USER_GUIDE.md](../user_guide/USER_GUIDE.md) — как пользоваться (после
-  T-019).
-- [../README.md](../README.md) — навигация по всей документации.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — как устроено (C4, потоки, локализация, фоновые выгрузки).
+- [USER_GUIDE.md](../user_guide/USER_GUIDE.md) — как пользоваться (актуально
+  для v1.0.0).
+- [../../README.md](../../README.md) — корневой README (быстрый старт, статус).
+- [../README.md](../README.md) — индекс документации.

@@ -29,6 +29,21 @@ def test_prompt_contains_history_and_question() -> None:
     assert "А кто чёрными?" in prompt
 
 
+def test_prompt_english_scaffolding() -> None:
+    """T-106/KI-058: для en заголовки промпта и инструкция — английские."""
+    prompt = build_chat_prompt(
+        "FACTS", "Who played white?", HISTORY, language="en"
+    )
+
+    assert "# Conversation history" in prompt
+    assert "# User question" in prompt
+    assert "Answer briefly and to the point" in prompt
+    assert "# История диалога" not in prompt
+    assert "# Вопрос пользователя" not in prompt
+    assert "Ответь кратко" not in prompt
+
+
+
 def test_prompt_hash_depends_on_history() -> None:
     base = make_prompt_hash(
         "club", "m", "sys", question="q", history=None

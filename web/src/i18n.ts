@@ -117,6 +117,15 @@ const resources = {
         subtitle: "Последние 20 разобранных партий — откройте любую для просмотра.",
         refresh: "Обновить",
         empty: "Пока нет разобранных партий. Начните с анализа на главной.",
+        emailNotVerifiedTitle: "Подтвердите email, чтобы увидеть историю",
+        emailNotVerifiedBody:
+          "История партий доступна после подтверждения email. Ссылка для подтверждения отправлена на {{email}}.",
+        emailNotVerifiedHint:
+          "Подтвердите email по ссылке из письма и нажмите «Проверить». Письма нет — проверьте папку «Спам».",
+        emailNotVerifiedCheck: "Проверить",
+        emailNotVerifiedLogout: "Выйти",
+        emailNotVerifiedStillUnverified:
+          "Email пока не подтверждён. Проверьте почту и попробуйте снова.",
         date: "Дата",
         white: "Белые",
         black: "Чёрные",
@@ -351,6 +360,15 @@ const resources = {
         subtitle: "The last 20 analyzed games — open any of them.",
         refresh: "Refresh",
         empty: "No analyzed games yet. Start with an analysis on the home page.",
+        emailNotVerifiedTitle: "Confirm your email to see your history",
+        emailNotVerifiedBody:
+          "Game history is available after email confirmation. We sent the confirmation link to {{email}}.",
+        emailNotVerifiedHint:
+          "Open the link from the email and press “Check”. No email? Check the Spam folder.",
+        emailNotVerifiedCheck: "Check",
+        emailNotVerifiedLogout: "Sign out",
+        emailNotVerifiedStillUnverified:
+          "Email is not confirmed yet. Check your inbox and try again.",
         date: "Date",
         white: "White",
         black: "Black",

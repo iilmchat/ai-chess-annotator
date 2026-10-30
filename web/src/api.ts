@@ -323,12 +323,17 @@ export function updateCommentary(
  *
  * Запрос защищён JWT, поэтому берём blob вручную (общий `request()`
  * парсит JSON). При 401 — тот же single-flight refresh, что и у JSON-
- * запросов; ошибки сервера превращаются в `ApiError`.
+ * запросов; ошибки сервера превращаются в `ApiError`. `language`
+ * нормализуется (`en-US` → `en`) и уходит query-параметром (KI-058);
+ * без языка сервер решает по `Accept-Language`.
  */
 export async function fetchCommentaryPdf(
   commentaryId: number,
+  language?: string,
 ): Promise<Blob> {
-  const path = `/v1/commentaries/${commentaryId}/export/pdf`;
+  const lang = requestLanguage(language);
+  const query = lang ? `?language=${lang}` : "";
+  const path = `/v1/commentaries/${commentaryId}/export/pdf${query}`;
   const token = getAuthState().accessToken;
   let response = await send(path, undefined, token);
 
@@ -350,8 +355,9 @@ export async function fetchCommentaryPdf(
 /** Скачать PDF комментария в браузере (создаёт временную ссылку). */
 export async function downloadCommentaryPdf(
   commentaryId: number,
+  language?: string,
 ): Promise<void> {
-  const blob = await fetchCommentaryPdf(commentaryId);
+  const blob = await fetchCommentaryPdf(commentaryId, language);
   const url = URL.createObjectURL(blob);
   try {
     const link = document.createElement("a");
@@ -370,6 +376,7 @@ export function askChat(
   level: Level,
   message: string,
   history: ChatHistoryItem[] = [],
+  language?: string,
 ): Promise<ChatResponse> {
   return request<ChatResponse>("/v1/chat", {
     method: "POST",
@@ -378,6 +385,7 @@ export function askChat(
       level,
       message,
       history,
+      language: requestLanguage(language),
     }),
   });
 }
@@ -425,6 +433,7 @@ export async function streamChat(
   message: string,
   handlers: StreamHandlers,
   history: ChatHistoryItem[] = [],
+  language?: string,
 ): Promise<StreamDone> {
   return streamRequest(
     "/v1/chat/stream",
@@ -433,6 +442,7 @@ export async function streamChat(
       level,
       message,
       history,
+      language: requestLanguage(language),
     },
     handlers,
   );

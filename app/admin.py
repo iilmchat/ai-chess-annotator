@@ -35,7 +35,8 @@ RBAC (KI-045). Guard выставляет в `request.state` роль и акт�
 (редактор промптов доступен). Остальные views остаются read-only для всех.
 
 Read-only views: `annotated_games`, `commentaries`, `edits`, `audit_logs`,
-`llm_evaluations` и `llm_calls` (T-030). Мутирует только редактор
+`llm_evaluations`, `llm_calls` (T-030) и `export_jobs` (журнал фоновых
+выгрузок с фильтром по статусу, итерация 35). Мутирует только редактор
 промптов, и только через аудируемый edit. Экспорт в starlette-admin —
 POST-действие, поэтому для auditor он закрыт вместе с остальными
 небезопасными методами.
@@ -67,7 +68,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
-from starlette_admin import CustomView, route
+from starlette_admin import CustomView, EnumField, route
 from starlette_admin.auth import AdminUser, AuthProvider
 from starlette_admin.contrib.sqla import Admin, ModelView
 from starlette_admin.exceptions import FormValidationError, LoginFailed
@@ -86,6 +87,8 @@ from app.db.models import (
     AuditLog,
     Commentary,
     Edit,
+    ExportJob,
+    ExportJobStatus,
     LlmCall,
     LlmEvaluation,
     Prompt,
@@ -105,6 +108,7 @@ __all__ = [
     "AuditLogAdmin",
     "AuditVerifyView",
     "DatasetExportView",
+    "ExportJobAdmin",
     "LlmCallAdmin",
     "LlmEvaluationAdmin",
     "LlmOpsDashboardView",
@@ -758,6 +762,44 @@ class LlmEvaluationAdmin(_ReadOnlyModelView):
     )
 
 
+class ExportJobAdmin(_ReadOnlyModelView):
+    """Фоновые выгрузки датасета (`export_jobs`, KI-050, итерация 35).
+
+    Read-only журнал джоб: статус, кто запустил, снимок фильтров, размер и
+    sha256 готового файла, число строк, текст ошибки и таймстемпы. Нужен
+    админу, чтобы без запросов в БД найти «зависшие» задачи (``queued`` /
+    ``running``) и упавшие (``failed``).
+
+    Фильтр по статусу: `status` объявлен явным `EnumField` с
+    `ExportJobStatus`, поэтому filter builder в списке рисует выпадающий
+    список ``queued/running/done/failed`` вместо свободного текстового поля.
+    Filter builder показывает только `searchable`-поля, поэтому ``status``
+    (и ``actor``, чтобы искать по актору) перечислены в `searchable_fields`.
+    HTTP-параметр списка — ``?filter=status__eq=failed`` (формат
+    starlette-admin 1.0.3; несколько значений — ``status__in=done,failed``).
+    """
+
+    menu_label = "Фоновые выгрузки"
+    fields = (  # type: ignore[assignment]
+        "id",
+        EnumField("status", enum=ExportJobStatus),
+        "actor",
+        "filters",
+        "file_size",
+        "sha256",
+        "rows_exported",
+        "error",
+        "created_at",
+        "started_at",
+        "finished_at",
+    )
+    # JSONB-снимок фильтров и sha256 в списке не нужны: список остаётся
+    # компактным, а значения доступны на странице деталей.
+    exclude_fields_from_list = ("filters", "sha256")
+    searchable_fields = ("status", "actor")
+    sortable_fields = ("id", "status", "created_at", "finished_at")
+
+
 class AuditLogAdmin(_ReadOnlyModelView):
     """Read-only журнал аудита (T-035)."""
 
@@ -905,6 +947,9 @@ def create_admin(settings: Settings) -> Admin:
     admin.add_view(LlmCallAdmin(LlmCall, icon="fa fa-microchip"))
     admin.add_view(
         LlmEvaluationAdmin(LlmEvaluation, icon="fa fa-chart-line")
+    )
+    admin.add_view(
+        ExportJobAdmin(ExportJob, icon="fa fa-clock-rotate-left")
     )
     admin.add_view(
         DatasetExportView(

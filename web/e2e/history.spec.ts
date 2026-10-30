@@ -1,4 +1,11 @@
-import { expect, mockApi, REAL_BACKEND, registerAndLogin, test } from "./fixtures";
+import {
+  expect,
+  mockApi,
+  REAL_BACKEND,
+  registerAndLogin,
+  test,
+  uniqueEmail,
+} from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await mockApi(page);
@@ -33,4 +40,82 @@ test("история: переход из шапки, /history и открыти
   });
   await expect(page.locator(".board-wrap")).toBeVisible();
   await expect(page.getByRole("region", { name: "Ходы" })).toBeVisible();
+});
+
+test("история: неподтверждённый пользователь видит placeholder без списка", async ({
+  page,
+}) => {
+  // Сценарий завязан на mock-соглашение fixtures.ts: email с префиксом
+  // `unverified-` считается неподтверждённым.
+  test.skip(
+    REAL_BACKEND,
+    "в real-backend режиме подтверждение email зависит от настроек backend",
+  );
+
+  const gamesRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/v1/games") {
+      gamesRequests.push(request.url());
+    }
+  });
+
+  const email = uniqueEmail("unverified");
+  await registerAndLogin(page, email);
+
+  // Открываем /history «с нуля»: unverified-профиль восстанавливается из мока
+  // refresh-cookie, поэтому страница рендерится без общего экрана AuthGate.
+  await page.goto("/history");
+  await expect(page).toHaveURL(/\/history$/);
+
+  const placeholder = page.getByRole("heading", {
+    name: "Подтвердите email, чтобы увидеть историю",
+  });
+  await expect(placeholder).toBeVisible();
+  await expect(
+    page.getByText(`Ссылка для подтверждения отправлена на ${email}`),
+  ).toBeVisible();
+  await expect(page.getByText(/нажмите «Проверить»/)).toBeVisible();
+  // Ни таблицы, ни строк партий, ни заголовка списка — ничего не намекает на данные.
+  await expect(page.getByRole("table")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Svidler/ })).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "История партий" }),
+  ).toHaveCount(0);
+  expect(gamesRequests).toHaveLength(0);
+
+  // «Проверить»: backend по-прежнему не подтвердил email — placeholder остаётся,
+  // история не запрашивается.
+  await page.getByRole("button", { name: "Проверить" }).click();
+  await expect(
+    page.getByText(/Email пока не подтверждён/),
+  ).toBeVisible();
+  await expect(placeholder).toBeVisible();
+  await expect(page.getByRole("table")).toHaveCount(0);
+  expect(gamesRequests).toHaveLength(0);
+
+  // А если backend уже подтвердил email, «Проверить» подхватывает это и
+  // загружает историю без перезагрузки страницы (переопределяем только
+  // `/auth/me` в рамках теста, fixtures.ts не меняем).
+  await page.route(/\/auth\/me$/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        id: 1,
+        email,
+        level: "club",
+        role: "user",
+        is_active: true,
+        is_verified: true,
+        created_at: "2026-10-28T10:00:00Z",
+      }),
+    }),
+  );
+  await page.getByRole("button", { name: "Проверить" }).click();
+  await expect(
+    page.getByRole("heading", { name: "История партий" }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: /Svidler/ })).toBeVisible();
+  await expect(placeholder).toHaveCount(0);
+  expect(gamesRequests.length).toBeGreaterThan(0);
 });

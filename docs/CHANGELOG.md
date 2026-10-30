@@ -6,8 +6,43 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-01
+
 ### Added
 
+- **Английский PDF-экспорт (KI-058, итерация 35):** `GET
+  /v1/commentaries/{id}/export/pdf` принимает query-параметр `language`
+  (`ru`/`en`; иначе `Accept-Language` → `DEFAULT_LANGUAGE`); при `en`
+  переводятся заголовки и подписи («Game», «Moves», «Commentary»,
+  «Positions on the board», «Event», «Date», «Result», «Level», «Model»,
+  «Status», названия уровней, футер, страницы). PGN/SAN не зависят от
+  языка; русский PDF не изменился.
+- **Язык чата (KI-058, итерация 35):** `POST /v1/chat` и
+  `/v1/chat/stream` принимают `language` (`ru`/`en`; иначе
+  `Accept-Language` → `DEFAULT_LANGUAGE`), английский системный промпт —
+  `app/prompts/chat_en.txt`; retry-подсказка и ответы сохраняют
+  выбранный язык.
+- **Локализация ошибок API (KI-058, итерация 35):** `app/i18n.py` —
+  английский `detail` по машинному `code`, если клиент просит `en`
+  через `Accept-Language` (`en-US,en;q=0.9` → `en`); для неизвестных
+  кодов и `internal_error` остаётся исходное сообщение. `code` и
+  HTTP-статус не меняются, формат `{"detail", "code"}` сохранён.
+- **Плейсхолдер `/history` для неподтверждённых (итерация 35):**
+  страница истории показывает «Подтвердите email, чтобы увидеть историю»
+  вместо пустого списка при `is_verified=false` (admin/auditor
+  bypass); i18n RU/EN.
+- **Read-only `export_jobs` в админке (итерация 35):**
+  `ExportJobAdmin` в `/admin` — таблица фоновых выгрузок (status, rows,
+  size, sha256, timestamps) с фильтром по `status`; создание/правка
+  через view запрещены (read-only, admin/auditor).
+- **Генератор слепого теста (T-024, итерация 35):**
+  `scripts/generate_blind_test.py` — берёт 3 партии с анализом,
+  генерирует комментарии трёх уровней и раскладывает по слотам `A`/`B`/`C`
+  (перемешивание засеянным `random.Random(seed)`, одинаковый `--seed` даёт
+  ту же раскладку): `game_N_X.txt`, `answer_form.md` (уровни не раскрыты),
+  `answers_key.json` — ключ организатора. `--dry-run` работает без LLM,
+  `--game-ids`, `--seed`, `--language`, exit codes 0/2. Сам тест с людьми
+  не проводился (T-024 — «скрипт готов, живой тест вручную»).
 - **English commentary localization (T-106, итерация 34):** файлы
   `app/prompts/{beginner,club,gm}_en.txt`; настройка `DEFAULT_LANGUAGE`
   (`ru`/`en`); `POST /v1/commentary` и `/v1/commentary/stream` принимают
@@ -25,13 +60,6 @@
   запускается только на тег `v*`, логинится в `ghcr.io` через
   `GITHUB_TOKEN` и пушит `ghcr.io/iilmchat/ai-chess-annotator:vX.Y.Z`,
   `:X.Y.Z`, `:latest`; `Dockerfile` принимает build-arg `VITE_API_BASE`.
-- **Security review (T-110, итерация 34):** `pip-audit` — 3 уязвимости
-  до, 0 после; `python-jose`/`ecdsa` заменены на **PyJWT** (HS256,
-  формат токенов совместим); `Settings` падает в `APP_ENV=prod/
-  production` на dev/коротком `JWT_SECRET` и dev-`ADMIN_API_KEY`, а
-  также запрещает `CORS_ORIGINS=*` (при `allow_credentials=True`).
-  Проверены raw SQL/ORM (`llmops_dashboard.py`, `export_jobs/jobs.py`) —
-  пользовательский ввод параметризуется SQLAlchemy.
 - **Frontend auth UX (KI-055, итерация 33):** публичные маршруты
   `/verify-email?token=…` (GET `/auth/verify-email` при монтировании,
   статусы проверки/успеха/ошибки, обновление `authStore` после успеха),
@@ -152,12 +180,6 @@
   по расходу токенов» из `usage_daily`. Доступна admin/auditor. Тесты:
   `tests/integration/test_admin_llmops_dashboard.py`,
   `tests/unit/test_llmops_dashboard_unit.py`.
-- **Аудит экспорта датасета (KI-050, итерация 29):** после завершения
-  NDJSON-стрима `GET /v1/admin/exports/edits.jsonl` в `audit_logs`
-  пишется `dataset.export` с актором (`jwt:`/`session:`), фильтрами,
-  числом фактически выгруженных строк, `trace_id` и флагом `completed`
-  (best-effort, сбой не ломает ответ). Тесты — в
-  `tests/integration/test_admin_exports.py`.
 - **FinOps durable-агрегаты `usage_daily` (T-031b, итерация 28):**
   миграция `e9f0a1b2c3d4` — таблица `usage_daily` (subject_type/
   subject_key/day, tokens_in/out, cost_usd, requests,
@@ -204,32 +226,6 @@
   (moves/valid/illegal_count, Status OK/ERROR) и `rag.retrieve`
   (top_k/results, OK/ERROR) с `trace.id` из `app.tracing.current_trace_id()`
   (fallback — активный OTel-span); PII/тексты в атрибуты не пишутся.
-- **Timing-safe login (KI-043, итерация 27):** `DUMMY_PASSWORD_HASH`
-  (Argon2id с параметрами по умолчанию); `/auth/login` для несуществующего
-  email выполняет Argon2-verify и возвращает тот же 401 — медианы времени
-  ответа 55.4 / 54.8 мс (ratio 1.01).
-- **RBAC в Admin Panel (KI-045, итерация 27):** `AdminAuthGuard` выставляет
-  `request.state.admin_role`; auditor строго read-only — любые
-  POST/PUT/PATCH/DELETE в `/admin/**` → 403 `admin_forbidden`; role-aware
-  hooks (`PromptAdmin.can_edit`, `can_import`, `can_export`); admin и
-  legacy-пути сохраняют прежние права; read-only `LlmCallAdmin`.
-- **Auth tech debt (KI-036/KI-037, итерация 26):** пароли — **Argon2id**
-  (`argon2-cffi`, `$argon2id$`), legacy bcrypt-хеши перехешируются при
-  успешном входе (`verify_and_update`, лог `password_rehashed`). Refresh-токен
-  больше не возвращается в JSON: `/auth/login` и `/auth/refresh` кладут его
-  в HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`, `Max-Age` = TTL, `Secure`
-  при `AUTH_COOKIE_SECURE=true`), добавлены настройки `AUTH_COOKIE_*`.
-  Новый `POST /auth/logout` отзывает `jti` в Redis
-  (`refresh_denylist:<jti>`, TTL до `exp`) и очищает cookie; повторное
-  использование отозванного токена → 401; ротация refresh инвалидирует
-  прежний `jti` (защита от replay). Access-токен на фронтенде — только в
-  памяти, `credentials: "include"`, single-flight refresh и bootstrap через
-  `/auth/refresh`, `localStorage` для токенов не используется.
-- **Admin JWT (T-028 финал, итерация 26):** `/admin` принимает access JWT
-  (`Authorization: Bearer` или cookie `access_token`): `admin`/`auditor` →
-  200, `user` → 403 `admin_forbidden`, битый/просроченный → 403, без
-  кредов → 401. Legacy `X-Admin-Token` и парольная форма сохранены как
-  fallback.
 - **FinOps по JWT-пользователю (KI-038, итерация 26):**
   `TokenBudgetMiddleware` и `/v1/users/me/usage` считают дневной бюджет по
   `user:{id}` и tier из claim `role` (admin/auditor → pro, user → free);
@@ -285,8 +281,10 @@
   `commentaries.user_id`, `edits.user_id`; индексы `ix_games_user_id_created`,
   `ix_users_role`, `ix_commentaries_user_id`, `ix_edits_user_id`.
   Пакет `app/auth/`: bcrypt-хеширование (passlib), access+refresh JWT
-  (python-jose), зависимости `get_current_user` / `get_current_user_optional`
-  / `require_admin`, проверки владельца партии/комментария.
+  (python-jose) — позже заменены на Argon2id (итерация 26) и PyJWT/
+  HS256 (T-110, итерация 34); зависимости `get_current_user` /
+  `get_current_user_optional` / `require_admin`, проверки владельца
+  партии/комментария.
 - **`/auth` API:** `POST /auth/register` (201 профиль, 409 `email_taken`,
   422 на слабый пароль), `POST /auth/login` (200 access+refresh+профиль,
   401/403), `POST /auth/refresh` (ротация пары), `GET /auth/me`.
@@ -303,74 +301,10 @@
   Zustand-стор `chess.auth` в `localStorage`, Bearer-заголовок и
   single-flight refresh на 401, `AuthGate` с редиректом на `/login`,
   профиль email + «Выйти» в шапке; SSE-запросы тоже авторизуются.
-- **Feature-rate-limit на `/auth/login|register`** (10/мин на IP) —
-  базовая защита от перебора паролей.
 - **Тесты:** `tests/unit/test_auth.py` (24), `tests/integration/test_auth_api.py`
   (15, real auth), `tests/integration/test_data_isolation.py` (11),
   `tests/integration/test_usage_roles.py` (4); фронтенд — `authStore.test.ts`
   (7), `api.auth.test.ts` (9).
-
-### Changed
-
-- **HTTP-ответы (итерация 27):** добавляется заголовок `X-Trace-Id`
-  (W3C trace id из `traceparent` или сгенерированный); `X-Request-Id`
-  сохраняется в `llm_calls.request_id`; структурированные логи содержат
-  `trace_id`/`span_id` (structlog contextvars).
-- **`app/observability.py`:** `get_tracer(name)` принимает имя трейсера
-  (для валидатора/RAG/HTTP используются разные имена); `OTEL_ENABLED=false`
-  — no-op, `llm_calls`/`X-Trace-Id` продолжают работать.
-- **Admin (итерация 27):** импорт строк закрыт (`can_import=False`)
-  для всех views — вставка в обход аудита запрещена; auditor не получает
-  export (экспорт — POST-действие, блокируется guard); legacy
-  `X-Admin-Token`/парольная сессия работают как admin (деприкейт —
-  отдельный шаг).
-- **Контракт `/auth` (итерация 26):** `/auth/login` и `/auth/refresh`
-  возвращают `{access_token, token_type, expires_in, user}` без
-  `refresh_token`; refresh читается из HttpOnly-cookie (fallback — JSON-тело
-  для curl/CLI), при успехе cookie ротируется; `POST /auth/logout` — 204.
-  Ограничение длины пароля — 8..256 символов (bcrypt-лимит 72 байта снят).
-- **Зависимости (KI-036):** удалены `passlib` и `types-passlib`; добавлен
-  `argon2-cffi>=23.1`; `bcrypt>=4.1` оставлен только для проверки legacy
-  хешей (без пина `<4.1`).
-- **Фронтенд auth (KI-037):** `authStore` — memory-only access/user,
-  `bootstrapAuth()` вместо `hydrateAuth()`, `AuthGate` ждёт bootstrap,
-  logout вызывает API; `web/e2e`-моки переведены на новый контракт.
-- **FinOps (KI-038):** `TokenBudgetMiddleware` принимает `Settings` вместо
-  `pro_ips`/`trust_forwarded_for`; `request_subject`/`request_tier` стали
-  JWT-aware; `/v1/users/me/usage` не требует БД.
-- **Документация (итерация 26):** README (auth), `SPEC.md` (Argon2id,
-  cookie/denylist, per-user FinOps), `KNOWN_ISSUES` (KI-036/037/038/039 →
-  Closed, +KI-041…045), `TODO` (T-028 финал, T-043/T-044), `RELEASES`,
-  `ITERATION-26.md`.
-- **LoRA-экспорт (итерация 25):** JSONL из `edits` теперь строго
-  `system → user → assistant` (`system` — промпт уровня из
-  `app/prompts/*.txt`); старые выгрузки без `system` требуют
-  переэкспорта. `Settings.lora_model` возвращает basename адаптера только
-  если путь существует (файл или каталог с `adapter_config.json`) —
-  иначе базовая `VLLM_MODEL`, без «model not found» у vLLM.
-- **CI (итерация 25):** новый job `e2e` (Playwright mocked, артефакты при
-  падении); `vitest` исключает `web/e2e/**`, в `.gitignore` добавлены
-  `web/test-results/`, `web/playwright-report/`, `web/blob-report/`,
-  `models/`.
-- **Защищённые эндпоинты:** `/v1/analyze`, `/v1/games*`, `/v1/commentary*`,
-  `/v1/chat*` требуют `Authorization: Bearer <access>` (401 `unauthorized`
-  без токена); `/v1/ingest` по-прежнему защищён `X-Admin-Token`.
-- **Salvage из локальной ветки итераций 10–11:** `LMStudioEmbedder` —
-  `EmbeddingError` (503 `embedding_unavailable`) для HTTP/таймаутов/сети/
-  битого JSON/неверной размерности/вырожденных векторов, батчевый
-  `embed_many` (32, порядок по `index`) и батчевый ingest;
-  `scripts/ingest_pgn.py` — `--limit` по умолчанию **10** (защита от
-  случайной массовой загрузки) и чистые exit-коды; дополнительные тесты
-  `GET /v1/games/{id}` (глубокий parity POST↔GET, FEN-старт, 404,
-  порядок комментариев) и детерминированный порядок мотивов.
-- **Тестовая сюита:** тестовый seam `APP_ENV=test` + `TEST_AUTH_BYPASS=true`
-  (dependency override `get_current_user` на тестового admin-пользователя;
-  в dev/prod недостижим); `tests/conftest.py` включает его, реальная
-  авторизация проверяется отдельными тестами.
-- **Конфиг:** `passlib[bcrypt]` + `bcrypt<4.1` (KI-036), `python-jose[cryptography]`,
-  `email-validator`, стабы `types-passlib`/`types-python-jose`; в
-  `.env.example` — комментарии про JWT и test-seam.
-
 - **История партий и лимиты (T-036/T-037, итерация 20):**
   `GET /v1/games`, `GET /v1/users/me/usage`, страницы `/history` и
   `/analysis/:id`, usage-badge с модалкой Pro, SPA-fallback.
@@ -391,20 +325,6 @@
   `scripts/export_dataset.py` (JSONL из `edits`),
   `scripts/train_lora.py` (QLoRA-каркас, `--dry-run`),
   `LORA_ADAPTER_PATH` → basename adapter-модели для vLLM.
-- **Prompt Injection Guardrails (T-033, итерация 18):**
-  `app/security/guardrails.py` — NFKC-нормализация, удаление
-  control/zero-width/bidi, лимит 2000, 7 правил (override/leak/role/
-  jailbreak/role-tags, RU+EN); `inspect_user_input` → 422
-  `prompt_injection` в `/v1/chat` и `/chat/stream`; запрет раскрывать
-  системные инструкции в `CHAT_SYSTEM_PROMPT`.
-- **Security Audit (T-035, итерация 18):** append-only `audit_logs`
-  (`timestamp`, `actor`, `action`, `target_id`, `details`,
-  `prev_hash`, `current_hash`), миграция `f4a5b6c7d8e9`, hash-chain,
-  advisory-lock и триггер `UPDATE/DELETE/TRUNCATE`; аудит правки промпта,
-  `PATCH /v1/commentaries/{id}` и заблокированных инъекций; read-only
-  view и страница «Проверить целостность».
-- **Redis Pub/Sub кэша промптов (KI-032):** канал `prompts_updates`,
-  watcher в lifespan, публикация после commit в админке.
 - **Prompt Management (T-029, итерация 17):** таблица `prompts`
   (`level`, `content`, `version`, `updated_at`), миграция
   `e3f4a5b6c7d8`, seed из `app/prompts/*.txt` при старте, async
@@ -443,26 +363,78 @@
   `scripts/reembed_annotated.py`; hash-эмбеддер — fallback тестов.
 - **`GET /v1/games/{id}`:** сохранённый анализ (`moves`,
   `analysis_level`, `commentaries`) без повторного Stockfish.
-- **`X-Admin-Token`:** constant-time защита `POST /v1/ingest`
-  (`ADMIN_API_KEY`).
 
 ### Changed
 
-- **KI-033 закрыт:** аудит правки промпта пишется в `PromptAdmin.after_edit`
-  в той же транзакции, что и `prompts`; сбой аудита откатывает правку.
+- **Релиз v1.0.0 (итерация 35):** версия `1.0.0` в `pyproject.toml`,
+  `app/__init__.py` и `web/package.json`; финальные README (docker
+  compose quick start, статус v1.0.0), CHANGELOG `[1.0.0]`, ARCHITECTURE
+  (C4 Context/Container, локализация, фоновые выгрузки), GETTING_STARTED
+  (тесты/E2E), docs/README, TODO, RELEASES; KI-058 закрыт в объёме
+  локализации (остатки — русский факт-пакет, en-промпты файлами, нет
+  вычитки носителем).
+- **HTTP-ответы (итерация 27):** добавляется заголовок `X-Trace-Id`
+  (W3C trace id из `traceparent` или сгенерированный); `X-Request-Id`
+  сохраняется в `llm_calls.request_id`; структурированные логи содержат
+  `trace_id`/`span_id` (structlog contextvars).
+- **`app/observability.py`:** `get_tracer(name)` принимает имя трейсера
+  (для валидатора/RAG/HTTP используются разные имена); `OTEL_ENABLED=false`
+  — no-op, `llm_calls`/`X-Trace-Id` продолжают работать.
+- **Admin (итерация 27):** импорт строк закрыт (`can_import=False`)
+  для всех views — вставка в обход аудита запрещена; auditor не получает
+  export (экспорт — POST-действие, блокируется guard); legacy
+  `X-Admin-Token`/парольная сессия работают как admin (деприкейт —
+  отдельный шаг).
+- **Контракт `/auth` (итерация 26):** `/auth/login` и `/auth/refresh`
+  возвращают `{access_token, token_type, expires_in, user}` без
+  `refresh_token`; refresh читается из HttpOnly-cookie (fallback — JSON-тело
+  для curl/CLI), при успехе cookie ротируется; `POST /auth/logout` — 204.
+  Ограничение длины пароля — 8..256 символов (bcrypt-лимит 72 байта снят).
+- **Зависимости (KI-036, T-110):** удалены `passlib`, `types-passlib`,
+  `python-jose[cryptography]` и стабы `types-python-jose`; добавлены
+  `argon2-cffi>=23.1` и `PyJWT>=2.8` (HS256); `bcrypt>=4.1` оставлен только
+  для проверки legacy-хешей (без пина `<4.1`); `email-validator` остаётся
+  в зависимостях; в `.env.example` — комментарии про JWT и test-seam.
+- **Фронтенд auth (KI-037):** `authStore` — memory-only access/user,
+  `bootstrapAuth()` вместо `hydrateAuth()`, `AuthGate` ждёт bootstrap,
+  logout вызывает API; `web/e2e`-моки переведены на новый контракт.
+- **FinOps (KI-038):** `TokenBudgetMiddleware` принимает `Settings` вместо
+  `pro_ips`/`trust_forwarded_for`; `request_subject`/`request_tier` стали
+  JWT-aware; `/v1/users/me/usage` не требует БД.
+- **Документация (итерация 26):** README (auth), `SPEC.md` (Argon2id,
+  cookie/denylist, per-user FinOps), `KNOWN_ISSUES` (KI-036/037/038/039 →
+  Closed, +KI-041…045), `TODO` (T-028 финал, T-043/T-044), `RELEASES`,
+  `ITERATION-26.md`.
+- **LoRA-экспорт (итерация 25):** JSONL из `edits` теперь строго
+  `system → user → assistant` (`system` — промпт уровня из
+  `app/prompts/*.txt`); старые выгрузки без `system` требуют
+  переэкспорта. `Settings.lora_model` возвращает basename адаптера только
+  если путь существует (файл или каталог с `adapter_config.json`) —
+  иначе базовая `VLLM_MODEL`, без «model not found» у vLLM.
+- **CI (итерация 25):** новый job `e2e` (Playwright mocked, артефакты при
+  падении); `vitest` исключает `web/e2e/**`, в `.gitignore` добавлены
+  `web/test-results/`, `web/playwright-report/`, `web/blob-report/`,
+  `models/`.
+- **Защищённые эндпоинты:** `/v1/analyze`, `/v1/games*`, `/v1/commentary*`,
+  `/v1/chat*` требуют `Authorization: Bearer <access>` (401 `unauthorized`
+  без токена); `/v1/ingest` по-прежнему защищён `X-Admin-Token`.
+- **Salvage из локальной ветки итераций 10–11:** `LMStudioEmbedder` —
+  `EmbeddingError` (503 `embedding_unavailable`) для HTTP/таймаутов/сети/
+  битого JSON/неверной размерности/вырожденных векторов, батчевый
+  `embed_many` (32, порядок по `index`) и батчевый ingest;
+  `scripts/ingest_pgn.py` — `--limit` по умолчанию **10** (защита от
+  случайной массовой загрузки) и чистые exit-коды; дополнительные тесты
+  `GET /v1/games/{id}` (глубокий parity POST↔GET, FEN-старт, 404,
+  порядок комментариев) и детерминированный порядок мотивов.
+- **Тестовая сюита:** тестовый seam `APP_ENV=test` + `TEST_AUTH_BYPASS=true`
+  (dependency override `get_current_user` на тестового admin-пользователя;
+  в dev/prod недостижим); `tests/conftest.py` включает его, реальная
+  авторизация проверяется отдельными тестами.
 - **Semantic cache выключен в eval/тестах по умолчанию:** иначе повторные
   прогоны не проверяют генерацию; включается `SEMANTIC_CACHE_ENABLED=true`.
-- **KI-031 закрыт:** тир `free/pro` больше не берётся из
-  `X-User-Tier`/`X-User-Id`; `pro` — только IP из `PRO_IPS`,
-  `X-Forwarded-For` — только при `TRUST_FORWARDED_FOR=true`.
-- **KI-032 закрыт:** кэш промптов инвалидируется между воркерами через
-  Redis Pub/Sub; локальный reset остаётся fallback'ом.
 - **Промпты из БД:** `load_system_prompt` стал async (читает `prompts`
   при промахе кэша и падает обратно на `.txt` при недоступной БД);
   вызовы в commentary service/streaming обновлены.
-- **KI-021 закрыт:** `LLMUsage.cost_usd`, `commentaries.cost_usd` и
-  OTel-атрибут `llm.cost_usd` считаются по `LLM_PRICE_*`/
-  `LLM_LOCAL_PRICE_*`.
 - **KI-030 / `club`:** промпт `club.txt` сокращён и получил few-shot
   примеры **без SAN**; пакет фактов для `club` — только топ-3 момента без
   PV (было до 10 с PV); заголовки моментов однозначно называют сторону и
@@ -494,6 +466,77 @@
   `scripts/export_dataset.py` реэкспортирует их (публичный контракт
   сохранён), API-слой импортирует только `app`. В CI docker-job добавлен
   smoke `docker run --rm chessannotator:ci python -c "import app.main"`.
+- **KI-033 закрыт (итерация 18):** аудит правки промпта пишется в
+  `PromptAdmin.after_edit` в той же транзакции, что и `prompts`; сбой
+  аудита откатывает правку.
+- **KI-032 закрыт (Pub/Sub кэша промптов):** канал `prompts_updates`,
+  watcher в lifespan, публикация после commit в админке — кэш промптов
+  инвалидируется между воркерами; локальный `reset_prompt_cache` остаётся
+  fallback'ом.
+- **KI-021 закрыт (итерация 17):** `LLMUsage.cost_usd`,
+  `commentaries.cost_usd` и OTel-атрибут `llm.cost_usd` считаются по
+  `LLM_PRICE_*`/`LLM_LOCAL_PRICE_*`.
+
+### Security
+
+- **Security review (T-110, итерация 34):** `pip-audit` — 3 уязвимости
+  до, 0 после; `python-jose`/`ecdsa` заменены на **PyJWT** (HS256,
+  формат токенов совместим); `Settings` падает в `APP_ENV=prod/
+  production` на dev/коротком `JWT_SECRET` и dev-`ADMIN_API_KEY`, а
+  также запрещает `CORS_ORIGINS=*` (при `allow_credentials=True`).
+  Проверены raw SQL/ORM (`llmops_dashboard.py`, `export_jobs/jobs.py`) —
+  пользовательский ввод параметризуется SQLAlchemy.
+- **Аудит экспорта датасета (KI-050, итерация 29):** после завершения
+  NDJSON-стрима `GET /v1/admin/exports/edits.jsonl` в `audit_logs`
+  пишется `dataset.export` с актором (`jwt:`/`session:`), фильтрами,
+  числом фактически выгруженных строк, `trace_id` и флагом `completed`
+  (best-effort, сбой не ломает ответ). Тесты — в
+  `tests/integration/test_admin_exports.py`.
+- **Timing-safe login (KI-043, итерация 27):** `DUMMY_PASSWORD_HASH`
+  (Argon2id с параметрами по умолчанию); `/auth/login` для несуществующего
+  email выполняет Argon2-verify и возвращает тот же 401 — медианы времени
+  ответа 55.4 / 54.8 мс (ratio 1.01).
+- **RBAC в Admin Panel (KI-045, итерация 27):** `AdminAuthGuard` выставляет
+  `request.state.admin_role`; auditor строго read-only — любые
+  POST/PUT/PATCH/DELETE в `/admin/**` → 403 `admin_forbidden`; role-aware
+  hooks (`PromptAdmin.can_edit`, `can_import`, `can_export`); admin и
+  legacy-пути сохраняют прежние права; read-only `LlmCallAdmin`.
+- **Auth tech debt (KI-036/KI-037, итерация 26):** пароли — **Argon2id**
+  (`argon2-cffi`, `$argon2id$`), legacy bcrypt-хеши перехешируются при
+  успешном входе (`verify_and_update`, лог `password_rehashed`). Refresh-токен
+  больше не возвращается в JSON: `/auth/login` и `/auth/refresh` кладут его
+  в HttpOnly-cookie (`SameSite=Lax`, `Path=/auth`, `Max-Age` = TTL, `Secure`
+  при `AUTH_COOKIE_SECURE=true`), добавлены настройки `AUTH_COOKIE_*`.
+  Новый `POST /auth/logout` отзывает `jti` в Redis
+  (`refresh_denylist:<jti>`, TTL до `exp`) и очищает cookie; повторное
+  использование отозванного токена → 401; ротация refresh инвалидирует
+  прежний `jti` (защита от replay). Access-токен на фронтенде — только в
+  памяти, `credentials: "include"`, single-flight refresh и bootstrap через
+  `/auth/refresh`, `localStorage` для токенов не используется.
+- **Admin JWT (T-028 финал, итерация 26):** `/admin` принимает access JWT
+  (`Authorization: Bearer` или cookie `access_token`): `admin`/`auditor` →
+  200, `user` → 403 `admin_forbidden`, битый/просроченный → 403, без
+  кредов → 401. Legacy `X-Admin-Token` и парольная форма сохранены как
+  fallback.
+- **Prompt Injection Guardrails (T-033, итерация 18):**
+  `app/security/guardrails.py` — NFKC-нормализация, удаление
+  control/zero-width/bidi, лимит 2000, 7 правил (override/leak/role/
+  jailbreak/role-tags, RU+EN); `inspect_user_input` → 422
+  `prompt_injection` в `/v1/chat` и `/chat/stream`; запрет раскрывать
+  системные инструкции в `CHAT_SYSTEM_PROMPT`.
+- **Security Audit (T-035, итерация 18):** append-only `audit_logs`
+  (`timestamp`, `actor`, `action`, `target_id`, `details`,
+  `prev_hash`, `current_hash`), миграция `f4a5b6c7d8e9`, hash-chain,
+  advisory-lock и триггер `UPDATE/DELETE/TRUNCATE`; аудит правки промпта,
+  `PATCH /v1/commentaries/{id}` и заблокированных инъекций; read-only
+  view и страница «Проверить целостность».
+- **`X-Admin-Token`:** constant-time защита `POST /v1/ingest`
+  (`ADMIN_API_KEY`).
+- **Feature-rate-limit на `/auth/login|register`** (10/мин на IP) —
+  базовая защита от перебора паролей.
+- **KI-031 закрыт:** тир `free/pro` больше не берётся из
+  `X-User-Tier`/`X-User-Id`; `pro` — только IP из `PRO_IPS`,
+  `X-Forwarded-For` — только при `TRUST_FORWARDED_FOR=true`.
 
 ## [0.1.0] — 2026-10-28
 

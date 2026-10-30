@@ -416,4 +416,34 @@ describe("api: Bearer из памяти и cookie-запросы", () => {
       language: "ru",
     });
   });
+
+  it("streamChat передаёт нормализованный язык i18n (KI-058)", async () => {
+    await authorize();
+    const { streamChat } = await import("./api");
+    const sse = 'event: done\ndata: {"tokens_used":5,"validated":true}\n\n';
+    fetchMock.mockResolvedValueOnce(
+      new Response(sse, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+      }),
+    );
+
+    await streamChat(
+      "42",
+      "club",
+      "Who played white?",
+      { onDelta: () => undefined },
+      [],
+      "en-US",
+    );
+
+    const { url, init } = callAt(fetchMock, 0);
+    expect(url).toBe("/v1/chat/stream");
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      analysis_id: 42,
+      level: "club",
+      message: "Who played white?",
+      language: "en",
+    });
+  });
 });

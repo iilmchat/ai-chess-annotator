@@ -24,10 +24,10 @@
 | Документ | Что внутри |
 | :--- | :--- |
 | [SPEC.md](development/SPEC.md) | **Источник истины:** цель, 7 модулей, три уровня, схема БД, API, промпты, стек, roadmap, критерии приёмки, non-functional |
-| [ARCHITECTURE.md](development/ARCHITECTURE.md) | Фактическая архитектура v0.1.0: модули, потоки данных, API, БД, frontend, Docker |
+| [ARCHITECTURE.md](development/ARCHITECTURE.md) | Фактическая архитектура v1.0.0: C4-диаграммы (Context/Container), модули, потоки данных, API, БД, локализация, frontend, Docker |
 | [DESIGN_ADMIN_AND_OPS.md](development/DESIGN_ADMIN_AND_OPS.md) | Production hardening: админ-панель, prompt registry, OTel-трейсинг, FinOps, semantic cache, guardrails, audit (T-028…T-035) |
 | [GETTING_STARTED.md](development/GETTING_STARTED.md) | Разворачивание за ~20 минут: Docker, venv, миграции, uvicorn, фронтенд, troubleshooting |
-| [../TODO.md](../TODO.md) | Последовательность задач T-001…T-035 с зависимостями, DoD и оценками |
+| [../TODO.md](../TODO.md) | Последовательность задач T-001…T-119 с зависимостями, DoD и оценками |
 
 ### Пользователю и QA
 
@@ -62,13 +62,14 @@
 | [reports/v0.9.0/](development/reports/v0.9.0/) | Отчёт итерации 32 — auth finalization (KI-041) и arq-воркер (KI-053) |
 | [reports/v0.10.0/](development/reports/v0.10.0/) | Отчёт итерации 33 — frontend auth-UX (KI-055) и retention экспортов (KI-054) |
 | [reports/v0.11.0/](development/reports/v0.11.0/) | Отчёт итерации 34 — security review (T-110), GHCR (T-027), English prompts (T-106), Grafana alerts (T-113) |
+| [reports/v1.0.0/](development/reports/v1.0.0/) | Отчёт итерации 35 — финализация v1.0.0: английские PDF/чат/ошибки API (KI-058), `/history` плейсхолдер, admin `export_jobs`, blind-test script, финальные docs (`ITERATION-35.md`) |
 | [reports/LLM_EVAL.md](development/reports/LLM_EVAL.md) | LLM-as-judge: средние оценки по трём шкалам (T-023) |
 
 ### Состояние проекта
 
 | Документ | Что внутри |
 | :--- | :--- |
-| [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секция `[Unreleased]` |
+| [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секции `[1.0.0]` и `[Unreleased]` |
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-058 со статусами, severity и планом закрытия |
 
 ### Тесты и данные

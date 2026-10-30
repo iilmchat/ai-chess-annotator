@@ -113,6 +113,29 @@ def test_select_diagrams_respects_max_critical() -> None:
     assert diagrams[0].caption.startswith("Финальная позиция")
 
 
+def test_select_diagrams_english_captions() -> None:
+    """T-106/KI-058: подписи диаграмм переводятся, SAN/номер хода — нет."""
+    diagrams = select_diagrams(
+        _snapshots(), initial_fen=_initial_fen(), language="en"
+    )
+
+    assert len(diagrams) == 3
+    assert diagrams[0].caption == "Final position (after 6 plies)"
+    assert diagrams[1].caption == "Critical moment: 2... Nc6 — blunder"
+    assert diagrams[2].caption == "Critical moment: 1... e5 — mistake"
+    assert diagrams[0].last_move_uci == "f8c5"
+    assert diagrams[1].fen == _snapshots()[3].fen
+
+
+def test_select_diagrams_unknown_language_keeps_russian() -> None:
+    diagrams = select_diagrams(
+        _snapshots(), initial_fen=_initial_fen(), language="de"
+    )
+
+    assert diagrams[0].caption == "Финальная позиция (после 6 полуходов)"
+
+
+
 def test_select_diagrams_without_moves_is_empty() -> None:
     assert select_diagrams((), initial_fen=STARTING_FEN) == ()
 
@@ -165,6 +188,35 @@ def test_pdf_embeds_board_image(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Финальная позиция" in text
     images: Iterator[object] = iter(reader.pages[0].images)
     assert next(images, None) is not None
+
+
+@pytest_pdf
+def test_pdf_english_board_section(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Английский PDF: заголовок раздела и подпись диаграммы на английском."""
+    monkeypatch.setattr(
+        "app.export.pdf.render_board_png",
+        lambda diagram: _png_bytes(),
+    )
+    data = CommentaryPdfData(
+        commentary_id=3,
+        white="A",
+        black="B",
+        moves=("e4", "e5"),
+        commentary_text="Commentary.",
+        diagrams=(
+            BoardDiagram(
+                fen=STARTING_FEN,
+                caption="Final position (after 2 plies)",
+            ),
+        ),
+    )
+    raw = build_commentary_pdf(data, language="en")
+    reader = PdfReader(io.BytesIO(raw))
+    text = "".join(page.extract_text() or "" for page in reader.pages)
+
+    assert "Positions on the board" in text
+    assert "Final position (after 2 plies)" in text
+    assert "Позиции на доске" not in text
 
 
 @pytest_pdf

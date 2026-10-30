@@ -15,7 +15,7 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel({ analysisId, level }: ChatPanelProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const key = conversationKey(analysisId, level);
   const messages = useChatStore((state) => state.messages[key]);
   const appendMessage = useChatStore((state) => state.append);
@@ -76,6 +76,7 @@ export function ChatPanel({ analysisId, level }: ChatPanelProps) {
           },
         },
         history,
+        i18n.language,
       );
       appendMessage(key, {
         role: "assistant",

@@ -32,6 +32,12 @@ function loadProfileOnce(accessToken: string): Promise<AuthUser> {
 
 interface AuthGateProps {
   children: ReactNode;
+  /**
+   * Итерация 35: на `/history` неподтверждённый пользователь должен увидеть
+   * собственный placeholder страницы, а не общий экран «Подтвердите email»
+   * (он остаётся для остальных приватных маршрутов).
+   */
+  allowUnverified?: boolean;
 }
 
 /**
@@ -40,7 +46,10 @@ interface AuthGateProps {
  * Пока идёт bootstrap по refresh-cookie (`initializing`), показываем loading,
  * иначе была бы ложная перезагрузка на /login.
  */
-export function AuthGate({ children }: AuthGateProps) {
+export function AuthGate({
+  children,
+  allowUnverified = false,
+}: AuthGateProps) {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
@@ -125,7 +134,7 @@ export function AuthGate({ children }: AuthGateProps) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (isUnverified && user) {
+  if (isUnverified && user && !allowUnverified) {
     return (
       <main className="auth-gate">
         <section className="panel auth-card auth-gate__card">

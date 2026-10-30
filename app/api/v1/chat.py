@@ -21,10 +21,12 @@ from app.auth.access import get_accessible_game
 from app.auth.deps import get_current_user
 from app.chat import answer_question
 from app.chat.streaming import stream_chat
+from app.config import Settings, get_settings
 from app.db.models import User
 from app.db.session import get_session
 from app.errors import PromptInjectionError
 from app.llm.calls import llm_call_context, stream_in_call_context
+from app.prompts import resolve_language
 from app.security.guardrails import inspect_user_input, sanitize_user_input
 
 router = APIRouter(tags=["chat"])
@@ -58,6 +60,13 @@ class ChatRequest(BaseModel):
         max_length=20,
         description="Предыдущие реплики (для контекста)",
     )
+    language: Literal["ru", "en"] | None = Field(
+        default=None,
+        description=(
+            "Язык ответа (T-106/KI-058); None — Accept-Language или "
+            "DEFAULT_LANGUAGE"
+        ),
+    )
 
     @field_validator("message")
     @classmethod
@@ -87,10 +96,13 @@ async def chat_stream(
     События: `meta` → `delta`* → `done` | `error`. Итоговый текст
     проверяется SAN-валидатором. Guardrails и история проверяются до
     обращения к БД за партией; доступ к партии — до LLM (KI-035).
+    Язык ответа — `language` (T-106/KI-058): поле → `Accept-Language` →
+    `DEFAULT_LANGUAGE`.
     """
     question = await _guard_message(request, payload.message)
     history = await _history(request, payload)
     await get_accessible_game(session, payload.analysis_id, user)
+    language = _request_language(payload, request)
     # T-030: генератор исполняется после возврата ответа — контекст LLM
     # выставляется обёрткой вокруг итерации стрима.
     return EventSourceResponse(
@@ -102,6 +114,7 @@ async def chat_stream(
                 question,
                 history=history,
                 settings=getattr(request.app.state, "settings", None),
+                language=language,
             ),
             operation="chat",
             actor_id=user.id,
@@ -121,7 +134,8 @@ async def chat(
     """Ответить на вопрос пользователя по анализу партии.
 
     Guardrails проверяются до обращения к БД за партией (как и раньше),
-    доступ к партии — до любого обращения к LLM (KI-035).
+    доступ к партии — до любого обращения к LLM (KI-035). Язык ответа —
+    `language` (T-106/KI-058): поле → `Accept-Language` → `DEFAULT_LANGUAGE`.
 
     Raises:
         NotFoundError: партия не найдена, чужая или для неё нет анализа (→ 404).
@@ -132,6 +146,7 @@ async def chat(
     question = await _guard_message(request, payload.message)
     history = await _history(request, payload)
     await get_accessible_game(session, payload.analysis_id, user)
+    language = _request_language(payload, request)
     # T-030: метрики вызова LLM в llm_calls (операция + владелец + партия).
     with llm_call_context(
         operation="chat",
@@ -146,6 +161,7 @@ async def chat(
             question,
             history=history,
             settings=getattr(request.app.state, "settings", None),
+            language=language,
         )
     return ChatResponse(
         reply=result.reply,
@@ -166,6 +182,21 @@ async def _history(
         if content:
             result.append({"role": item.role, "content": content})
     return result
+
+
+def _request_language(payload: ChatRequest, request: Request) -> str:
+    """Язык ответа: поле запроса → Accept-Language → DEFAULT_LANGUAGE."""
+    cfg = getattr(request.app.state, "settings", None)
+    default = (
+        cfg.default_language
+        if isinstance(cfg, Settings)
+        else get_settings().default_language
+    )
+    return resolve_language(
+        payload.language,
+        request.headers.get("accept-language"),
+        default,
+    )
 
 
 async def _guard_message(request: Request, message: str) -> str:

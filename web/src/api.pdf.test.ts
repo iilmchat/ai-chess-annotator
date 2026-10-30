@@ -108,6 +108,28 @@ describe("api: PDF комментария", () => {
     expect(init.credentials).toBe("include");
   });
 
+  it("передаёт language=en в query (KI-058)", async () => {
+    await authorize();
+    const { fetchCommentaryPdf } = await import("./api");
+    fetchMock.mockResolvedValueOnce(pdfResponse());
+
+    await fetchCommentaryPdf(7, "en-US");
+
+    const { url } = callAt(fetchMock, 0);
+    expect(url).toBe("/v1/commentaries/7/export/pdf?language=en");
+  });
+
+  it("нормализует не-английский язык в ru", async () => {
+    await authorize();
+    const { fetchCommentaryPdf } = await import("./api");
+    fetchMock.mockResolvedValueOnce(pdfResponse());
+
+    await fetchCommentaryPdf(7, "ru-RU");
+
+    const { url } = callAt(fetchMock, 0);
+    expect(url).toBe("/v1/commentaries/7/export/pdf?language=ru");
+  });
+
   it("ошибку сервера превращает в ApiError", async () => {
     await authorize();
     const { fetchCommentaryPdf } = await import("./api");

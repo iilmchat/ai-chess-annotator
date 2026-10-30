@@ -21,19 +21,21 @@ from app.cache import (
     store,
 )
 from app.chat.service import (
-    CHAT_SYSTEM_PROMPT,
     build_chat_prompt,
     format_chat_history,
+    load_chat_system_prompt,
 )
 from app.commentary.service import load_analyses, load_game, pv_positions
 from app.config import Settings, get_settings
 from app.engine.validator import extract_moves_from_text, validate_moves
 from app.errors import AppError
+from app.i18n import localize_error_detail
 from app.ingestion import parse_pgn
 from app.llm import BaseLLMClient, get_llm_client
 from app.llm.calls import record_cache_hit
 from app.llm.prompts import build_fact_package
 from app.llm.tokens import estimate_tokens
+from app.prompts import resolve_language
 from app.security.guardrails import sanitize_user_input
 from app.streaming import chunk_text, sse_event
 
@@ -51,9 +53,17 @@ async def stream_chat(
     history: list[dict[str, str]] | None = None,
     settings: Settings | None = None,
     client: BaseLLMClient | None = None,
+    language: str = "ru",
 ) -> AsyncIterator[dict[str, str]]:
-    """Ответить на вопрос потоком SSE-событий."""
+    """Ответить на вопрос потоком SSE-событий.
+
+    Args:
+        language: ``ru``/``en`` — язык ответа и системного промпта
+            (T-106/KI-058).
+    """
     cfg = settings or get_settings()
+    lang = resolve_language(language, None, cfg.default_language)
+    system_prompt = load_chat_system_prompt(lang)
     llm: BaseLLMClient | None = None
     owns_client = client is None
     try:
@@ -64,9 +74,11 @@ async def stream_chat(
             yield sse_event(
                 "error",
                 code="not_found",
-                detail=(
+                detail=localize_error_detail(
+                    "not_found",
                     f"Для партии {analysis_id} нет анализа — сначала вызовите "
-                    "/v1/analyze"
+                    "/v1/analyze",
+                    lang,
                 ),
             )
             return
@@ -77,7 +89,7 @@ async def stream_chat(
         prompt_hash_value = make_prompt_hash(
             level,
             model,
-            CHAT_SYSTEM_PROMPT,
+            system_prompt,
             question=question,
             history=history_text,
         )
@@ -94,7 +106,9 @@ async def stream_chat(
         if hit is not None:
             # KI-046: cache-hit в чате — тоже строка llm_calls (operation=chat).
             record_cache_hit(latency_ms=lookup_ms)
-            yield sse_event("meta", model="semantic-cache", level=level)
+            yield sse_event(
+                "meta", model="semantic-cache", level=level, language=lang
+            )
             for chunk in chunk_text(hit.text):
                 yield sse_event("delta", text=chunk)
             yield sse_event(
@@ -106,14 +120,14 @@ async def stream_chat(
             return
 
         package = build_fact_package(parsed, analyses, level)
-        prompt = build_chat_prompt(package, question, history)
+        prompt = build_chat_prompt(package, question, history, language=lang)
         llm = client if client is not None else get_llm_client(level, cfg)
         llm.set_level(level)
-        yield sse_event("meta", model=llm.model, level=level)
+        yield sse_event("meta", model=llm.model, level=level, language=lang)
 
         chunks: list[str] = []
         async for chunk in llm.stream_generate(
-            prompt, system_prompt=CHAT_SYSTEM_PROMPT
+            prompt, system_prompt=system_prompt
         ):
             chunks.append(chunk)
             yield sse_event("delta", text=chunk)
@@ -121,7 +135,11 @@ async def stream_chat(
         reply = "".join(chunks).strip()
         if not reply:
             yield sse_event(
-                "error", code="llm_empty", detail="Модель вернула пустой ответ"
+                "error",
+                code="llm_empty",
+                detail=localize_error_detail(
+                    "llm_empty", "Модель вернула пустой ответ", lang
+                ),
             )
             return
 
@@ -136,12 +154,16 @@ async def stream_chat(
             yield sse_event(
                 "error",
                 code="llm_invalid_output",
-                detail="Модель упомянула нелегальные ходы",
+                detail=localize_error_detail(
+                    "llm_invalid_output",
+                    "Модель упомянула нелегальные ходы",
+                    lang,
+                ),
                 illegal=illegal,
             )
             return
 
-        tokens_in = estimate_tokens(prompt) + estimate_tokens(CHAT_SYSTEM_PROMPT)
+        tokens_in = estimate_tokens(prompt) + estimate_tokens(system_prompt)
         tokens_out = estimate_tokens(reply)
         stored = await store(
             session,
@@ -160,7 +182,11 @@ async def stream_chat(
             validated=True,
         )
     except AppError as exc:
-        yield sse_event("error", code=exc.code, detail=exc.message)
+        yield sse_event(
+            "error",
+            code=exc.code,
+            detail=localize_error_detail(exc.code, exc.message, lang),
+        )
     except Exception as exc:
         logger.exception("stream_chat_failed", error=str(exc))
         yield sse_event(

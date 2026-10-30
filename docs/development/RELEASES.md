@@ -146,7 +146,7 @@ KI-001, KI-002, KI-006; они не блокируют продукт)
 | :--- | :--- | :--- |
 | Полная база ECO и транспозиции «относительно теории» | `python-chess` не поставляет ECO/opening book; нужен внешний источник (полиглот-книга) | KI-011 (T-017) |
 | Строгий контроль «PGN прочитан до конца» | `python-chess` молча обрывает разбор на неизвестном токене | KI-012 (T-017 или раньше) |
-| Перенос плоских тестов итерации 1 в `tests/unit|integration` | Не блокирует T-007, требует аккуратного разделения | KI-010 (T-008) |
+| Перенос плоских тестов итерации 1 в `tests/unit\|integration` | Не блокирует T-007, требует аккуратного разделения | KI-010 (T-008) |
 | API-эндпоинт и запись в БД | Это T-009 (требует T-008) | — |
 
 ### Метрики
@@ -2100,3 +2100,101 @@ KI-055.
 - **KI-058:** `prompts.language`, en-чат/PDF, вычитка промптов.
 - **T-113:** contact point (Slack/Telegram) и пороги под production LLM.
 - **T-111:** multi-tenant/RBAC.
+
+---
+
+## Итерация 35 — Final Polish & v1.0.0 Documentation (KI-058, T-024, T-106)
+
+**Дата:** 2026-11-01
+**Статус:** ⚠️ релиз v1.0.0 подготовлен; живой слепой тест (T-024) не
+выполнен, тег/GHCR — действие мейнтейнера.
+**Отчёт:** `docs/development/reports/v1.0.0/ITERATION-35.md`
+
+### Что сделано
+
+- [x] **KI-058, English для PDF.** `GET
+  /v1/commentaries/{id}/export/pdf` принимает `language` (`ru`/`en`;
+  иначе `Accept-Language` → `DEFAULT_LANGUAGE`); при `en` — английские
+  заголовки и подписи секций (Game, Moves, Commentary, Positions on the
+  board, Event, Date, Result, Level, Model, Status). PGN/SAN не зависят
+  от языка.
+- [x] **KI-058, язык чата.** `POST /v1/chat` и `/v1/chat/stream`
+  принимают `language` (иначе `Accept-Language` → `DEFAULT_LANGUAGE`);
+  английский системный промпт — `app/prompts/chat_en.txt`; retry-подсказка
+  и ответ сохраняют язык.
+- [x] **KI-058, локализация ошибок API.** `detail` доменных `AppError`
+  выбирается по `Accept-Language` (`app/i18n.py`): при запросе `en` для
+  известного `code` возвращается английский текст, иначе — исходное
+  сообщение; `code` и HTTP-статус не меняются, формат
+  `{"detail", "code"}` сохранён.
+- [x] **KI-058 закрыт** в объёме v1.0.0; остатки (русский факт-пакет,
+  en-промпты файлами без редактирования в админке, нет вычитки
+  носителем) зафиксированы внутри записи KI-058, новых KI не заводилось.
+- [x] **Web UX: `/history` для неподтверждённых.** Плейсхолдер
+  «Подтвердите email, чтобы увидеть историю» вместо пустого списка при
+  `is_verified=false` (admin/auditor bypass); i18n RU/EN.
+- [x] **Admin: read-only `export_jobs`.** View в `/admin` — таблица
+  фоновых выгрузок (status/rows/size/sha256/timestamps) с фильтром по
+  `status`; создание и правка через view запрещены (admin/auditor).
+- [x] **T-024: blind-test script.** `scripts/generate_blind_test.py` —
+  3 партии с анализом × 3 уровня, слоты `A`/`B`/`C` перемешиваются
+  засеянным `random.Random(seed)`; на выходе `game_N_X.txt`,
+  `answer_form.md` (уровни не раскрыты) и `answers_key.json` для
+  организатора; `--dry-run` работает без LLM, exit codes 0/2. Живой
+  тест с людьми не проводился (см. ниже); в `TODO.md` T-024 помечен
+  `[x]` с явной пометкой «скрипт готов, живой тест — вручную».
+- [x] **Версия 1.0.0.** `pyproject.toml`, `app/__init__.py`,
+  `web/package.json`; CHANGELOG `[1.0.0] - 2026-11-01`.
+- [x] **Финальные документы.** README (v1.0.0, docker compose quick start:
+  dev/prod/observability, обновлённая таблица статуса), CHANGELOG (весь
+  Unreleased сгруппирован в `Added`/`Changed`/`Fixed`/`Security`,
+  дублирующиеся заголовки убраны), ARCHITECTURE (C4 Context/Container,
+  локализация, фоновые выгрузки, актуализация API/тестов/развёртывания),
+  GETTING_STARTED (проверенные команды, раздел «Запуск тестов и E2E
+  локально», LM Studio/DeepSeek, исправления устаревших инструкций),
+  docs/README (отчёт v1.0.0 в индексе), KNOWN_ISSUES (KI-058 → Closed,
+  сводка 25 Open / 33 Closed), TODO (T-024 и отметки итерации 35).
+
+### Метрики
+
+> Финальные числа итерации 35 — полный прогон на изолированной БД
+> `chessannotator_iter35` (PostgreSQL 5435, Redis 6382, Stockfish 17).
+
+- **Backend-тесты:** **869 passed, 3 skipped, 1 xfailed** (77 файлов,
+  **338.69 с**, exit 0). Skip — 2 cairo-кейса на Windows-dev и
+  `DEEPSEEK_API_KEY` не задан; xfail — KI-012.
+- **Frontend-тесты:** **58 passed** (8 файлов); typecheck 0; build 6.74 с
+  (JS 483.63 КБ / gzip 150.45, CSS 15.70 КБ / gzip 4.09).
+- **E2E mocked:** **30 passed** (15 сценариев × 2, 21.5 с); локально
+  `E2E_PREVIEW=1`, CI — `pnpm dev`.
+- **ruff / mypy:** 0 / 0 (strict, 85 файлов); **alembic:** схема не
+  менялась, head `dcf1da1421cd`.
+- **Версия:** `1.0.0` (pyproject/app/web).
+- **KI:** 58 записей, **25 Open, 33 Closed** (KI-058 закрыт).
+- **Docker/GHCR:** образ не собирался и не публиковался в этой сессии —
+  job `publish-docker` сработает по тегу `v*`.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Живой слепой тест уровней (10 шахматистов, ≥ 80%) | Нужны реальные участники; инструмент (`scripts/generate_blind_test.py`) готов | T-024 |
+| Тег `v1.0.0` и публикация в GHCR | Действие мейнтейнера: `git tag v1.0.0 && git push origin v1.0.0`; workflow готов | T-027 |
+| Docker build в этой сессии | В рамках документационной итерации не подтверждён; CI-job `docker` собирает образ и делает smoke `import app.main` | CI |
+| Вычитка EN-промптов и текстов носителем | Нет native speaker'а в команде | KI-058 (residual c) |
+| en-промпты в админке (`prompts.language`) | Требует миграции и UI; в v1.0.0 en — файлами | KI-058 (residual b) |
+| Русский факт-пакет для en-генерации | Отдельный объём перевода фактов; LLM пересказывает ru-пакет | KI-058 (residual a) |
+| LoRA-обучение (KI-030) | Нет GPU | KI-030 |
+| Signed URL экспортов | Требует TTL/scope-дизайна | KI-057 |
+
+### Что дальше
+
+- **Релиз:** `git tag v1.0.0` + `git push origin v1.0.0`; проверить
+  `publish-docker` и GHCR-теги `:v1.0.0`/`:1.0.0`/`:latest`.
+- **T-024:** провести живой слепой тест с 10 шахматистами по материалам
+  из `scripts/generate_blind_test.py`, оформить отчёт.
+- **KI-058 residuals:** вычитка EN native speaker'ом, `prompts.language`
+  (en-промпты в БД и админке), `commentaries.language` для аналитики.
+- **KI-030:** качество LLM (промпты/обучение LoRA при появлении GPU).
+- **KI-057:** signed URL для скачивания экспортов.
+- **T-111…T-119:** multi-tenant/RBAC, SSO, backup/DR, k8s — Backlog.

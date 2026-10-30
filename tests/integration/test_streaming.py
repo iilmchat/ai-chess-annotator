@@ -16,8 +16,11 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.chat.service import load_chat_system_prompt
 from app.config import get_settings
 from app.db.models import Commentary, Game
+from app.errors import LLMNotConfiguredError
+from app.i18n import ERROR_MESSAGES
 from app.llm.base import BaseLLMClient, LLMResult, LLMUsage
 from app.main import create_app
 
@@ -35,10 +38,14 @@ class FakeStreamingLLM(BaseLLMClient):
     def __init__(self, chunks: list[str]) -> None:
         super().__init__(model="fake-stream")
         self.chunks = chunks
+        self.prompts: list[str] = []
+        self.system_prompts: list[str | None] = []
 
     async def complete(
         self, prompt: str, system_prompt: str | None = None
     ) -> LLMResult:
+        self.prompts.append(prompt)
+        self.system_prompts.append(system_prompt)
         return LLMResult(
             text="".join(self.chunks),
             usage=LLMUsage(
@@ -49,6 +56,8 @@ class FakeStreamingLLM(BaseLLMClient):
     async def stream_generate(
         self, prompt: str, system_prompt: str | None = None
     ) -> AsyncIterator[str]:
+        self.prompts.append(prompt)
+        self.system_prompts.append(system_prompt)
         for chunk in self.chunks:
             yield chunk
 
@@ -180,6 +189,70 @@ def test_chat_stream_sends_done(monkeypatch: pytest.MonkeyPatch) -> None:
             assert events[-1][1]["tokens_used"] > 0
         finally:
             asyncio.run(_delete_game(analysis_id))
+
+
+def test_chat_stream_english_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-106/KI-058: meta.language и английский системный промпт."""
+    fake = FakeStreamingLLM(["White played white."])
+    monkeypatch.setattr("app.chat.streaming.get_llm_client", lambda level, cfg: fake)
+    with _client() as client:
+        analyze = client.post("/v1/analyze", json={"pgn": SHORT_PGN, "level": "club"})
+        analysis_id = int(analyze.json()["analysis_id"])
+        try:
+            response = client.post(
+                "/v1/chat/stream",
+                json={
+                    "analysis_id": analysis_id,
+                    "level": "club",
+                    "message": "Who played white?",
+                    "language": "en",
+                },
+            )
+            assert response.status_code == 200, response.text
+            events = _events(response.text)
+            assert events[0][0] == "meta"
+            assert events[0][1]["language"] == "en"
+            assert fake.system_prompts[0] == load_chat_system_prompt("en")
+            assert "# User question" in fake.prompts[0]
+            assert events[-1][0] == "done"
+        finally:
+            asyncio.run(_delete_game(analysis_id))
+
+
+def test_chat_stream_error_detail_localized_to_english(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SSE `error` с известным кодом тоже локализуется (KI-058)."""
+    def _raise(level: str, cfg: object) -> None:
+        raise LLMNotConfiguredError("Для уровня gm не задан ключ")
+
+    monkeypatch.setattr("app.chat.streaming.get_llm_client", _raise)
+    with _client() as client:
+        analyze = client.post("/v1/analyze", json={"pgn": SHORT_PGN, "level": "club"})
+        analysis_id = int(analyze.json()["analysis_id"])
+        try:
+            response = client.post(
+                "/v1/chat/stream",
+                json={
+                    "analysis_id": analysis_id,
+                    "level": "club",
+                    "message": "Who played white?",
+                    "language": "en",
+                },
+            )
+            assert response.status_code == 200, response.text
+            events = _events(response.text)
+            assert events[-1][0] == "error"
+            assert events[-1][1]["code"] == "llm_not_configured"
+            assert (
+                events[-1][1]["detail"]
+                == ERROR_MESSAGES["llm_not_configured"]["en"]
+            )
+        finally:
+            asyncio.run(_delete_game(analysis_id))
+
 
 
 async def _read_commentaries(game_id: int) -> list[Commentary]:

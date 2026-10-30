@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 import structlog
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
@@ -40,7 +40,11 @@ from app.errors import (
     PdfFontUnavailableError,
 )
 from app.export.board import BoardDiagram, MoveSnapshot, select_diagrams
-from app.export.pdf import CommentaryPdfData, build_commentary_pdf
+from app.export.pdf import (
+    CommentaryPdfData,
+    PdfLanguage,
+    build_commentary_pdf,
+)
 from app.ingestion import STARTING_FEN, parse_pgn
 from app.llm.calls import attach_commentary_id, llm_call_context, stream_in_call_context
 from app.prompts import resolve_language
@@ -283,16 +287,27 @@ async def export_commentary_pdf(
     commentary_id: Annotated[
         int, Path(gt=0, description="ID комментария из /v1/commentary")
     ],
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     user: Annotated[User, Depends(get_current_user)],
     settings: Annotated[Settings, Depends(get_settings)],
+    language: Annotated[
+        PdfLanguage | None,
+        Query(
+            description=(
+                "Язык подписей PDF: ru | en; None — Accept-Language или "
+                "DEFAULT_LANGUAGE"
+            )
+        ),
+    ] = None,
 ) -> StreamingResponse:
     """Скачать комментарий в PDF (T-107).
 
     PDF собирается серверно (`app.export.pdf`, fpdf2 + TTF-шрифт):
     шапка с игроками/турниром, PGN-ходы, текст комментария и метаданные.
-    Генерация CPU-bound и выполняется в `asyncio.to_thread`, чтобы не
-    блокировать event loop.
+    Подписи локализуются (`language`, T-106/KI-058); сам текст комментария
+    и PGN-метаданные не переводятся. Генерация CPU-bound и выполняется в
+    `asyncio.to_thread`, чтобы не блокировать event loop.
 
     Доступ — как к комментарию: владелец партии или администратор;
     чужая запись → 404 (KI-035).
@@ -303,6 +318,7 @@ async def export_commentary_pdf(
         PdfExportError: не удалось сформировать PDF (→ 500).
     """
     commentary = await get_accessible_commentary(session, commentary_id, user)
+    lang = _resolve_language(language, request, settings)
     game = await session.get(Game, commentary.game_id)
     if game is None:  # pragma: no cover - FK commentary.game_id гарантирует
         raise NotFoundError(f"Партия комментария {commentary_id} не найдена")
@@ -341,6 +357,7 @@ async def export_commentary_pdf(
             initial_fen=(
                 parsed.initial_fen if parsed is not None else STARTING_FEN
             ),
+            language=lang,
         )
     except Exception as exc:
         logger.warning(
@@ -367,7 +384,7 @@ async def export_commentary_pdf(
     )
     try:
         pdf_bytes = await asyncio.to_thread(
-            build_commentary_pdf, data, settings
+            build_commentary_pdf, data, settings, language=lang
         )
     except PdfFontUnavailableError:
         raise
@@ -402,16 +419,25 @@ def _rag_builder(request: Request) -> RagContextBuilder | None:
     return builder if callable(builder) else None
 
 
-def _request_language(payload: CommentaryRequest, request: Request) -> str:
-    """Язык комментария: поле запроса → Accept-Language → DEFAULT_LANGUAGE."""
-    cfg = getattr(request.app.state, "settings", None)
+def _resolve_language(
+    requested: str | None,
+    request: Request,
+    settings: Settings | None = None,
+) -> str:
+    """Язык ответа: параметр/поле запроса → Accept-Language → DEFAULT_LANGUAGE."""
+    cfg = settings or getattr(request.app.state, "settings", None)
     default = (
         cfg.default_language
         if isinstance(cfg, Settings)
         else get_settings().default_language
     )
     return resolve_language(
-        payload.language,
+        requested,
         request.headers.get("accept-language"),
         default,
     )
+
+
+def _request_language(payload: CommentaryRequest, request: Request) -> str:
+    """Язык комментария: поле запроса → Accept-Language → DEFAULT_LANGUAGE."""
+    return _resolve_language(payload.language, request)

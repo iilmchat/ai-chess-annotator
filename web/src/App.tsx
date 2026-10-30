@@ -39,7 +39,9 @@ export default function App() {
             <Route
               path="/history"
               element={
-                <AuthGate>
+                // Итерация 35: страница сама показывает placeholder для
+                // неподтверждённого пользователя (без запроса партий).
+                <AuthGate allowUnverified>
                   <HistoryPage />
                 </AuthGate>
               }

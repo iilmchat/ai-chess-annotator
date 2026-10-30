@@ -226,7 +226,8 @@ llm_evaluations(id, model, level, accuracy_score, usefulness_score,
 - `GET /v1/users/me/usage` — `tier`, `used_tokens`, `limit_tokens`,
   `remaining_tokens`, `reset_at`, `enabled`; субъект — IP + `PRO_IPS`.
 - `POST /v1/chat` и `/v1/chat/stream` принимают `history` (до 20 реплик
-  `user`/`assistant`); user-реплики повторно проверяются guardrails.
+  `user`/`assistant`) и `language` (`ru`/`en`, T-106/KI-058);
+  user-реплики повторно проверяются guardrails.
 
 **Индексы:** `moves(game_id, ply)`,
 `annotated_games USING ivfflat (embedding vector_cosine_ops)`,
@@ -243,10 +244,10 @@ multipv)` — уникальный ключ кэша движка + `engine_cach
 |---|---|---|
 | `POST` | `/v1/analyze` | Принимает PGN/FEN, `level`, возвращает структурированный анализ (moves, evals, motifs). **Без LLM** — быстро. |
 | `POST` | `/v1/commentary` | Принимает `analysis_id` или PGN, `level`, `style`, `language` (`ru`/`en`, T-106), возвращает сгенерированный комментарий. |
-| `POST` | `/v1/chat` | Чат по партии: `{analysis_id, message}` → ответ LLM с проверкой вариантов. |
+| `POST` | `/v1/chat` | Чат по партии: `{analysis_id, message, language?}` → ответ LLM с проверкой вариантов. |
 | `GET` | `/v1/games/{id}` | Метаданные партии и сохранённые комментарии. |
 | `PATCH` | `/v1/commentaries/{id}` | Правка комментария (human-in-the-loop). |
-| `GET` | `/v1/commentaries/{id}/export/pdf` | PDF-экспорт комментария: шапка партии, ходы, текст; диаграмма финальной позиции и критических моментов при доступном `cairosvg` (T-107/T-107b); `Content-Disposition: attachment`. |
+| `GET` | `/v1/commentaries/{id}/export/pdf` | PDF-экспорт комментария: шапка партии, ходы, текст; диаграмма финальной позиции и критических моментов при доступном `cairosvg` (T-107/T-107b); query `language` (`ru`/`en`) — язык подписей (T-106/KI-058); `Content-Disposition: attachment`. |
 | `GET` | `/v1/admin/exports/edits.jsonl` | Streaming-выгрузка датасета правок в NDJSON (admin/auditor, JWT или cookie админки). |
 | `POST` | `/v1/admin/exports/jobs` | Создать фоновую выгрузку (202): фильтры как у стрима; только admin/legacy (KI-050). |
 | `GET` | `/v1/admin/exports/jobs[/{id}]` | Список/статус джоб выгрузки (`queued/running/done/failed`, download_url). |
@@ -283,6 +284,10 @@ access JWT admin/auditor. Чтение/запись партий, ходов,
 `Accept-Language` → `DEFAULT_LANGUAGE` (по умолчанию `ru`); для `en`
 используются `app/prompts/<level>_en.txt`, факт-пакет остаётся русским
 (промпт требует перевести подписи, сохранив SAN/оценки).
+**Локализация ошибок (KI-058):** `Accept-Language: en` отдаёт английский
+`detail` для известных кодов (`app/i18n.py`); по умолчанию — исходный
+русский текст, неизвестный код — без перевода, `internal_error` (500) не
+переводится никогда; `code` от языка не зависит.
 **FinOps:** дневной бюджет токенов считается по `user:{id}` из JWT,
 анонимно — по IP.
 

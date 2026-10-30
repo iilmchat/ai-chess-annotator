@@ -112,7 +112,7 @@ export function CommentaryPanel({ analysisId, level }: CommentaryPanelProps) {
     setPdfBusy(true);
     setError(null);
     try {
-      await downloadCommentaryPdf(commentary.commentary_id);
+      await downloadCommentaryPdf(commentary.commentary_id, i18n.language);
     } catch (cause) {
       setError(errorMessage(cause, t("common.unknown")));
     } finally {
