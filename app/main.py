@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -20,9 +21,6 @@ from arq.connections import ArqRedis, RedisSettings, create_pool
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
-import sys
-import asyncio
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
