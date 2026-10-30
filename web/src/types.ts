@@ -12,6 +12,8 @@ export interface AuthUser {
   is_active: boolean;
   //: KI-041: подтверждён ли email (генерация недоступна без него).
   is_verified: boolean;
+  //: T-082: отображаемое имя; null/undefined — пользователь его не задавал.
+  display_name?: string | null;
   created_at: string;
 }
 

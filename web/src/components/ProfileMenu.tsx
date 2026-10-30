@@ -84,6 +84,18 @@ export function ProfileMenu() {
             type="button"
             role="menuitem"
             className="profile-menu__item"
+            data-testid="profile-menu-link"
+            onClick={() => {
+              setOpen(false);
+              navigate("/profile");
+            }}
+          >
+            {t("profile.menu")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="profile-menu__item"
             onClick={() => {
               void signOut(false);
             }}

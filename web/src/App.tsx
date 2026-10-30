@@ -8,6 +8,7 @@ import { Skeleton } from "./components/Skeleton";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import HistoryPage from "./pages/HistoryPage";
 import LoginPage from "./pages/LoginPage";
+import ProfilePage from "./pages/ProfilePage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import VerifyEmailPage from "./pages/VerifyEmailPage";
 import { bootstrapAuth } from "./stores/authStore";
@@ -61,6 +62,15 @@ export default function App() {
                 element={
                   <AuthGate>
                     <AnalysisPage />
+                  </AuthGate>
+                }
+              />
+              {/* T-082: профиль — приватный маршрут, как и остальные. */}
+              <Route
+                path="/profile"
+                element={
+                  <AuthGate>
+                    <ProfilePage />
                   </AuthGate>
                 }
               />

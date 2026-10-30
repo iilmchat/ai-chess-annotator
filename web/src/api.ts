@@ -18,7 +18,10 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
-/** Эти эндпоинты сами выдают/обновляют токены — refresh для них запрещён. */
+/**
+ * Эти эндпоинты сами выдают/обновляют токены либо отвечают 401 не из-за
+ * истёкшего access-токена — refresh для них запрещён.
+ */
 const NO_REFRESH_PATHS = new Set([
   "/auth/login",
   "/auth/register",
@@ -28,6 +31,10 @@ const NO_REFRESH_PATHS = new Set([
   "/auth/verify-email",
   "/auth/forgot-password",
   "/auth/reset-password",
+  // T-082: 401 с code invalid_credentials — это неверный текущий пароль,
+  // а не протухший access-токен; повтор после refresh заново отправлял бы
+  // неверный пароль (и мог бы дважды считать попытку).
+  "/auth/change-password",
 ]);
 
 /** Путь без query-строки — `verify-email` приходит с `?token=…`. */
@@ -157,7 +164,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return throwForResponse(response);
   }
 
-  return (await response.json()) as T;
+  // Некоторые эндпоинты (например, `POST /auth/change-password`) отвечают
+  // 200 с пустым телом — `response.json()` на нём упал бы с SyntaxError.
+  const text = await response.text();
+  if (!text) {
+    return undefined as unknown as T;
+  }
+  return JSON.parse(text) as T;
 }
 
 /** `POST /auth/register` — создаёт пользователя, токены не выдаёт. */
@@ -187,6 +200,39 @@ export async function loginUser(
 /** `GET /auth/me` — профиль текущего пользователя. */
 export function getMe(): Promise<AuthUser> {
   return request<AuthUser>("/auth/me");
+}
+
+/**
+ * `PATCH /auth/me` — сохранить отображаемое имя и предпочитаемый уровень
+ * (T-082). Поля, которых нет в `payload`, backend не меняет; `display_name`
+ * обрезается по краям на стороне backend (пустое имя отклоняется 422).
+ */
+export function updateProfile(payload: {
+  display_name?: string;
+  level?: Level;
+}): Promise<AuthUser> {
+  return request<AuthUser>("/auth/me", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * `POST /auth/change-password` — сменить пароль под текущей сессией (T-082).
+ *
+ * Ответ 200 может быть с пустым телом — тело ответа не используется.
+ */
+export function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  return request<void>("/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
 }
 
 /**
