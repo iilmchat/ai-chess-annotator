@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { formatEval, movePrefix, START_FEN } from "../lib/format";
@@ -9,6 +9,7 @@ import {
   downloadTextFile,
   type PgnPosition,
 } from "../lib/pgn";
+import { applyUserMove, formatVariantLine } from "../lib/variant";
 import type { AnalyzeResponse, Level } from "../types";
 import { Board } from "./Board";
 import { ChatPanel } from "./ChatPanel";
@@ -64,6 +65,45 @@ export function AnalysisWorkspace({
   const fen =
     selectedPosition?.fen ??
     (initialFen || analysis?.initial_fen || START_FEN);
+
+  /**
+   * Вариант — отклонение от основной линии: пользователь двигает фигуры на
+   * доске от текущего полухода. Состояние живёт отдельно от стора, потому что
+   * оно привязано именно к текущей позиции основной линии: при смене
+   * `selectedPly` (навигация, клик по графику/списку ходов) или при новом
+   * разборе вариант сбрасывается.
+   */
+  const [variant, setVariant] = useState<{
+    fen: string;
+    sans: string[];
+    uci: string;
+  } | null>(null);
+
+  useEffect(() => {
+    setVariant(null);
+  }, [selectedPly, analysis]);
+
+  /**
+   * Перетаскивание фигуры: пробуем применить ход к текущей позиции варианта
+   * (или основной линии, если варианта ещё нет). Нелегальный ход не
+   * принимается — фигура возвращается назад.
+   */
+  function handlePieceDrop(from: string, to: string): boolean {
+    const applied = applyUserMove(variant?.fen ?? fen, from, to);
+    if (!applied) {
+      return false;
+    }
+    setVariant((prev) => ({
+      fen: applied.fen,
+      sans: [...(prev?.sans ?? []), applied.san],
+      uci: applied.uci,
+    }));
+    return true;
+  }
+
+  /** Позиция и подсветка последнего хода с учётом варианта. */
+  const boardFen = variant?.fen ?? fen;
+  const boardLastMove = variant?.uci ?? selectedPosition?.uci ?? null;
 
   /**
    * Скачать аннотированный PGN. Синхронно: оценки/классификации уже есть в
@@ -164,13 +204,41 @@ export function AnalysisWorkspace({
           <div className="skeleton skeleton--board" />
         ) : (
           <>
+            {analysis && variant ? (
+              <div className="variant-bar" data-testid="variant-bar">
+                <span className="variant-bar__label">
+                  {t("analysis.variant.label")}
+                </span>
+                <span className="variant-line" data-testid="variant-line">
+                  {formatVariantLine(selectedPly, variant.sans)}
+                </span>
+                <button
+                  type="button"
+                  className="button button--ghost button--small"
+                  data-testid="variant-reset"
+                  onClick={() => setVariant(null)}
+                >
+                  {t("analysis.variant.reset")}
+                </button>
+              </div>
+            ) : null}
+            {analysis && !variant ? (
+              <p className="variant-hint" data-testid="variant-hint">
+                {t("analysis.variant.hint")}
+              </p>
+            ) : null}
             <div className="board-row">
               <EvalBar
                 evalCp={selectedMove?.eval_cp ?? null}
                 mate={selectedMove?.mate ?? null}
               />
               <div className="board-wrap">
-                <Board fen={fen} lastMove={selectedPosition?.uci ?? null} />
+                <Board
+                  fen={boardFen}
+                  lastMove={boardLastMove}
+                  interactive={Boolean(analysis)}
+                  onPieceDrop={handlePieceDrop}
+                />
               </div>
             </div>
             <NavigationControls

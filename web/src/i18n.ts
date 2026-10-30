@@ -141,6 +141,11 @@ const resources = {
         backToHistory: "К истории",
         missingId: "Не указан ID партии.",
         notFound: "Партия не найдена или ещё не разобрана.",
+        variant: {
+          label: "Вариант",
+          reset: "Сбросить на партию",
+          hint: "Двигайте фигуры на доске, чтобы посмотреть вариант.",
+        },
         nav: {
           label: "Навигация по партии",
           toStart: "В начало",
@@ -176,6 +181,12 @@ const resources = {
         analyzing: "Анализирую… до 30 с",
         example: "Пример",
         placeholder: "Вставьте PGN партии",
+        upload: "Загрузить файл",
+        uploadHint: "Файл .pgn до 1 МБ",
+        uploadTooLarge: "Файл больше 1 МБ — выберите другой PGN.",
+        uploadWrongType: "Нужен файл с расширением .pgn.",
+        uploadEmpty: "Файл пустой.",
+        uploadError: "Не удалось прочитать файл.",
         help:
           "Анализ выполняет Stockfish: оценки, лучшие ходы, мотивы и рекомендация под выбранный уровень.",
       },
@@ -419,6 +430,11 @@ const resources = {
         backToHistory: "Back to history",
         missingId: "Game id is missing.",
         notFound: "Game not found or not analyzed yet.",
+        variant: {
+          label: "Variation",
+          reset: "Reset to game",
+          hint: "Drag pieces on the board to explore a variation.",
+        },
         nav: {
           label: "Game navigation",
           toStart: "To start",
@@ -454,6 +470,12 @@ const resources = {
         analyzing: "Analyzing… up to 30 s",
         example: "Example",
         placeholder: "Paste a PGN game",
+        upload: "Upload file",
+        uploadHint: ".pgn file up to 1 MB",
+        uploadTooLarge: "The file is larger than 1 MB — pick another PGN.",
+        uploadWrongType: "A file with the .pgn extension is required.",
+        uploadEmpty: "The file is empty.",
+        uploadError: "Could not read the file.",
         help:
           "Stockfish computes evaluations, best moves, motifs and a level-aware recommendation.",
       },
