@@ -20,6 +20,7 @@ const REFRESHED: RefreshResponse = {
     email: EMAIL,
     level: "club",
     role: "user",
+    tier: "free",
     is_active: true,
     is_verified: true,
     created_at: "2026-10-29T10:00:00Z",

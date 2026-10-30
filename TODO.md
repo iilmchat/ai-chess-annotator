@@ -888,6 +888,44 @@
 - **Статус:** выполнено (итерация 39); реальная отправка письма требует
   SMTP-кредов (в этой среде — mock).
 
+### [x] T-083. Stripe Checkout и webhook (итерация 40)
+- **Зависит от:** T-028, T-031
+- **Что:** `stripe` в `pyproject.toml`; `STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` в `Settings`; миграция
+  `users.tier` (free/pro, CHECK, backfill admin/auditor → pro) и
+  `users.stripe_customer_id` (nullable UNIQUE); `POST
+  /v1/billing/create-checkout-session` (найти/создать Customer, вернуть
+  `{url}`); `POST /v1/billing/create-portal-session`; `POST
+  /v1/billing/webhook` с `stripe.Webhook.construct_event`:
+  `checkout.session.completed` → `tier='pro'`, `customer.subscription.deleted`
+  → `tier='free'`.
+- **DoD:** миграция применена; webhook с mock-событием обновляет тариф в
+  БД; checkout возвращает URL; тесты подписи/идемпотентности зелёные.
+- **Статус:** выполнено (итерация 40); реальные ключи Stripe не задавались —
+  сетевые вызовы покрыты unit-тестами с моком SDK.
+
+### [x] T-084. Frontend billing: модалка Pro, success/cancel, профиль (итерация 40)
+- **Зависит от:** T-083
+- **Что:** кнопка «Оформить подписку» в модалке лимита (`POST
+  /v1/billing/create-checkout-session` → `window.location.href`);
+  страницы `/billing/success` и `/billing/cancel`; блок «Моя подписка» в
+  `/profile` (текущий тариф, «Управлять подпиской» → Customer Portal);
+  i18n RU/EN, E2E `billing`.
+- **DoD:** кнопка редиректит на Stripe (mock URL в E2E); success/cancel
+  открываются; профиль показывает free/pro и ведёт в портал; тесты
+  зелёные.
+- **Статус:** выполнено (итерация 40).
+
+### [x] T-085. FinOps: тир из `users.tier` в БД (итерация 40)
+- **Зависит от:** T-083
+- **Что:** `TokenBudgetMiddleware` и `GET /v1/users/me/usage` читают тир из
+  `users.tier` (PK-lookup), а не из роли JWT/`PRO_IPS`; при ошибке БД —
+  безопасный `free`; `PRO_IPS` помечен устаревшим и не используется;
+  `UserProfile.tier` в `/auth/me`.
+- **DoD:** free/pro-лимиты различаются по БД; роль admin без `tier='pro'`
+  получает free; unit/integration-тесты зелёные.
+- **Статус:** выполнено (итерация 40).
+
 ## Backlog (после MVP)
 
 - **T-101.** Leela Chess Zero как второй движок для гроссмейстерского

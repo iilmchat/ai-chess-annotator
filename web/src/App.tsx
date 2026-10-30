@@ -5,6 +5,8 @@ import { AuthGate } from "./components/AuthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
 import { Skeleton } from "./components/Skeleton";
+import BillingCancelPage from "./pages/BillingCancelPage";
+import BillingSuccessPage from "./pages/BillingSuccessPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import HistoryPage from "./pages/HistoryPage";
 import LoginPage from "./pages/LoginPage";
@@ -39,6 +41,10 @@ export default function App() {
               <Route path="/verify-email" element={<VerifyEmailPage />} />
               <Route path="/forgot-password" element={<ForgotPasswordPage />} />
               <Route path="/reset-password" element={<ResetPasswordPage />} />
+              {/* T-083: возврат из Stripe Checkout. Публичные маршруты —
+                  сессия восстанавливается по refresh-cookie. */}
+              <Route path="/billing/success" element={<BillingSuccessPage />} />
+              <Route path="/billing/cancel" element={<BillingCancelPage />} />
               <Route
                 path="/"
                 element={

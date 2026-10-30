@@ -2503,3 +2503,86 @@ KI-055.
 - Настроить реальный SMTP-провайдер (`EMAIL_SENDER=smtp`).
 - Проверить установку PWA на iOS/Android вручную.
 - Пост-релизный бэклог: T-111…T-119, KI-030, KI-023 (атрибуция оценок).
+
+## Итерация 40 — Stripe Integration & Billing (T-083, T-084, T-085)
+
+**Дата:** 2026-10-30
+**Статус:** ✅ завершена. Версия — **1.2.0** (бамп не делался; каталог
+отчёта `v1.4.0` — по постановке итерации 40).
+
+### Сделано
+
+- [x] **T-083, Stripe Checkout и webhook.** `stripe>=16.1` в зависимостях;
+  `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`/`STRIPE_PRICE_ID` в
+  `Settings` (+ `billing_configured`/`billing_webhook_configured`).
+  Миграция `f2b3c4d5e6a7`: `users.tier` (`free`/`pro`, NOT NULL,
+  server_default `free`, CHECK `ck_users_tier`, backfill admin/auditor →
+  pro) и `users.stripe_customer_id` (nullable UNIQUE). Новый пакет
+  `app/billing/`: `BillingGateway`/`StripeBilling` (Customer
+  find-or-create, Checkout `mode=subscription`, Customer Portal,
+  `stripe.Webhook.construct_event`), идемпотентный
+  `apply_webhook_event`. Эндпоинты `POST /v1/billing/create-checkout-session`
+  (JWT, `{url}`, 409 для уже Pro), `POST /v1/billing/create-portal-session`
+  (JWT, 409 без Customer) и `POST /v1/billing/webhook` (без JWT, подпись
+  обязательна): `checkout.session.completed` → `tier='pro'` +
+  `stripe_customer_id`, `customer.subscription.deleted` → `tier='free'`.
+  Без ключей — 503 `billing_not_configured`; success/cancel URL строятся из
+  `APP_BASE_URL` (без open redirect).
+- [x] **T-084, Billing UI.** Кнопка «Оформить подписку» в модалке
+  дневного лимита (POST → `window.location.href`); страницы
+  `/billing/success` (подтягивает `tier` через `GET /auth/me`) и
+  `/billing/cancel`; блок «Моя подписка» в `/profile` — текущий тариф,
+  для Free «Оформить подписку», для Pro «Управлять подпиской» (Stripe
+  Customer Portal); `tier` в `UserProfile`/`AuthUser`; i18n RU/EN.
+- [x] **T-085, FinOps из БД.** `TokenBudgetMiddleware` и
+  `GET /v1/users/me/usage` берут тир из `users.tier` (PK-lookup на
+  защищённый запрос; ошибка БД → безопасный `free`), `PRO_IPS` и роль JWT
+  больше не дают Pro; `tier` в `/auth/me`. Тестовый seam
+  `tier_lookup` — unit-тесты FinOps без PostgreSQL.
+- [x] **Тесты.** Backend +29 → **1029 passed**: `test_billing_gateway.py`
+  (аргументы SDK, find-or-create Customer, ошибки, HMAC-подпись webhook),
+  `test_billing.py` (checkout/customer persistence/reuse, 409/503/401,
+  подписанные mock-события меняют `users.tier`, идемпотентность, Portal),
+  FinOps DB-tier (`test_token_budget_api.py`, `test_usage_roles.py`,
+  `test_token_budget.py`), миграционные колонки (`test_models.py`).
+  Frontend +3 → **132 passed** (`api.billing.test.ts`). E2E +4 сценария →
+  **68 passed** (`billing.spec.ts`: upgrade из модалки, профиль Free,
+  профиль Pro + Portal, страница отмены).
+- [x] **Документация.** SPEC §4/§5 (схема, billing-эндпоинты, FinOps),
+  ARCHITECTURE §2/§5.5/§6, GETTING_STARTED (счётчики, `STRIPE_*`),
+  USER_GUIDE §7.11, E2E README, README (возможности, API, counters),
+  CHANGELOG `[Unreleased]`, TODO T-083/T-084/T-085, KNOWN_ISSUES KI-059,
+  отчёт `reports/v1.4.0/ITERATION-40.md`.
+
+### Метрики
+
+- **Backend-тесты:** **1029 passed, 3 skipped, 1 xfailed** (85 файлов,
+  **132.22 с**, exit 0; +29 к итерации 39). Skip: 2 cairo-кейса +
+  `DEEPSEEK_API_KEY`; xfail — KI-012. Stockfish 19 подключён через
+  `STOCKFISH_PATH` — engine-тесты не скипались.
+- **Frontend-тесты:** **132 passed** (13 файлов; +3).
+- **Сборка:** main chunk **115.16 kB gzip** (371.60 kB), async
+  workspace-чанк 143.95 kB gzip, CSS 4.81 kB gzip, 3.25 с; PWA precache
+  15 записей (943.57 KiB).
+- **E2E mocked:** **68 passed** (34 сценария × chromium/mobile), 24.6 с.
+- **ruff / mypy:** 0 / 0 (**90** файлов); **pip check:** без конфликтов
+  (stripe 16.1.0); **alembic:** ревизия `f2b3c4d5e6a7`, `upgrade head` +
+  `check` + roundtrip `downgrade a9f1f28d4c45 → upgrade head` — чисто.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Живой Stripe Checkout/webhook | Нет ключей и тестового Stripe-аккаунта в этой среде; контракт покрыт unit/ integration (мок SDK + реальная HMAC-подпись) и E2E на моках | KI-059 |
+| Реальный Customer Portal в браузере | Требует Stripe Customer и ключей; URL/аргументы проверены unit-тестами | KI-059 |
+| Гибридные тарифы/лимиты по моделям | В постановке только Free 50k → Pro 500k; доступ к «тяжёлым моделям» остаётся маркетинговым текстом | бэклог |
+| Отмена подписки через свой UI | Управление — в Stripe Customer Portal (как в постановке); собственный cancel-эндпоинт не делали | бэклог |
+| Бэкфилл `stripe_customer_id` для старых Pro | Старых Pro-подписок нет (billing вводится впервые); admin/auditor получили `tier='pro'` миграцией | — |
+
+### Что дальше
+
+- Создать тестовый Stripe-аккаунт, заполнить ключи, прогнать живой
+  Checkout тестовой картой и webhook из Dashboard (KI-059).
+- Добавить план/цену в UI (сейчас цена задаётся в Stripe, интерфейс не
+  показывает сумму).
+- Пост-релизный бэклог: T-111…T-119, KI-030, KI-023, KI-059.

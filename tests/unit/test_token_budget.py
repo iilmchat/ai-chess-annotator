@@ -4,13 +4,15 @@ Redis подменён фейком: проверяем INCRBY/TTL, 429 с за�
 разделение free/pro и fail-open при недоступном Redis. Реальный Redis и
 LLM не нужны.
 
-KI-038: субъект счётчика — JWT-пользователь (`user:{id}`) с tier из claim
-`role`, иначе IP и `PRO_IPS`. Токены подписываются реальным хелпером auth,
-но БД не нужна: `decode_token` проверяет только подпись/срок/тип.
+T-083: субъект счётчика — JWT-пользователь (`user:{id}`), тир читается из
+`users.tier`; аноним — IP и всегда `free` (`PRO_IPS` больше не действует).
+БД в unit-тестах подменена функцией `tier_lookup`; токены подписываются
+реальным хелпером auth, `decode_token` проверяет подпись/срок/тип.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import httpx
@@ -25,6 +27,7 @@ from app.auth.tokens import create_access_token, create_refresh_token
 from app.config import Settings
 from app.db.models import AdminRole, Level, User
 from app.finops import (
+    TierLookup,
     TokenBudgetMiddleware,
     TokenUsageTracker,
     record_token_usage,
@@ -82,6 +85,20 @@ def _settings(**overrides: object) -> Settings:
     return Settings(_env_file=None, **values)  # type: ignore[arg-type]
 
 
+async def _free_tier(_user_id: int) -> str:
+    """Заглушка БД: у пользователя тариф free."""
+    return "free"
+
+
+def _tier(value: str) -> TierLookup:
+    """Заглушка lookup-а `users.tier` для unit-тестов без PostgreSQL."""
+
+    async def lookup(_user_id: int) -> str:
+        return value
+
+    return lookup
+
+
 def _user(user_id: int, role: AdminRole) -> User:
     """Несохранённый пользователь: нужны только id и role для claim-ов."""
     return User(
@@ -125,6 +142,7 @@ def _make_app(
     tracker: TokenUsageTracker | None,
     *,
     settings: Settings | None = None,
+    tier_lookup: TierLookup | None = None,
 ) -> Starlette:
     async def analyze_endpoint(_request: Request) -> JSONResponse:
         # Имитация LLM-вызова: клиент фиксирует фактический расход.
@@ -141,6 +159,7 @@ def _make_app(
         TokenBudgetMiddleware,
         protected=[("POST", "/v1/analyze")],
         settings=settings or _settings(),
+        tier_lookup=tier_lookup or _free_tier,
     )
     return app
 
@@ -186,36 +205,59 @@ async def test_tracker_sets_ttl_on_first_write() -> None:
 # --- резолвер subject/tier (публичный API для usage) -----------------------
 
 
-@pytest.mark.parametrize(
-    ("role", "expected_tier"),
-    [
-        (AdminRole.admin, "pro"),
-        (AdminRole.auditor, "pro"),
-        (AdminRole.user, "free"),
-    ],
-)
-def test_request_tier_comes_from_jwt_role(
-    role: AdminRole, expected_tier: str
-) -> None:
+@pytest.mark.parametrize("tier", ["free", "pro"])
+def test_request_tier_comes_from_users_tier(tier: str) -> None:
+    """T-083: тир — из `users.tier`, роль admin/user на него не влияет."""
     settings = _settings()
-    request = _request(_auth(_access_token(role)))
+    request = _request(_auth(_access_token(AdminRole.user)))
 
     assert request_subject(request, settings) == "user:42"
-    assert request_tier(request, settings) == expected_tier
+    assert (
+        asyncio.run(
+            request_tier(request, settings, tier_lookup=_tier(tier))
+        )
+        == tier
+    )
+
+
+def test_tier_lookup_receives_jwt_user_id() -> None:
+    seen: list[int] = []
+
+    async def lookup(user_id: int) -> str:
+        seen.append(user_id)
+        return "pro"
+
+    settings = _settings()
+    request = _request(_auth(_access_token(AdminRole.user, user_id=77)))
+
+    assert asyncio.run(
+        request_tier(request, settings, tier_lookup=lookup)
+    ) == "pro"
+    assert seen == [77]
 
 
 def test_request_subject_falls_back_to_ip_without_token() -> None:
     request = _request()
 
     assert request_subject(request, _settings()) == "ip:1.2.3.4"
-    assert request_tier(request, _settings()) == "free"
+    assert (
+        asyncio.run(
+            request_tier(request, _settings(), tier_lookup=_free_tier)
+        )
+        == "free"
+    )
 
 
 def test_request_subject_falls_back_to_ip_for_broken_token() -> None:
     request = _request(_auth("not-a-valid-jwt"))
 
     assert request_subject(request, _settings()) == "ip:1.2.3.4"
-    assert request_tier(request, _settings()) == "free"
+    assert (
+        asyncio.run(
+            request_tier(request, _settings(), tier_lookup=_free_tier)
+        )
+        == "free"
+    )
 
 
 def test_refresh_token_does_not_authorize_a_subject() -> None:
@@ -225,15 +267,26 @@ def test_refresh_token_does_not_authorize_a_subject() -> None:
     request = _request(_auth(refresh))
 
     assert request_subject(request, settings) == "ip:1.2.3.4"
-    assert request_tier(request, settings) == "free"
+    assert (
+        asyncio.run(
+            request_tier(request, settings, tier_lookup=_free_tier)
+        )
+        == "free"
+    )
 
 
-def test_request_tier_from_pro_ip_whitelist() -> None:
+def test_pro_ip_whitelist_is_ignored() -> None:
+    """T-083: `PRO_IPS` больше не выдаёт Pro — аноним всегда free."""
     settings = _settings(pro_ips="1.2.3.4")
     request = _request()
 
     assert request_subject(request, settings) == "ip:1.2.3.4"
-    assert request_tier(request, settings) == "pro"
+    assert (
+        asyncio.run(
+            request_tier(request, settings, tier_lookup=_free_tier)
+        )
+        == "free"
+    )
 
 
 # --- middleware -----------------------------------------------------------
@@ -261,12 +314,12 @@ def test_third_request_is_blocked_by_token_budget() -> None:
     assert redis.values[key] == 120
 
 
-def test_admin_token_uses_pro_limit() -> None:
-    """Валидный JWT администратора — субъект `user:{id}` и лимит pro."""
+def test_pro_tier_uses_pro_limit() -> None:
+    """T-083: `users.tier='pro'` — субъект `user:{id}` и лимит pro."""
     redis = FakeRedis()
     tracker = _tracker(redis, free=10, pro=100)
-    client = TestClient(_make_app(tracker))
-    headers = _auth(_access_token(AdminRole.admin))
+    client = TestClient(_make_app(tracker, tier_lookup=_tier("pro")))
+    headers = _auth(_access_token(AdminRole.user))
 
     assert client.post("/v1/analyze", headers=headers).status_code == 200
     # 60 < 100, поэтому pro-запрос проходит; free-лимит (10) дал бы 429.
@@ -311,7 +364,8 @@ def test_broken_token_falls_back_to_ip_instead_of_401() -> None:
     assert key.endswith("ip:testclient")
 
 
-def test_pro_tier_is_granted_only_by_ip_whitelist() -> None:
+def test_pro_ip_whitelist_no_longer_grants_pro() -> None:
+    """T-083: аноним с «pro» IP получает free-лимит и 429 на третьем запросе."""
     redis = FakeRedis()
     tracker = _tracker(redis, free=10, pro=1000)
     client = TestClient(
@@ -324,12 +378,17 @@ def test_pro_tier_is_granted_only_by_ip_whitelist() -> None:
     )
 
     headers = {"X-Forwarded-For": "10.0.0.1"}
-    for _ in range(3):
-        assert client.post("/v1/analyze", headers=headers).status_code == 200
+    first = client.post("/v1/analyze", headers=headers)
+    # Эндпоинт-заглушка пишет 60 токенов: после первого запроса free-лимит
+    # (10) уже исчерпан — pro по IP больше не спасает.
+    blocked = client.post("/v1/analyze", headers=headers)
 
+    assert first.status_code == 200
+    assert blocked.status_code == 429
+    assert blocked.headers["X-RateLimit-Limit"] == "10"
     key = next(iter(redis.values))
     assert key.endswith("ip:10.0.0.1")
-    assert redis.values[key] == 180
+    assert redis.values[key] == 60
 
 
 def test_user_tier_header_is_ignored() -> None:
@@ -395,6 +454,7 @@ def test_llm_client_records_tokens_inside_request() -> None:
         TokenBudgetMiddleware,
         protected=[("POST", "/v1/analyze")],
         settings=_settings(),
+        tier_lookup=_free_tier,
     )
     client = TestClient(app)
 

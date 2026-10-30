@@ -16,6 +16,11 @@ from __future__ import annotations
 __all__ = [
     "AppError",
     "AuthError",
+    "BillingAlreadySubscribedError",
+    "BillingCustomerMissingError",
+    "BillingError",
+    "BillingNotConfiguredError",
+    "BillingSignatureError",
     "EmailDeliveryError",
     "EmailNotVerifiedError",
     "EmbeddingError",
@@ -163,6 +168,41 @@ class EmailNotVerifiedError(ForbiddenError):
 
     code = "email_not_verified"
     http_status = 403
+
+
+class BillingError(AppError):
+    """Stripe недоступен или вернул некорректный ответ (T-083) — 502."""
+
+    code = "billing_error"
+    http_status = 502
+
+
+class BillingNotConfiguredError(AppError):
+    """Billing выключен: нет `STRIPE_SECRET_KEY`/`STRIPE_PRICE_ID` — 503."""
+
+    code = "billing_not_configured"
+    http_status = 503
+
+
+class BillingSignatureError(AppError):
+    """Неверная/отсутствующая подпись Stripe webhook (T-083) — 400."""
+
+    code = "billing_invalid_signature"
+    http_status = 400
+
+
+class BillingAlreadySubscribedError(AppError):
+    """У пользователя уже тариф `pro` — повторный checkout не нужен — 409."""
+
+    code = "already_subscribed"
+    http_status = 409
+
+
+class BillingCustomerMissingError(AppError):
+    """У пользователя ещё нет Stripe Customer (Portal недоступен) — 409."""
+
+    code = "billing_customer_missing"
+    http_status = 409
 
 
 class EmailDeliveryError(AppError):

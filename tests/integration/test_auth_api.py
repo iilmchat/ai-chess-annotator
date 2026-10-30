@@ -56,6 +56,8 @@ PROFILE_KEYS = {
     "display_name",
     "level",
     "role",
+    #: T-083: тариф пользователя (free/pro).
+    "tier",
     "is_active",
     "is_verified",
     "created_at",
@@ -305,6 +307,7 @@ def test_register_returns_profile_and_lowercases_email() -> None:
         assert body["email"] == email.lower()
         assert body["level"] == "club"
         assert body["role"] == "user"
+        assert body["tier"] == "free"
         assert body["is_active"] is True
         # KI-041: регистрация создаёт неподтверждённого пользователя.
         assert body["is_verified"] is False

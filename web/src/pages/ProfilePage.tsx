@@ -1,7 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 
-import { ApiError, changePassword, updateProfile } from "../api";
+import {
+  ApiError,
+  changePassword,
+  createCheckoutSession,
+  createPortalSession,
+  updateProfile,
+} from "../api";
 import { useAuthStore } from "../stores/authStore";
 import type { Level } from "../types";
 
@@ -41,6 +47,9 @@ export default function ProfilePage() {
   const [changingPassword, setChangingPassword] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordChanged, setPasswordChanged] = useState(false);
+
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState<string | null>(null);
 
   // AuthGate не рендерит страницу без профиля; запасной выход для типов.
   if (!user) {
@@ -131,6 +140,24 @@ export default function ProfilePage() {
     }
   }
 
+  async function openBilling(kind: "checkout" | "portal") {
+    if (billingLoading) {
+      return;
+    }
+    setBillingLoading(true);
+    setBillingError(null);
+    try {
+      const { url } =
+        kind === "checkout"
+          ? await createCheckoutSession()
+          : await createPortalSession();
+      window.location.href = url;
+    } catch (cause) {
+      setBillingError(errorMessage(cause));
+      setBillingLoading(false);
+    }
+  }
+
   return (
     <main className="page">
       <div className="page__head">
@@ -212,6 +239,59 @@ export default function ProfilePage() {
           </button>
         </div>
       </form>
+
+      <section className="panel" aria-labelledby="billing-title">
+        <div className="panel__header">
+          <h2 id="billing-title">{t("billing.subscription.title")}</h2>
+        </div>
+
+        <p data-testid="subscription-tier">
+          {t("billing.subscription.current", {
+            tier: t(`usage.tier.${user.tier}`),
+          })}
+        </p>
+        <p className="muted">
+          {user.tier === "pro"
+            ? t("billing.subscription.proHint")
+            : t("billing.subscription.freeHint")}
+        </p>
+
+        {billingError ? (
+          <p className="banner banner--error" role="alert">
+            {billingError}
+          </p>
+        ) : null}
+
+        <div className="actions">
+          {user.tier === "free" ? (
+            <button
+              type="button"
+              className="button button--primary"
+              data-testid="profile-upgrade"
+              disabled={billingLoading}
+              aria-busy={billingLoading}
+              onClick={() => {
+                void openBilling("checkout");
+              }}
+            >
+              {billingLoading ? t("billing.upgrading") : t("billing.upgrade")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="button button--primary"
+              data-testid="manage-subscription"
+              disabled={billingLoading}
+              aria-busy={billingLoading}
+              onClick={() => {
+                void openBilling("portal");
+              }}
+            >
+              {billingLoading ? t("billing.openingPortal") : t("billing.manage")}
+            </button>
+          )}
+        </div>
+      </section>
 
       <form className="panel" onSubmit={handlePasswordSubmit} noValidate>
         <div className="panel__header">

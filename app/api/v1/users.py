@@ -1,10 +1,10 @@
 """Профиль пользователя: дневной расход токенов (T-037, T-028, KI-038, T-031b).
 
 `subject`/`tier` берутся из общего резолвера `app.finops`: при валидном
-access-токене это `user:{id}` и роль (`admin`/`auditor` → `pro`, `user` →
-`free`), без токена — прежнее поведение по IP + `PRO_IPS` (KI-031).
-Поэтому middleware и этот эндпоинт всегда считают один и тот же счётчик
-`usage:{day}:{subject}`.
+access-токене это `user:{id}`, а тир читается из `users.tier` (T-083);
+без токена — `ip:{ip}` и `free` (pro-белый список IP отменён). Поэтому
+middleware и этот эндпоинт всегда считают один и тот же счётчик
+`usage:{day}:{subject}` и одинаково понимают тариф.
 
 Источники расхода (T-031b):
 
@@ -22,23 +22,21 @@ access-токене это `user:{id}` и роль (`admin`/`auditor` → `pro`,
 
 from __future__ import annotations
 
-from typing import Literal, cast
+from typing import cast
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.finops import (
+    TierName,
     TokenBudgetStatus,
     next_utc_midnight,
-    request_subject,
-    request_tier,
+    request_identity,
     usage_daily_tokens,
 )
 
 router = APIRouter(tags=["users"])
-
-TierName = Literal["free", "pro"]
 
 
 class UsageResponse(BaseModel):
@@ -77,9 +75,10 @@ def _fallback(cfg: Settings, tier: TierName) -> UsageResponse:
 async def my_usage(request: Request) -> UsageResponse:
     """Вернуть тир, расход и лимит токенов за текущий день (UTC)."""
     cfg = getattr(request.app.state, "settings", None) or get_settings()
-    # KI-038: тот же JWT-aware резолвер, что у TokenBudgetMiddleware.
-    tier = cast(TierName, request_tier(request, cfg))
-    subject = request_subject(request, cfg)
+    # T-083: тот же резолвер, что у TokenBudgetMiddleware — subject из JWT,
+    # tier из `users.tier` в БД.
+    subject, resolved_tier = await request_identity(request, cfg)
+    tier: TierName = cast("TierName", resolved_tier)
 
     # Быстрый путь: Redis (источник 429). Ошибка/отсутствие трекера — не
     # повод падать: ниже подстрахует durable-агрегат.

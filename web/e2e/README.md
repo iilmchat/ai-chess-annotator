@@ -2,8 +2,10 @@
 
 Сквозные сценарии фронтенда на реальном браузере: регистрация/вход, разбор
 партии, генерация и правка комментария (SSE), история партий, дневной лимит
-токенов, а также auth-UX итерации 33 (verify-email, forgot/reset-password,
-logout-all, экран «подтвердите email»). Гоняются на двух проектах:
+токенов, auth-UX итерации 33 (verify-email, forgot/reset-password,
+logout-all, экран «подтвердите email»), профиль/PWA (итерация 39) и billing
+(итерация 40: Checkout, success/cancel, Customer Portal). Гоняются на двух
+проектах:
 `chromium` (Desktop Chrome) и `mobile` (Pixel 7), поэтому каждый сценарий
 обязан работать и на мобильном вьюпорте.
 
@@ -16,7 +18,7 @@ Stockfish и LLM. Этот же режим используется в CI.
 ```bash
 pnpm --dir web install
 pnpm --dir web exec playwright install chromium   # если браузера нет в кэше
-pnpm --dir web run test:e2e                       # 14 сценариев × 2 проекта = 28 тестов
+pnpm --dir web run test:e2e                       # 34 сценария × 2 проекта = 68 тестов
 ```
 
 Отдельный проект / отладка:
@@ -59,7 +61,12 @@ web/
    ├─ analyze.spec.ts       # анализ PGN → доска + MoveList → /analysis/:id
    ├─ commentary.spec.ts    # SSE-генерация → «Редактировать» → PATCH → «edit #id»
    ├─ history.spec.ts       # «История» в шапке → /history → строка партии
-   └─ limits.spec.ts        # usage-badge «Free: 0/50k» → модалка лимита
+   ├─ limits.spec.ts        # usage-badge «Free: 0/50k» → модалка лимита
+   ├─ billing.spec.ts       # Upgrade → Checkout, success/cancel, Portal (T-083)
+   ├─ profile.spec.ts       # /profile: имя, уровень, смена пароля (T-082)
+   ├─ pwa.spec.ts           # манифест, иконки, theme-color, service worker (T-081)
+   ├─ board-arrows.spec.ts / board-variant.spec.ts / chat-context.spec.ts
+   └─ pgn-export.spec.ts / pgn-upload.spec.ts
 ```
 
 Каждый spec независим: в `beforeEach` вызывает `mockApi(page)` и сам
@@ -160,7 +167,7 @@ proxy в `vite.config.ts` направлен на реальный API; `baseURL
 Проверено локально на живом backend (`127.0.0.1:8011`, Postgres 5435,
 Redis 6380, Stockfish, LM Studio): real-режим `--project=chromium` — 5
 passed (~1.2 мин, итерация 32, до появления email-верификации).
-Mocked-режим итерации 33 — **28 passed** (14 сценариев × 2 проекта) через
+Mocked-режим итерации 40 — **68 passed** (34 сценария × 2 проекта) через
 `E2E_PREVIEW=1`.
 
 ## Артефакты и CI

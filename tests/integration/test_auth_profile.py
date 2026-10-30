@@ -44,6 +44,8 @@ PROFILE_KEYS = {
     "display_name",
     "level",
     "role",
+    #: T-083: тариф пользователя (free/pro).
+    "tier",
     "is_active",
     "is_verified",
     "created_at",

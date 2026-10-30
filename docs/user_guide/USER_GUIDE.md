@@ -348,6 +348,46 @@ structlog (`email_mock_sent`); реальный SMTP — KI-056. После
 `logout-all`/сброса пароля все refresh-токены, выпущенные раньше,
 перестают работать (нужен повторный вход).
 
+### 7.11. Подписка Pro и оплата (T-083/T-084)
+
+Free даёт 50 000 токенов в день, Pro — 500 000. Тариф хранится в
+`users.tier` и меняется только после оплаты/отмены подписки в Stripe.
+
+**Настройка (один раз):**
+
+1. В Stripe Dashboard создайте продукт и цену подписки (`price_...`).
+2. Заполните `.env`:
+   `STRIPE_SECRET_KEY=sk_...`, `STRIPE_PRICE_ID=price_...`,
+   `STRIPE_WEBHOOK_SECRET=whsec_...`; `APP_BASE_URL` — публичный URL SPA.
+3. Webhook URL — `https://<домен>/v1/billing/webhook`, события
+   `checkout.session.completed` и `customer.subscription.deleted`.
+4. Без ключей приложение работает, но checkout/portal/webhook отвечают
+   `503 billing_not_configured`.
+
+**В интерфейсе:**
+
+- модалка лимита в шапке (`Free: used/limit`) → **«Оформить подписку»** →
+  редирект в Stripe Checkout; после оплаты Stripe возвращает на
+  `/billing/success` (отмена — `/billing/cancel`);
+- `/profile` → блок **«Моя подписка»**: текущий тариф; для Free — кнопка
+  оформления, для Pro — **«Управлять подпиской»** (Stripe Customer Portal:
+  смена карты, отмена).
+
+API-вариант (нужен access-токен):
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/v1/billing/create-checkout-session \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+# → {"url":"https://checkout.stripe.com/..."}
+
+curl -s -X POST http://127.0.0.1:8000/v1/billing/create-portal-session \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+# → {"url":"https://billing.stripe.com/..."}
+```
+
+Webhook проверяет `Stripe-Signature`; без валидной подписи — `400
+billing_invalid_signature`. Повторная доставка события идемпотентна.
+
 Полная схема — `GET /docs` (OpenAPI).
 
 ---

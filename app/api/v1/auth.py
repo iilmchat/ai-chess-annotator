@@ -83,7 +83,7 @@ from app.auth.tokens import (
     decode_token,
 )
 from app.config import Settings, get_settings
-from app.db.models import AdminRole, Level, User
+from app.db.models import AdminRole, Level, User, UserTier
 from app.db.session import get_session
 from app.email import (
     EmailSender,
@@ -113,6 +113,8 @@ class UserProfile(BaseModel):
     display_name: str | None
     level: Level
     role: AdminRole
+    #: T-083: тариф (`free`/`pro`); меняется Stripe webhook-ом.
+    tier: UserTier
     is_active: bool
     #: KI-041: подтверждён ли email (генерация доступна только true).
     is_verified: bool
@@ -276,6 +278,7 @@ def _to_profile(user: User) -> UserProfile:
         display_name=user.display_name,
         level=user.level,
         role=user.role,
+        tier=UserTier(user.tier),
         is_active=user.is_active,
         is_verified=bool(user.is_verified),
         created_at=user.created_at,

@@ -67,6 +67,19 @@ def test_users_have_email_verification_flag() -> None:
     assert column.server_default is not None
 
 
+def test_users_have_tier_and_stripe_customer_for_billing() -> None:
+    """T-083: тариф — NOT NULL с CHECK, Stripe Customer — nullable UNIQUE."""
+    users = Base.metadata.tables["users"]
+    tier = users.c.tier
+    assert tier.nullable is False
+    assert tier.server_default is not None
+    stripe_customer = users.c.stripe_customer_id
+    assert stripe_customer.nullable is True
+    constraints = {c.name for c in users.constraints if c.name}
+    assert "ck_users_tier" in constraints
+    assert "uq_users_stripe_customer_id" in constraints
+
+
 def test_engine_cache_table_has_unique_key_and_ttl_index() -> None:
     """T-108: ключ кэша — позиция + версия движка + depth/multipv."""
     table = Base.metadata.tables["engine_cache"]

@@ -1,11 +1,15 @@
-"""Проводка TokenBudgetMiddleware в реальном приложении (T-031, KI-038).
+"""Проводка TokenBudgetMiddleware в реальном приложении (T-031, T-083).
 
 Бюджет считается по JWT-пользователю (`usage:{day}:user:{id}`), а не по IP:
-два пользователя с одного IP имеют независимые счётчики. Лимит — 5 токенов
-(free и pro одинаковы), поэтому 429 проверяется без Stockfish/LM Studio:
-middleware срабатывает раньше эндпоинта. Запрос «свободного» пользователя
-доходит до эндпоинта и получает 400 `invalid_pgn` — это доказывает, что
-middleware его пропустил.
+два пользователя с одного IP имеют независимые счётчики. Free-лимит — 5
+токенов, pro — 50: 429 проверяется без Stockfish/LM Studio, middleware
+срабатывает раньше эндпоинта. Запрос «свободного» пользователя доходит до
+эндпоинта и получает 400 `invalid_pgn` — это доказывает, что middleware его
+пропустил.
+
+T-083: тир берётся из `users.tier`; отдельный тест меняет его напрямую в БД
+(как Stripe webhook) и проверяет, что pro-пользователь проходит лимит,
+при котором free уже получает 429.
 
 Требует PostgreSQL (пользователи создаются через `/auth/register`) и Redis:
 и то, и другое при недоступности — `skip`, а не красный тест.
@@ -31,8 +35,10 @@ from app.finops import utc_day
 from app.main import create_app
 
 PASSWORD = "finops-budget-password-123"
-#: Дневной лимит и для free, и для pro — так 429 воспроизводим без LLM.
+#: Free-лимит: 429 воспроизводим без LLM.
 LIMIT = 5
+#: Pro-лимит: выше free, чтобы различать тарифы.
+PRO_LIMIT = 50
 #: IP, который Starlette TestClient кладёт в scope (анонимный субъект).
 TESTCLIENT_IP = "testclient"
 #: Заведомо невалидный PGN: эндпоинт отвечает 400 раньше движка.
@@ -47,8 +53,7 @@ def _settings() -> Settings:
         test_auth_bypass=False,
         token_budget_enabled=True,
         daily_token_limit_free=LIMIT,
-        daily_token_limit_pro=LIMIT,
-        pro_ips="",
+        daily_token_limit_pro=PRO_LIMIT,
         trust_forwarded_for=False,
         rate_limit_enabled=False,
         llm_warmup_enabled=False,
@@ -119,6 +124,20 @@ async def _drop_usage(keys: list[str]) -> None:
             await client.delete(*keys)
     finally:
         await client.aclose()
+
+
+async def _set_tier(user_id: int, tier: str) -> None:
+    """T-083: сменить `users.tier` напрямую (как это делает webhook)."""
+    engine = create_async_engine(_settings().database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            user = await session.get(User, user_id)
+            assert user is not None, f"нет пользователя {user_id}"
+            user.tier = tier
+            await session.commit()
+    finally:
+        await engine.dispose()
 
 
 async def _delete_users(emails: list[str]) -> None:
@@ -279,6 +298,48 @@ def test_usage_endpoint_reports_user_counter(env: BudgetEnv) -> None:
     assert body["limit_tokens"] == LIMIT
     assert body["remaining_tokens"] == 0
     assert body["enabled"] is True
+
+
+def test_pro_tier_from_db_raises_limit(env: BudgetEnv) -> None:
+    """T-083: `users.tier='pro'` даёт 50 токенов вместо free-лимита 5.
+
+    Тот же счётчик `user:<B>` (10 токенов) для free означал бы 429; с
+    тарифом pro из БД запрос проходит к эндпоинту и получает 400
+    `invalid_pgn`. Тариф возвращается в free, чтобы не влиять на другие тесты.
+    """
+    key = _usage_key(f"user:{env.user_b_id}")
+    asyncio.run(_set_tier(env.user_b_id, "pro"))
+    asyncio.run(_seed_usage({key: 10}))
+    try:
+        response = env.client.post(
+            "/v1/analyze",
+            json={"pgn": INVALID_PGN, "level": "club"},
+            headers=_headers(env.token_b),
+        )
+    finally:
+        asyncio.run(_drop_usage([key]))
+        asyncio.run(_set_tier(env.user_b_id, "free"))
+
+    assert response.status_code == 400, response.text
+    assert response.json()["code"] == "invalid_pgn"
+
+
+def test_usage_endpoint_reports_pro_tier_and_limit(
+    env: BudgetEnv,
+) -> None:
+    """Usage-эндпоинт отдаёт pro-лимит из `users.tier` (без роли)."""
+    asyncio.run(_set_tier(env.user_b_id, "pro"))
+    try:
+        response = env.client.get(
+            "/v1/users/me/usage", headers=_headers(env.token_b)
+        )
+    finally:
+        asyncio.run(_set_tier(env.user_b_id, "free"))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["tier"] == "pro"
+    assert body["limit_tokens"] == PRO_LIMIT
 
 
 def test_usage_endpoint_anonymous_uses_ip_counter(env: BudgetEnv) -> None:

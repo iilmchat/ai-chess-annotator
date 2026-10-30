@@ -1,14 +1,14 @@
-"""Роли и дневной лимит токенов в `GET /v1/users/me/usage` (T-028, KI-038).
+"""Тариф и дневной лимит токенов в `GET /v1/users/me/usage` (T-028, T-083).
 
 Приложение собирается с реальной аутентификацией (`test_auth_bypass=False`),
 бюджет токенов выключен — поэтому эндпоинт отдаёт `_fallback` с лимитом
-соответствующего тира. `subject`/`tier` резолвятся из JWT (как в
-middleware): роль `admin`/`auditor` → `pro`, `user` → `free`; без валидного
-токена — IP + `PRO_IPS` (KI-031). Проверяется:
+соответствующего тира. С итерации 40 `subject` резолвится из JWT, а `tier`
+читается из `users.tier` (а не из роли/PRO_IPS). Проверяется:
 
-* аноним (без токена) → `free` по IP (белый список `PRO_IPS` пуст);
+* аноним (без токена) → `free` по IP;
 * обычный пользователь → `free`;
-* администратор → `pro`;
+* пользователь с `tier='pro'` → `pro`, даже с ролью `user`;
+* администратор с `tier='free'` → `free` (роль больше не даёт Pro);
 * битый токен → анонимный ответ по IP, а не 401.
 
 Тесты требуют PostgreSQL: пользователи создаются через `/auth/register`.
@@ -92,14 +92,28 @@ def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _promote_admin(email: str) -> None:
+async def _set_role(email: str, role: AdminRole) -> None:
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
             user = await session.scalar(select(User).where(User.email == email))
             assert user is not None, f"нет пользователя {email}"
-            user.role = AdminRole.admin
+            user.role = role
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+async def _set_tier(email: str, tier: str) -> None:
+    """T-083: тариф — источник истины, меняется напрямую в БД (как webhook)."""
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            user = await session.scalar(select(User).where(User.email == email))
+            assert user is not None, f"нет пользователя {email}"
+            user.tier = tier
             await session.commit()
     finally:
         await engine.dispose()
@@ -121,6 +135,7 @@ class UsageEnv:
     client: TestClient
     user_token: str
     admin_token: str
+    pro_token: str
 
 
 @pytest.fixture(scope="module")
@@ -128,19 +143,24 @@ def env() -> Iterator[UsageEnv]:
     suffix = uuid.uuid4().hex
     email_user = f"usage-user-{suffix}@example.com"
     email_admin = f"usage-admin-{suffix}@example.com"
-    emails = [email_user, email_admin]
+    email_pro = f"usage-pro-{suffix}@example.com"
+    emails = [email_user, email_admin, email_pro]
 
     with TestClient(create_app(_settings())) as client:
         for email in emails:
             _register(client, email)
-        asyncio.run(_promote_admin(email_admin))
+        # Роль admin сама по себе больше не даёт Pro (T-083).
+        asyncio.run(_set_role(email_admin, AdminRole.admin))
+        asyncio.run(_set_tier(email_pro, "pro"))
         user_token = _login(client, email_user)
         admin_token = _login(client, email_admin)
+        pro_token = _login(client, email_pro)
         try:
             yield UsageEnv(
                 client=client,
                 user_token=user_token,
                 admin_token=admin_token,
+                pro_token=pro_token,
             )
         finally:
             asyncio.run(_delete_users(emails))
@@ -167,9 +187,22 @@ def test_regular_user_usage_is_free_tier(env: UsageEnv) -> None:
     assert body["limit_tokens"] == 50_000
 
 
-def test_admin_usage_is_pro_tier(env: UsageEnv) -> None:
+def test_admin_role_without_pro_tier_is_free(env: UsageEnv) -> None:
+    """T-083: роль admin больше не выдаёт Pro — только `users.tier`."""
     response = env.client.get(
         "/v1/users/me/usage", headers=_headers(env.admin_token)
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["tier"] == "free"
+    assert body["limit_tokens"] == 50_000
+
+
+def test_user_tier_pro_gets_pro_limit(env: UsageEnv) -> None:
+    """Обычный пользователь с тарифом pro получает 500k."""
+    response = env.client.get(
+        "/v1/users/me/usage", headers=_headers(env.pro_token)
     )
 
     assert response.status_code == 200, response.text

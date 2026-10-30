@@ -278,18 +278,41 @@ class Settings(BaseSettings):
     llm_local_price_in_usd_per_1m: float = 0.0
     llm_local_price_out_usd_per_1m: float = 0.0
 
-    # FinOps / token budget (T-031): дневные лимиты на IP.
+    # FinOps / token budget (T-031): дневные лимиты по тарифу из БД.
     token_budget_enabled: bool = True
     daily_token_limit_free: int = 50_000
     daily_token_limit_pro: int = 500_000
-    #: IP, которым выдаётся `pro` до появления JWT (KI-031).
+    #: Устарело (KI-038 → T-083): тир больше не выдаётся по IP, источник
+    #: истины — `users.tier`. Поле оставлено, чтобы старые `.env` не падали
+    #: на неизвестной настройке; значение нигде не используется.
     pro_ips: str = ""
     #: Доверять `X-Forwarded-For` (только за известным reverse-proxy).
     trust_forwarded_for: bool = False
 
+    # Billing / Stripe (T-083)
+    #: Секретный ключ Stripe (`sk_test_…`/`sk_live_…`). Пусто — billing
+    #: выключен: checkout/portal отвечают 503, webhook — 503.
+    stripe_secret_key: str = ""
+    #: Секрет endpoint-а webhook (`whsec_…`) для проверки подписи
+    #: `Stripe-Signature`. Без него webhook не принимается.
+    stripe_webhook_secret: str = ""
+    #: Price ID подписки Pro (`price_…`); сумма/период задаются в Stripe.
+    stripe_price_id: str = ""
+
     @property
-    def pro_ips_set(self) -> set[str]:
-        return {item.strip() for item in self.pro_ips.split(",") if item.strip()}
+    def billing_configured(self) -> bool:
+        """Можно ли создавать Checkout/Portal-сессии (ключ + цена)."""
+        return bool(
+            self.stripe_secret_key.strip() and self.stripe_price_id.strip()
+        )
+
+    @property
+    def billing_webhook_configured(self) -> bool:
+        """Можно ли проверять подпись Stripe webhook."""
+        return bool(
+            self.stripe_secret_key.strip()
+            and self.stripe_webhook_secret.strip()
+        )
 
     @property
     def lora_adapter_dir(self) -> Path | None:

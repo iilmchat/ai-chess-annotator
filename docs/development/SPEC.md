@@ -166,6 +166,8 @@
 -- Пользователи и уровни
 users(id, email, level ENUM('beginner','club','gm'),
       role ENUM('user','admin','auditor') DEFAULT 'user',
+      tier VARCHAR(16) DEFAULT 'free' CHECK (tier IN ('free','pro')),
+      stripe_customer_id VARCHAR(255) UNIQUE,  -- T-083
       is_active BOOL DEFAULT true,
       is_verified BOOL DEFAULT true,  -- регистрация пишет false (KI-041)
       password_hash TEXT, last_login_at, created_at)
@@ -231,7 +233,16 @@ llm_evaluations(id, model, level, accuracy_score, usefulness_score,
 - `GET /v1/games?limit=20` — последние партии: `id`, `white`, `black`,
   `event`, `level`, `created_at`.
 - `GET /v1/users/me/usage` — `tier`, `used_tokens`, `limit_tokens`,
-  `remaining_tokens`, `reset_at`, `enabled`; субъект — IP + `PRO_IPS`.
+  `remaining_tokens`, `reset_at`, `enabled`; субъект — `user:{id}` из JWT
+  или IP, тир — `users.tier` (T-083); `PRO_IPS` больше не действует.
+- `POST /v1/billing/create-checkout-session` — JWT: найти/создать Stripe
+  Customer, вернуть `{url}` Checkout Session на подписку Pro; уже
+  `pro` → 409 `already_subscribed`.
+- `POST /v1/billing/create-portal-session` — JWT: вернуть `{url}` Stripe
+  Customer Portal; без `stripe_customer_id` → 409.
+- `POST /v1/billing/webhook` — события Stripe без JWT, только при валидной
+  подписи `Stripe-Signature`: `checkout.session.completed` →
+  `tier='pro'`, `customer.subscription.deleted` → `tier='free'`.
 - `POST /v1/chat` и `/v1/chat/stream` принимают `history` (до 20 реплик
   `user`/`assistant`) и `language` (`ru`/`en`, T-106/KI-058);
   user-реплики повторно проверяются guardrails.
@@ -300,8 +311,15 @@ access JWT admin/auditor. Чтение/запись партий, ходов,
 `detail` для известных кодов (`app/i18n.py`); по умолчанию — исходный
 русский текст, неизвестный код — без перевода, `internal_error` (500) не
 переводится никогда; `code` от языка не зависит.
-**FinOps:** дневной бюджет токенов считается по `user:{id}` из JWT,
-анонимно — по IP.
+**FinOps (T-083):** дневной бюджет токенов считается по `user:{id}` из
+JWT, анонимно — по IP; тир (`free` 50k / `pro` 500k) читается из
+`users.tier` в БД, а не из роли/PRO_IPS. Ошибка БД → безопасный `free`.
+**Billing (T-083):** Stripe Checkout (подписка, `mode=subscription`,
+`STRIPE_PRICE_ID`), Customer Portal и webhook с обязательной проверкой
+подписи (`stripe.Webhook.construct_event`). `APP_BASE_URL` задаёт
+success/cancel/return URL; клиент не может подменить redirect. Без
+`STRIPE_SECRET_KEY`/`STRIPE_PRICE_ID` billing-эндпоинты отвечают 503
+`billing_not_configured`, приложение работает.
 
 ---
 

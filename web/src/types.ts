@@ -3,12 +3,17 @@ export type Level = "beginner" | "club" | "gm";
 //: Роли backend-а (enum admin_role): auditor — read-only аудитор.
 export type UserRole = "user" | "admin" | "auditor";
 
+//: Тариф пользователя (T-083): free — 50k токенов/день, pro — 500k.
+export type UserTier = "free" | "pro";
+
 /** Профиль пользователя из `/auth/*` (T-028). */
 export interface AuthUser {
   id: number;
   email: string;
   level: Level;
   role: UserRole;
+  //: T-083: тариф; меняется Stripe webhook-ом.
+  tier: UserTier;
   is_active: boolean;
   //: KI-041: подтверждён ли email (генерация недоступна без него).
   is_verified: boolean;
@@ -121,8 +126,13 @@ export interface GameListItem {
   created_at: string;
 }
 
+/** Ответ `/v1/billing/*-session` — URL Stripe для редиректа. */
+export interface BillingSessionResponse {
+  url: string;
+}
+
 export interface UsageResponse {
-  tier: "free" | "pro";
+  tier: UserTier;
   used_tokens: number;
   limit_tokens: number;
   remaining_tokens: number;

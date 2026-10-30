@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { getUsage } from "../api";
+import { createCheckoutSession, getUsage } from "../api";
 import type { UsageResponse } from "../types";
 
 function compact(value: number): string {
@@ -27,6 +27,8 @@ export function UsageBadge() {
   const { t, i18n } = useTranslation();
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [open, setOpen] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const warned = useRef(false);
 
   const load = useCallback(() => {
@@ -56,11 +58,33 @@ export function UsageBadge() {
     }
   }, [usage]);
 
+  async function startCheckout() {
+    if (checkoutLoading) {
+      return;
+    }
+    setCheckoutLoading(true);
+    setCheckoutError(null);
+    try {
+      const { url } = await createCheckoutSession();
+      // Полный переход на Stripe: после оплаты Stripe вернёт на
+      // `/billing/success`, и сессия восстановится по refresh-cookie.
+      window.location.href = url;
+    } catch (cause) {
+      setCheckoutError(
+        cause instanceof Error && cause.message
+          ? cause.message
+          : t("billing.error"),
+      );
+      setCheckoutLoading(false);
+    }
+  }
+
   if (!usage?.enabled) {
     return null;
   }
 
   const over = usage.used_tokens >= usage.limit_tokens;
+  const isFree = usage.tier === "free";
   const label = t("usage.label", {
     tier: t(`usage.tier.${usage.tier}`),
     used: compact(usage.used_tokens),
@@ -110,8 +134,31 @@ export function UsageBadge() {
             <p className="muted">
               {t("usage.details", { remaining: remainingTokens })}
             </p>
-            {over ? <p className="muted">{t("usage.modal.proHint")}</p> : null}
+            {isFree ? (
+              <p className="muted">{t("usage.modal.proHint")}</p>
+            ) : null}
+            {checkoutError ? (
+              <p className="banner banner--error" role="alert">
+                {checkoutError}
+              </p>
+            ) : null}
             <div className="modal__actions">
+              {isFree ? (
+                <button
+                  type="button"
+                  className="button button--primary"
+                  data-testid="upgrade-button"
+                  disabled={checkoutLoading}
+                  aria-busy={checkoutLoading}
+                  onClick={() => {
+                    void startCheckout();
+                  }}
+                >
+                  {checkoutLoading
+                    ? t("billing.upgrading")
+                    : t("billing.upgrade")}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="button button--primary"

@@ -111,7 +111,40 @@ const resources = {
           titleOver: "Лимит токенов исчерпан",
           body: "Использовано {{used}} из {{limit}} токенов за сегодня (UTC).",
           proHint:
-            "Pro-тир даёт больше токенов и доступ к тяжёлым моделям. Подключение — в следующей версии.",
+            "Pro-тир даёт 500 000 токенов в день вместо 50 000 и доступ к тяжёлым моделям.",
+        },
+      },
+      billing: {
+        upgrade: "Оформить подписку",
+        upgrading: "Переходим к оплате…",
+        manage: "Управлять подпиской",
+        openingPortal: "Открываем портал…",
+        error: "Не удалось открыть оплату. Попробуйте позже.",
+        subscription: {
+          title: "Моя подписка",
+          current: "Текущий тариф: {{tier}}",
+          freeHint:
+            "Free — 50 000 токенов в день. Pro — 500 000 токенов в день и тяжёлые модели.",
+          proHint:
+            "Pro активен. Оплату и отмену подписки можно изменить в Stripe.",
+        },
+        success: {
+          title: "Подписка оформлена",
+          subtitle: "Спасибо за поддержку проекта!",
+          body:
+            "Оплата прошла успешно. Stripe webhook обновляет тариф автоматически — обычно это занимает несколько секунд.",
+          webhookHint:
+            "Если тариф ещё Free, обновите страницу через минуту: webhook может обрабатываться с задержкой.",
+          toProfile: "Моя подписка",
+          toHome: "К анализу партий",
+        },
+        cancel: {
+          title: "Оплата отменена",
+          subtitle: "Изменения не применены",
+          body:
+            "Вы вернулись из Stripe без оплаты. Тариф остался прежним — оформить Pro можно в любой момент из профиля или модалки лимита.",
+          toProfile: "В профиль",
+          toHome: "На главную",
         },
       },
       profile: {
@@ -422,7 +455,40 @@ const resources = {
           titleOver: "Token budget exhausted",
           body: "Used {{used}} of {{limit}} tokens today (UTC).",
           proHint:
-            "Pro gives more tokens and access to heavier models. Upgrade is planned for the next release.",
+            "Pro gives 500,000 tokens per day instead of 50,000 and access to heavier models.",
+        },
+      },
+      billing: {
+        upgrade: "Upgrade to Pro",
+        upgrading: "Redirecting to checkout…",
+        manage: "Manage subscription",
+        openingPortal: "Opening the portal…",
+        error: "Could not open checkout. Please try again later.",
+        subscription: {
+          title: "My subscription",
+          current: "Current plan: {{tier}}",
+          freeHint:
+            "Free gives 50,000 tokens per day. Pro gives 500,000 tokens per day and heavier models.",
+          proHint:
+            "Pro is active. You can change payment or cancel in Stripe.",
+        },
+        success: {
+          title: "Subscription activated",
+          subtitle: "Thank you for supporting the project!",
+          body:
+            "Payment succeeded. The Stripe webhook updates your plan automatically — usually within a few seconds.",
+          webhookHint:
+            "If your plan still says Free, reload the page in a minute: the webhook may still be processing.",
+          toProfile: "My subscription",
+          toHome: "Back to analysis",
+        },
+        cancel: {
+          title: "Payment cancelled",
+          subtitle: "No changes were made",
+          body:
+            "You returned from Stripe without paying. Your plan is unchanged — you can upgrade to Pro any time from your profile or the limit dialog.",
+          toProfile: "Go to profile",
+          toHome: "Go home",
         },
       },
       profile: {

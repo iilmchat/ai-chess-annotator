@@ -205,6 +205,9 @@ cp .env.example .env
   `/verify-email` и `/reset-password` (в dev — `http://localhost:5173`,
   в prod — тот же origin, что API). `EMAIL_SENDER=mock` логирует ссылку,
   SMTP — отдельный шаг (KI-056).
+- `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`/`STRIPE_PRICE_ID` — подписка
+  Pro (T-083). Пусто — billing выключен (503), приложение работает;
+  `APP_BASE_URL` задаёт success/cancel URL. Живой флоу — KI-059.
 - `ARQ_QUEUE_NAME`/`EXPORT_JOB_STALE_MINUTES` — очередь фоновых
   выгрузок и порог recovery (KI-053).
 - `EXPORT_RETENTION_DAYS` — сколько дней хранить `export_jobs` и готовые
@@ -355,19 +358,19 @@ pytest -q tests/integration/test_commentary_pdf.py    # PDF-экспорт
 | `ruff check .` | 0 ошибок |
 | `mypy app` | `Success: no issues found` (strict) |
 | `alembic check` | без дрейфа моделей и миграций |
-| `pytest -q` | все passed; на dev-машине итерации 39 — **1000 passed, 3 skipped, 1 xfailed** (skip — нет cairo на Windows и `DEEPSEEK_API_KEY`, xfail — KI-012) |
+| `pytest -q` | все passed; на dev-машине итерации 40 — **1029 passed, 3 skipped, 1 xfailed** (skip — нет cairo на Windows и `DEEPSEEK_API_KEY`, xfail — KI-012; при установленном Stockfish engine-тесты не скипаются) |
 
 #### 4.2.3. Frontend (Vitest, typecheck, build)
 
 ```bash
-pnpm --dir web test          # Vitest, 129 тестов (12 файлов)
+pnpm --dir web test          # Vitest, 132 теста (13 файлов)
 pnpm --dir web typecheck     # tsc --noEmit, 0 ошибок
 pnpm --dir web build         # tsc -b && vite build → web/dist/
 ```
 
 | Проверка | Ожидаемо |
 | :--- | :--- |
-| `pnpm --dir web test` | 129 passed (итерация 39; 12 файлов) |
+| `pnpm --dir web test` | 132 passed (итерация 40; 13 файлов) |
 | `pnpm --dir web typecheck` | 0 ошибок |
 | `pnpm --dir web build` | `web/dist/` создан |
 
@@ -378,7 +381,7 @@ pnpm --dir web build         # tsc -b && vite build → web/dist/
 
 ```bash
 pnpm --dir web exec playwright install chromium   # один раз
-pnpm --dir web run test:e2e                       # 14 сценариев × 2 проекта
+pnpm --dir web run test:e2e                       # 34 сценария × 2 проекта
 ```
 
 На Windows/в DSH-песочнице dev-сервер не стартует (esbuild не может писать
@@ -389,7 +392,7 @@ $env:E2E_PREVIEW="1"
 pnpm --dir web run test:e2e
 ```
 
-Ожидаемо: **60 passed** (30 сценариев × `chromium`/`mobile`).
+Ожидаемо: **68 passed** (34 сценария × `chromium`/`mobile`).
 
 С real backend (нужны Postgres, Redis, Stockfish и LLM; новый аккаунт
 создаётся неподтверждённым — KI-040/KI-056):

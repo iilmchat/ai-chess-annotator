@@ -6,10 +6,15 @@ UTC-полуночи плюс минута. Проверка выполняет�
 
 Субъект счётчика — проверенный JWT-пользователь (`user:{id}`), если в
 запросе есть валидный access-токен; иначе — IP клиента (`ip:{ip}`), как
-было до JWT (KI-031). Токен проверяется только подписью/сроком
-(`decode_token`), без запроса в БД: middleware работает на каждом запросе,
-а FinOps не должен зависеть от доступности PostgreSQL. Битый, просроченный
-или refresh-токен не даёт 401 — запрос считается анонимным (KI-038).
+было до JWT (KI-031). Битый, просроченный или refresh-токен не даёт 401 —
+запрос считается анонимным (KI-038).
+
+С итерации 40 (T-083) тир (`free`/`pro`) берётся из `users.tier` в БД, а не
+из роли в JWT и не из `PRO_IPS`: источник истины — Stripe webhook, который
+меняет тариф. Для анонимного запроса пользователя нет, поэтому тир всегда
+`free` (per-IP pro-белый список больше не действует). Цена — один PK-lookup
+на защищённый запрос; при недоступной БД тир безопасно считается `free`
+(лучше недодать Pro, чем дать безлимит по ошибке), событие пишется в лог.
 
 Durable-агрегат — `usage_daily` (T-031b): `record_token_usage` после
 Redis-инкремента best-effort upsert-ит дельту в PostgreSQL
@@ -28,10 +33,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Literal
 
 import redis.asyncio as aioredis
 import structlog
@@ -43,20 +49,23 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.auth.tokens import decode_token
 from app.config import Settings
-from app.db.models import UsageDaily
+from app.db.models import UsageDaily, User
 from app.db.session import SessionLocal
 from app.errors import AuthError
 
 __all__ = [
-    "PRO_ROLES",
+    "TierLookup",
+    "TierName",
     "TokenBudgetMiddleware",
     "TokenBudgetStatus",
     "TokenUsageTracker",
     "compute_cost_usd",
+    "lookup_user_tier",
     "next_utc_midnight",
     "parse_subject",
     "prices_for_level",
     "record_token_usage",
+    "request_identity",
     "request_subject",
     "request_tier",
     "seconds_until_reset",
@@ -68,9 +77,10 @@ __all__ = [
 
 logger = structlog.get_logger(__name__)
 
-#: Роли из claim `role`, которым положен «профессиональный» дневной лимит.
-#: Строки, а не `AdminRole`, чтобы FinOps-слой не зависел от моделей БД.
-PRO_ROLES = frozenset({"admin", "auditor"})
+#: Допустимые тарифы; строки, чтобы FinOps не зависел от enum-модели.
+TierName = Literal["free", "pro"]
+#: Функция «id пользователя → тариф»; подменяется в unit-тестах без БД.
+TierLookup = Callable[[int], Awaitable[str]]
 
 #: Допустимые типы субъекта в `usage_daily.subject_type`.
 _SUBJECT_TYPES = frozenset({"user", "ip"})
@@ -392,8 +402,10 @@ async def usage_daily_tokens(
 class TokenBudgetMiddleware:
     """ASGI-middleware: 429, если дневной бюджет токенов исчерпан.
 
-    Субъект и tier определяются по проверенному access-токену
-    (`user:{id}` + роль), иначе — по IP и белому списку `PRO_IPS` (KI-038).
+    Субъект определяется по проверенному access-токену (`user:{id}`), иначе —
+    по IP. Тир для JWT-пользователя читается из `users.tier` (T-083); для
+    анонима — всегда `free`. `tier_lookup` — тестовый seam: unit-тесты FinOps
+    не поднимают PostgreSQL.
     """
 
     def __init__(
@@ -402,12 +414,14 @@ class TokenBudgetMiddleware:
         *,
         settings: Settings,
         protected: Iterable[tuple[str, str]],
+        tier_lookup: TierLookup | None = None,
     ) -> None:
         self.app = app
         self._settings = settings
         self._protected = frozenset(
             (method.upper(), path) for method, path in protected
         )
+        self._tier_lookup = tier_lookup or lookup_user_tier
 
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send
@@ -427,7 +441,9 @@ class TokenBudgetMiddleware:
             await self.app(scope, receive, send)
             return
 
-        subject, tier = _identity_from_scope(scope, self._settings)
+        subject, tier = await _identity_from_scope(
+            scope, self._settings, self._tier_lookup
+        )
         try:
             status = await tracker.check(subject, tier)
         except Exception as exc:
@@ -480,32 +496,82 @@ def _tracker_from_scope(scope: Scope) -> TokenUsageTracker | None:
 
 def request_subject(request: Request, settings: Settings) -> str:
     """Публичный subject запроса — тот же, что у middleware (JWT-aware)."""
-    return _identity_from_scope(request.scope, settings)[0]
+    identity = _jwt_identity(request.scope, settings)
+    if identity is not None:
+        return identity[0]
+    return f"ip:{_client_ip(request.scope, settings.trust_forwarded_for)}"
 
 
-def request_tier(request: Request, settings: Settings) -> str:
-    """Публичный tier запроса — тот же, что у middleware (JWT-aware)."""
-    return _identity_from_scope(request.scope, settings)[1]
+async def request_identity(
+    request: Request,
+    settings: Settings,
+    *,
+    tier_lookup: TierLookup | None = None,
+) -> tuple[str, str]:
+    """``(subject, tier)`` запроса без повторного lookup в endpoint-е."""
+    return await _identity_from_scope(
+        request.scope, settings, tier_lookup or lookup_user_tier
+    )
 
 
-def _identity_from_scope(scope: Scope, settings: Settings) -> tuple[str, str]:
-    """``(subject, tier)`` запроса: JWT-пользователь, иначе IP и `PRO_IPS`.
+async def request_tier(
+    request: Request,
+    settings: Settings,
+    *,
+    tier_lookup: TierLookup | None = None,
+) -> str:
+    """Публичный tier запроса — тот же, что у middleware (из `users.tier`)."""
+    _, tier = await request_identity(
+        request, settings, tier_lookup=tier_lookup
+    )
+    return tier
 
-    Токен проверяется только подписью и сроком, без запроса в БД: слой
-    FinOps не зависит от PostgreSQL. Отсутствующий/битый/просроченный токен
-    — не ошибка, а анонимный запрос (KI-038).
+
+async def lookup_user_tier(user_id: int) -> str:
+    """Прочитать `users.tier`; при ошибке БД — безопасный `free`.
+
+    Ошибка не пробрасывается: FinOps не должен превращать недоступность
+    PostgreSQL в 500 на каждом защищённом запросе. Консервативный `free`
+    означает «не дать Pro-лимит при сбое», а не «дать безлимит».
+    """
+    try:
+        async with SessionLocal() as session:
+            tier = await session.scalar(
+                select(User.tier).where(User.id == user_id)
+            )
+    except Exception as exc:
+        logger.warning(
+            "user_tier_lookup_failed", user_id=user_id, error=str(exc)
+        )
+        return "free"
+    if tier in {"free", "pro"}:
+        return str(tier)
+    logger.warning("user_tier_invalid", user_id=user_id, tier=tier)
+    return "free"
+
+
+async def _identity_from_scope(
+    scope: Scope,
+    settings: Settings,
+    tier_lookup: TierLookup,
+) -> tuple[str, str]:
+    """``(subject, tier)`` запроса: JWT-пользователь из БД, иначе IP/free.
+
+    Токен проверяется только подписью и сроком; для его владельца тир
+    читается из `users.tier`. Отсутствующий/битый/просроченный токен — не
+    ошибка, а анонимный запрос (KI-038) с тиром `free`: pro по IP больше не
+    выдаётся (T-083).
     """
     identity = _jwt_identity(scope, settings)
     if identity is not None:
-        return identity
+        subject, user_id = identity
+        return subject, await tier_lookup(user_id)
     client_ip = _client_ip(scope, settings.trust_forwarded_for)
-    # KI-031: pro определяется доверенным IP, а не заголовком клиента.
-    tier = "pro" if client_ip in settings.pro_ips_set else "free"
-    return f"ip:{client_ip}", tier
+    return f"ip:{client_ip}", "free"
 
 
-def _jwt_identity(scope: Scope, settings: Settings) -> tuple[str, str] | None:
-    """``("user:{id}", tier по роли)`` из валидного access-токена или ``None``."""
+def _jwt_identity(scope: Scope, settings: Settings) -> tuple[str, int] | None:
+    """``("user:{id}", user_id)`` из валидного access-токена или ``None``."""
     token = _bearer_token(scope)
     if token is None:
         return None
@@ -513,8 +579,7 @@ def _jwt_identity(scope: Scope, settings: Settings) -> tuple[str, str] | None:
         payload = decode_token(token, settings, expected_type="access")
     except AuthError:
         return None
-    tier = "pro" if payload.role in PRO_ROLES else "free"
-    return f"user:{payload.user_id}", tier
+    return f"user:{payload.user_id}", payload.user_id
 
 
 def _bearer_token(scope: Scope) -> str | None:

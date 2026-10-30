@@ -32,6 +32,7 @@ from app.api.v1 import (
     admin_exports,
     analyze,
     auth,
+    billing,
     chat,
     commentary,
     games,
@@ -39,6 +40,7 @@ from app.api.v1 import (
     ingest,
     users,
 )
+from app.billing import create_billing
 from app.cache import cleanup_expired_cache
 from app.config import Settings, get_settings
 from app.dataset.jobs import recover_stale_export_jobs
@@ -79,6 +81,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.metrics_provider = configure_metrics(cfg)
         # KI-041: отправка писем (mock в dev/CI; SMTP — отдельным шагом).
         app.state.email_sender = create_email_sender(cfg)
+        # T-083: Stripe-шлюз. Без ключей приложение стартует, а billing-
+        # эндпоинты честно отвечают 503 `billing_not_configured`.
+        app.state.billing = create_billing(cfg)
         # T-108: кэш результатов Stockfish; выключается ENGINE_CACHE_ENABLED.
         engine_cache: EngineCache | None = (
             EngineCache(cfg) if cfg.engine_cache_enabled else None
@@ -246,6 +251,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ("POST", f"{cfg.api_prefix}/chat"),
             ("POST", f"{cfg.api_prefix}/chat/stream"),
             ("POST", f"{cfg.api_prefix}/ingest"),
+            # T-083: не даём спамить созданием Stripe-сессий.
+            ("POST", f"{cfg.api_prefix}/billing/create-checkout-session"),
+            ("POST", f"{cfg.api_prefix}/billing/create-portal-session"),
         ],
     )
     app.add_middleware(
@@ -257,9 +265,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ("POST", f"{cfg.api_prefix}/chat"),
             ("POST", f"{cfg.api_prefix}/chat/stream"),
         ],
-        # KI-038: субъект/tier — из JWT (иначе IP + PRO_IPS); настройки
-        # передаются целиком, чтобы middleware и request_subject/
-        # request_tier считали одинаково.
+        # T-083: субъект — из JWT (иначе IP), tier — из users.tier в БД;
+        # настройки передаются целиком, чтобы middleware и usage-эндпоинт
+        # считали одинаково.
         settings=cfg,
     )
     app.add_middleware(
@@ -291,6 +299,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(chat.router, prefix=cfg.api_prefix)
     app.include_router(ingest.router, prefix=cfg.api_prefix)
     app.include_router(users.router, prefix=cfg.api_prefix)
+    # T-083: Stripe Checkout/Portal/webhook (webhook — без JWT, по подписи).
+    app.include_router(billing.router, prefix=cfg.api_prefix)
     # T-034b: выгрузка датасета edits.jsonl (JWT или cookie админки).
     app.include_router(admin_exports.router, prefix=cfg.api_prefix)
 

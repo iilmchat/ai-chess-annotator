@@ -66,6 +66,7 @@ __all__ = [
     "SemanticCache",
     "UsageDaily",
     "User",
+    "UserTier",
     "admin_role_enum",
     "level_enum",
 ]
@@ -87,6 +88,18 @@ class AdminRole(enum.StrEnum):
     user = "user"
     admin = "admin"
     auditor = "auditor"
+
+
+class UserTier(enum.StrEnum):
+    """Тариф пользователя (T-083, итерация 40).
+
+    Источник истины для дневного лимита токенов — колонка `users.tier`;
+    `free` соответствует 50k токенов в день, `pro` — 500k. Меняется только
+    Stripe webhook-ом (оплата/отмена подписки) или миграцией/админом.
+    """
+
+    free = "free"
+    pro = "pro"
 
 
 class ExportJobStatus(enum.StrEnum):
@@ -128,6 +141,8 @@ class User(Base):
             "role",
             postgresql_where=sql_text("role <> 'user'"),
         ),
+        #: Naming convention добавит префикс `ck_users_`.
+        CheckConstraint("tier IN ('free', 'pro')", name="tier"),
     )
 
     id: Mapped[int] = _pk()
@@ -137,6 +152,18 @@ class User(Base):
     )
     role: Mapped[AdminRole] = mapped_column(
         admin_role_enum, nullable=False, server_default=sql_text("'user'")
+    )
+    #: T-083: тариф (`free`/`pro`) — источник истины для FinOps.
+    tier: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=UserTier.free,
+        server_default=sql_text("'free'"),
+    )
+    #: T-083: Stripe Customer; создаётся при первом checkout, переиспользуется
+    #: для следующей оплаты и Customer Portal. NULL — оплата ещё не начата.
+    stripe_customer_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=sql_text("true")

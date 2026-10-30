@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Stripe Checkout и подписка Pro (T-083, итерация 40):** `stripe` SDK,
+  настройки `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`/`STRIPE_PRICE_ID`,
+  миграция `f2b3c4d5e6a7` (`users.tier` free/pro + CHECK, backfill
+  admin/auditor → pro; `users.stripe_customer_id` nullable UNIQUE).
+  `POST /v1/billing/create-checkout-session` находит/создаёт Stripe
+  Customer и возвращает URL подписки; `POST
+  /v1/billing/create-portal-session` — Customer Portal; `POST
+  /v1/billing/webhook` проверяет `Stripe-Signature` через
+  `stripe.Webhook.construct_event` и идемпотентно переключает тариф:
+  `checkout.session.completed` → `pro`, `customer.subscription.deleted` →
+  `free`. Без ключей billing-эндпоинты отвечают 503, приложение работает.
+- **Billing UI (T-084, итерация 40):** кнопка «Оформить подписку» в
+  модалке дневного лимита (редирект на Stripe Checkout), страницы
+  `/billing/success` и `/billing/cancel`, блок «Моя подписка» в
+  `/profile` с текущим тарифом и кнопкой «Управлять подпиской» (Stripe
+  Customer Portal); `tier` в профиле `/auth/me`; i18n RU/EN.
+- **FinOps из БД (T-085, итерация 40):** `TokenBudgetMiddleware` и
+  `GET /v1/users/me/usage` берут тир из `users.tier` (PK-lookup на
+  защищённый запрос), `PRO_IPS` и роль JWT больше не дают Pro; при
+  недоступной БД — безопасный `free`. Роль admin без `tier='pro'` теперь
+  получает free-лимит.
+
 ## [1.2.0] - 2026-10-30
 
 ### Added

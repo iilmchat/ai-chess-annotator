@@ -2,6 +2,7 @@ import { getAuthState } from "./stores/authStore";
 import type {
   AnalyzeResponse,
   AuthUser,
+  BillingSessionResponse,
   ChatHistoryItem,
   ChatResponse,
   CommentaryResponse,
@@ -329,6 +330,25 @@ export function listGames(limit = 20): Promise<GameListItem[]> {
 
 export function getUsage(): Promise<UsageResponse> {
   return request<UsageResponse>("/v1/users/me/usage");
+}
+
+/**
+ * `POST /v1/billing/create-checkout-session` — URL Stripe Checkout (T-083).
+ *
+ * Тело пустое: success/cancel URL и цену backend знает сам, клиент не может
+ * подменить redirect на произвольный внешний адрес.
+ */
+export function createCheckoutSession(): Promise<BillingSessionResponse> {
+  return request<BillingSessionResponse>("/v1/billing/create-checkout-session", {
+    method: "POST",
+  });
+}
+
+/** `POST /v1/billing/create-portal-session` — URL Stripe Customer Portal. */
+export function createPortalSession(): Promise<BillingSessionResponse> {
+  return request<BillingSessionResponse>("/v1/billing/create-portal-session", {
+    method: "POST",
+  });
 }
 
 /** Нормализовать язык i18n (`en-US` → `en`) для LLM-промптов. */

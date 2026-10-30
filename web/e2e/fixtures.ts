@@ -7,6 +7,7 @@ import type {
   EditedCommentary,
   GameListItem,
   UsageResponse,
+  UserTier,
 } from "../src/types";
 
 export { expect };
@@ -57,12 +58,18 @@ export function uniqueEmail(prefix = "e2e"): string {
 // Мок-данные: повторяют контракты web/src/types.ts
 // ---------------------------------------------------------------------------
 
-function authUser(email: string, isVerified = true): AuthUser {
+function authUser(
+  email: string,
+  isVerified = true,
+  tier: UserTier = "free",
+): AuthUser {
   return {
     id: 1,
     email,
     level: "club",
     role: "user",
+    // T-083: тариф приходит в профиле; по умолчанию free.
+    tier,
     is_active: true,
     is_verified: isVerified,
     created_at: "2026-10-28T10:00:00Z",
@@ -78,15 +85,16 @@ function authTokens(): AuthTokens {
   };
 }
 
-function usagePayload(): UsageResponse {
+function usagePayload(tier: UserTier = "free"): UsageResponse {
   // limit 50_000 → бейдж в шапке рендерится как "Free: 0/50k"
-  // (UsageBadge.compact: 0 → "0", 50000 → "50k").
+  // (UsageBadge.compact: 0 → "0", 50000 → "50k"). Для Pro — 500k.
+  const limit = tier === "pro" ? 500_000 : 50_000;
   return {
     enabled: true,
-    tier: "free",
+    tier,
     used_tokens: 0,
-    limit_tokens: 50_000,
-    remaining_tokens: 50_000,
+    limit_tokens: limit,
+    remaining_tokens: limit,
     reset_at: 1_800_000_000,
   };
 }
@@ -226,6 +234,8 @@ interface AuthMockState {
   loggedIn: boolean;
   email: string;
   verified: boolean;
+  //: T-083: тариф из опций `mockApi` (free по умолчанию).
+  tier: UserTier;
 }
 
 function requestBody(route: Route): Record<string, unknown> {
@@ -251,7 +261,7 @@ async function handleAuthRoute(
     // иначе каждый E2E-сценарий упирался бы в экран «подтвердите email».
     // Префикс `unverified-` включает этот экран явно.
     state.verified = !state.email.startsWith("unverified");
-    await fulfillJson(route, 201, authUser(state.email, state.verified));
+    await fulfillJson(route, 201, authUser(state.email, state.verified, state.tier));
     return;
   }
   if (method === "POST" && path === "/auth/login") {
@@ -260,7 +270,7 @@ async function handleAuthRoute(
     state.verified = !state.email.startsWith("unverified");
     await fulfillJson(route, 200, {
       ...authTokens(),
-      user: authUser(state.email, state.verified),
+      user: authUser(state.email, state.verified, state.tier),
     });
     return;
   }
@@ -275,7 +285,7 @@ async function handleAuthRoute(
     }
     await fulfillJson(route, 200, {
       ...authTokens(),
-      user: authUser(state.email, state.verified),
+      user: authUser(state.email, state.verified, state.tier),
     });
     return;
   }
@@ -326,7 +336,7 @@ async function handleAuthRoute(
     return;
   }
   if (method === "GET" && path === "/auth/me") {
-    await fulfillJson(route, 200, authUser(state.email, state.verified));
+    await fulfillJson(route, 200, authUser(state.email, state.verified, state.tier));
     return;
   }
   await fulfillJson(route, 404, {
@@ -335,13 +345,30 @@ async function handleAuthRoute(
   });
 }
 
-async function handleV1Route(route: Route): Promise<void> {
+async function handleV1Route(
+  route: Route,
+  tier: UserTier,
+): Promise<void> {
   const request = route.request();
   const method = request.method();
-  const path = new URL(request.url()).pathname;
+  const url = new URL(request.url());
+  const path = url.pathname;
 
   if (method === "GET" && path === "/v1/users/me/usage") {
-    await fulfillJson(route, 200, usagePayload());
+    await fulfillJson(route, 200, usagePayload(tier));
+    return;
+  }
+
+  // T-083: Stripe в mocked-режиме не нужен. Checkout ведёт на внутреннюю
+  // success-страницу — так сценарий проверяет сам редирект, не сеть.
+  if (method === "POST" && path === "/v1/billing/create-checkout-session") {
+    await fulfillJson(route, 200, { url: `${url.origin}/billing/success` });
+    return;
+  }
+  if (method === "POST" && path === "/v1/billing/create-portal-session") {
+    await fulfillJson(route, 200, {
+      url: `${url.origin}/profile?billing=portal`,
+    });
     return;
   }
 
@@ -418,20 +445,27 @@ async function handleV1Route(route: Route): Promise<void> {
  *
  * Паттерны привязаны к origin, чтобы не перехватывать модули Vite dev server.
  */
-export async function mockApi(page: Page): Promise<void> {
+export async function mockApi(
+  page: Page,
+  options: { tier?: UserTier } = {},
+): Promise<void> {
   if (REAL_BACKEND) {
     return;
   }
+  const tier = options.tier ?? "free";
   // Состояние auth-моков живёт в рамках страницы (новый context на тест).
   const authState: AuthMockState = {
     loggedIn: false,
     email: "e2e@example.com",
     verified: true,
+    tier,
   };
   await page.route(/^https?:\/\/[^/]+\/auth\//, (route) =>
     handleAuthRoute(route, authState),
   );
-  await page.route(/^https?:\/\/[^/]+\/v1\//, handleV1Route);
+  await page.route(/^https?:\/\/[^/]+\/v1\//, (route) =>
+    handleV1Route(route, tier),
+  );
 }
 
 /**

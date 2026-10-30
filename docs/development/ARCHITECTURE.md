@@ -102,13 +102,14 @@ flowchart TB
 | `app/export/` | PDF-экспорт комментария: fpdf2 + TTF-шрифт, подписи RU/EN (`language`), шапка/ходы/текст; `board.py` — SVG доски → PNG через cairosvg с graceful degradation (T-107/T-107b, KI-058) |
 | `app/dataset/` | dataset-экспорт: `records.py` — общая выборка JSONL (фильтры/keyset/сборка записи), `jobs.py` — выгрузка `export_jobs` + recovery (KI-050/KI-053) |
 | `app/worker.py` + `worker.py` | arq-воркер: `WorkerSettings`, задача `run_export_job(ctx, job_id)`, recovery при старте (KI-053) |
-| `app/email/` | `EmailSender` Protocol + `MockEmailSender` (outbox/structlog), письма verify/reset (KI-041) |
+| `app/email/` | `EmailSender` Protocol + `MockEmailSender` (outbox/structlog) и `SMTPEmailSender` (aiosmtplib), письма verify/reset (KI-041, T-082) |
 | `app/auth/` | JWT access/refresh/action-tokens, Argon2id, cookie, denylist + global revocation (`revoked_before`), email-verification dependency (KI-041) |
+| `app/billing/` | `BillingGateway` + `StripeBilling` (Customer/Checkout/Portal, проверка подписи webhook), `apply_webhook_event` — идемпотентное обновление `users.tier` (T-083) |
 | `app/motifs/` | эвристики мотивов (слабые поля, линии, вилки, мат и т.д.) |
 | `app/llm/` | OpenAI-совместимый клиент, фабрика по уровню, пакет фактов, прогрев |
 | `app/prompts/` | системные промпты `beginner`/`club`/`gm` + `chat`: `.txt` — seed/fallback (ru), `*_en.txt`/`chat_en.txt` — английские файлы, таблица `prompts` — источник истины для ru, in-memory кэш, `resolve_language` |
 | `app/i18n.py` | локализация `detail` ошибок API по `Accept-Language` (KI-058, итерация 35) |
-| `app/finops.py` | дневные счётчики токенов в Redis, `TokenBudgetMiddleware` (429), `cost_usd` |
+| `app/finops.py` | дневные счётчики токенов в Redis, `TokenBudgetMiddleware` (429), `cost_usd`; тир читается из `users.tier` (T-083) |
 | `app/security/` | prompt-injection guardrails: нормализация, эвристики, `422 prompt_injection` |
 | `app/audit.py` | append-only аудит, hash-chain, advisory-lock, верификация |
 | `app/cache/` | semantic cache: exact FEN-ключ, vector-поиск, TTL |
@@ -120,7 +121,7 @@ flowchart TB
 | `app/llmops_dashboard.py` | LLMOps-дашборд `/admin/llmops`: p50/p95/p99, error rate, tokens/cost, cache hit rate, топ-5 пользователей |
 | `app/observability.py` | OTel: TracerProvider/MeterProvider, OTLP-экспорт спанов и метрик `llm.*`; `app/tracing.py` — W3C trace-context, HTTP-спан с `http.route`/статусом для spanmetrics |
 | `deploy/` | конфиги observability-стека: `otel-collector`, `tempo`, `prometheus`, `grafana` (datasources + дашборд) |
-| `app/api/v1/` | `analyze`, `games`, `users`, `commentary`, `chat`, `ingest`, `health`, `auth`, `admin_exports` |
+| `app/api/v1/` | `analyze`, `games`, `users`, `commentary`, `chat`, `ingest`, `health`, `auth`, `billing`, `admin_exports` |
 | `app/db/` | SQLAlchemy-модели, сессии, Alembic-миграции |
 
 ## 3. Потоки
@@ -320,6 +321,35 @@ view `export_jobs` с фильтром по статусу (итерация 35)
 - **PDF.** `language` — query-параметр `GET .../export/pdf`; от него
   зависят заголовки и подписи, но не PGN/SAN.
 
+## 5.5. Биллинг и тарифы (T-083, итерация 40)
+
+```text
+SPA --POST /v1/billing/create-checkout-session--> API --Stripe SDK--> Checkout
+                                                       | Customer (1:1 users.stripe_customer_id)
+Stripe --POST /v1/billing/webhook (Stripe-Signature)--> API --> users.tier
+SPA --POST /v1/billing/create-portal-session-----> API --Stripe SDK--> Customer Portal
+FinOps: TokenBudgetMiddleware --> users.tier (free 50k / pro 500k)
+```
+
+- **Модули.** `app/billing/gateway.py` — `BillingGateway`-протокол и
+  `StripeBilling` (синхронный SDK вызывается через `asyncio.to_thread`);
+  `app/billing/service.py` — идемпотентное применение событий к БД;
+  `app/api/v1/billing.py` — JWT-эндпоинты Checkout/Portal и webhook без
+  JWT, но с обязательной подписью.
+- **Источник истины тарифа — `users.tier`** (`free`/`pro`, CHECK),
+  `stripe_customer_id` — nullable UNIQUE. Миграция `f2b3c4d5e6a7`;
+  admin/auditor backfill-ятся в `pro`, чтобы сохранить прежний лимит.
+- **Webhook.** `checkout.session.completed` → `tier='pro'` и customer id;
+  `customer.subscription.deleted` → `tier='free'` (customer сохраняется
+  для повторной оплаты/портала). Повторная доставка безопасна.
+- **FinOps.** `TokenBudgetMiddleware` и `GET /v1/users/me/usage` делают
+  PK-lookup `users.tier`; аноним — `free`; ошибка БД → консервативный
+  `free`. `PRO_IPS` и роль JWT больше не дают Pro.
+- **Конфиг.** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+  `STRIPE_PRICE_ID`; пустые ключи → 503 `billing_not_configured`, без
+  падения приложения. `APP_BASE_URL` задаёт success/cancel/return URL
+  (клиент не может подменить redirect). Живой Stripe-флоу — KI-059.
+
 ## 6. Frontend
 
 - React 19 + TypeScript + Vite + React Router; `react-chessboard`
@@ -344,11 +374,12 @@ view `export_jobs` с фильтром по статусу (итерация 35)
 - Production: `pnpm build` → `web/dist` → `SPAStaticFiles("/")` в FastAPI
   (index.html для `/history` и `/analysis/:id`).
 - UX: skeleton-лоадеры, Error Boundary, mobile 1280/820/640/480,
-  usage-badge.
-- Тесты — Vitest: 12 файлов, 129 тестов (FEN/chess.js, board,
-  форматирование, SSE-парсер, auth-store/API/flow, PDF-API, eval, PGN,
-  варианты, загрузка PGN, стрелки);
-  E2E — Playwright, mocked-режим 60 прогонов (30 сценариев ×
+  usage-badge + модалка Pro с «Оформить подписку» (T-084), страницы
+  `/billing/success|cancel`, блок «Моя подписка» в профиле.
+- Тесты — Vitest: 13 файлов, 132 теста (FEN/chess.js, board,
+  форматирование, SSE-парсер, auth-store/API/flow, billing-API, PDF-API,
+  eval, PGN, варианты, загрузка PGN, стрелки);
+  E2E — Playwright, mocked-режим 68 прогонов (34 сценария ×
   chromium/mobile).
 
 ## 7. Развёртывание
