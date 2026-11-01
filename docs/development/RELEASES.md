@@ -2586,3 +2586,197 @@ KI-055.
 - Добавить план/цену в UI (сейчас цена задаётся в Stripe, интерфейс не
   показывает сумму).
 - Пост-релизный бэклог: T-111…T-119, KI-030, KI-023, KI-059.
+
+## Итерация 42 — External Dataset Converter (T-087)
+
+**Дата:** 2026-10-31
+**Статус:** ⚠️ частично — код и целевые тесты готовы; полная сюита
+проверяется на CI (локальное окружение нестандартное — PostgreSQL 5437,
+Stockfish нет в PATH).
+
+### Сделано
+
+- [x] **T-087, конвертер внешних PGN-датасетов.**
+  `scripts/convert_external_datasets.py`: JSONL с PGN в поле `text` →
+  `python-chess` → комментарии `{ ... }` → очистка `[%eval ...]`/`[%clk ...]`
+  → склейка → лимит 2000 символов → `build_fact_package(..., level="club")`
+  → `schema_version=2`. CLI: `--input`, `--output`, `--limit`, `--dry-run`;
+  сводка прочитанных/пропущенных/сконвертированных записей и средней длины
+  `assistant`.
+- [x] **Пакет фактов без анализа движка.** `build_fact_package` принимает
+  `analyses=None` и явно помечает, что оценок/ключевых моментов движка в
+  пакете нет (внешний PGN).
+- [x] **Тесты.** `tests/unit/test_convert_external_datasets.py` — 37 тестов;
+  `tests/unit/test_prompts.py` — +1 тест на пакет без анализа (32 passed в
+  файле).
+- [x] **Документация и gitignore.** `.gitignore`:
+  `data/external_datasets/`, `data/lora_gold_v1.jsonl`;
+  `GPU_TRAINING_GUIDE.md` §5.1; TODO T-087; CHANGELOG `[Unreleased]`.
+
+### Метрики
+
+- **Целевые backend-тесты:** `37 passed` (конвертер) + `32 passed`
+  (промпты), exit 0.
+- **ruff:** `All checks passed!`; **mypy app:** 0 ошибок (90 файлов).
+- **Frontend:** `typecheck` exit 0; `132 passed` (13 файлов);
+  `build` 7.76 с, main chunk 115.16 kB gzip.
+- **Реальный прогон:** `bishop_train.jsonl` → `data/lora_gold_v1.jsonl`
+  (5000 записей, 39.2 МБ): прочитано 12 693, битый PGN 7 321, нет
+  комментариев 372, средняя длина `assistant` 1 744 символа.
+- **Валидация:** `train_lora.py --dry-run` — `schema_version: 2=5000`,
+  `club=5000`, ошибок нет.
+- **Полная сюита:** локально не завершена (зависает на интеграционных
+  тестах без Stockfish/порта БД из CI); запускается на CI.
+
+### Что дальше
+
+- Прогнать полную backend-сюиту на CI и зафиксировать счётчик.
+- Обучить LoRA на `data/lora_gold_v1.jsonl` (или смеси с
+  `data/lora_club_v1.jsonl`) на GPU-машине.
+
+## Итерация 43 — GGUF Exporter & Training Script Polish (T-088, T-089)
+
+**Дата:** 2026-10-31
+**Статус:** ✅ завершена локально (целевые тесты и линтеры зелёные; полная
+сюита — на CI, реальное обучение/экспорт — на GPU-машине).
+
+### Сделано
+
+- [x] **T-088, экспорт LoRA → HF → GGUF.** `scripts/export_to_gguf.py`:
+  `peft.PeftModel.from_pretrained` → `merge_and_unload()` →
+  `save_pretrained` + токенизатор; поиск `llama.cpp`
+  (`convert_hf_to_gguf.py`/`convert.py`) и конвертация через subprocess.
+  CLI: `--base_model`, `--adapter_path`, `--output_dir`,
+  `--llama_cpp_dir`, `--gguf_outtype`, `--device`. Без llama.cpp/при сбое
+  конвертации — warning, HF-модель сохраняется, exit 0.
+- [x] **T-089, resume и логирование.** `scripts/train_lora.py`:
+  `--resume_from_checkpoint PATH` с проверкой каталога и передачей в
+  `Trainer.train`; `--report_to auto|tensorboard|wandb|none`
+  (`auto` — TensorBoard, иначе wandb, иначе консоль), `logging_dir=
+  output_dir/runs`; `--check-env` показывает tensorboard/wandb.
+- [x] **Тесты.** `tests/unit/test_export_to_gguf.py` — экспортёр (моки
+  peft/transformers/subprocess, graceful fallback); `test_train_lora.py` —
+  парсер новых флагов, `resolve_report_to`, `resolve_resume_checkpoint`,
+  полный `train()` с fake-стеком и проверкой `Trainer.train`.
+- [x] **Документация.** `GPU_TRAINING_GUIDE.md` §10 (Ubuntu 22.04 + CUDA
+  12.1, RTX 4090, batch 4/grad 4, resume, экспорт GGUF, LM Studio);
+  TODO T-088/T-089; CHANGELOG `[Unreleased]`.
+
+### Метрики
+
+- **Целевые backend-тесты:** `test_export_to_gguf.py` + `test_train_lora.py`
+  — **88 passed**; связанный набор (генератор датасета, экспорт, конвертер,
+  промпты) — **201 passed**.
+- **ruff:** `All checks passed!`; **mypy app:** 0 ошибок (90 файлов);
+  **mypy scripts:** 0 ошибок (`export_to_gguf.py`, `train_lora.py`).
+- **Smoke:** `train_lora.py --dry-run --dataset data/lora_gold_v1.jsonl
+  --limit 3` — `schema_version: 2=3`, `report_to=auto`, `resume=нет`,
+  `DRY-RUN OK`; `export_to_gguf.py --help` показывает все флаги.
+- **Не выполнено локально:** реальное обучение и merge/GGUF (нет GPU,
+  torch/peft/llama.cpp); полная backend-сюита — CI.
+
+### Что дальше
+
+- Обучить адаптер на RTX 4090/3060 по §10, проверить TensorBoard и
+  `--resume_from_checkpoint` на реальном чекпоинте.
+- Выполнить `export_to_gguf.py`, загрузить GGUF в LM Studio и прогнать
+  smoke `/v1/commentary`.
+
+## Итерация 44 — Fixing LoRA Training Pipeline & GPU Guide (T-090, T-091)
+
+**Дата:** 2026-10-31
+**Статус:** ✅ завершена локально (целевые тесты и линтеры зелёные;
+реальный прогон на A5000 — следующий шаг, полная сюита — CI).
+
+### Сделано
+
+- [x] **T-090, совместимость `train_lora.py` с transformers 4.44+.**
+  `collate_batch` возвращает `torch.Tensor` (`input_ids`, `attention_mask`,
+  `labels`, `torch.long`) вместо списков; `logging_dir` и `warmup_ratio`
+  убраны из `TrainingArguments`; добавлен `--skip-too-long` (по умолчанию
+  True), `TooLongError`, счётчик `skipped_too_long` и предупреждения;
+  `--no-skip-too-long` возвращает падение. Токенизация идёт до загрузки
+  модели, поэтому «все записи длинные» выявляется до траты GPU.
+- [x] **T-091, GPU-гайд для РФ.** `hf download` вместо устаревшего
+  `huggingface-cli`; `HF_ENDPOINT=https://hf-mirror.com` и
+  `snapshot_download`; установка через `uv`; зеркало PyTorch SJTU
+  `mirror.sjtu.edu.cn/pytorch-wheels/cu126/`; `torch` + `torchvision`
+  одной сборкой `cu126` (проверка обеих версий); §10 переименован под
+  CUDA 12.6, добавлены RTX A5000 и траблшутинг.
+- [x] **Тесты.** `test_train_lora.py`: коллат возвращает тензоры (мок
+  `torch.tensor`), парсер `--skip-too-long`, `train()` пропускает длинную
+  запись и падает с `--no-skip-too-long`; проверка отсутствия
+  `logging_dir`/`warmup_ratio`.
+- [x] **Документация.** `GPU_TRAINING_GUIDE.md` §2/§10, TODO T-090/T-091,
+  CHANGELOG `[Unreleased]`.
+
+### Метрики
+
+- **Целевые backend-тесты:** `test_train_lora.py` — **73 passed**;
+  `test_export_to_gguf.py` — **18 passed**; связанный набор — **204 passed**.
+- **ruff:** `All checks passed!`; **mypy app:** 0 (90 файлов);
+  **mypy scripts/tests:** 0 (`train_lora.py`, `export_to_gguf.py`,
+  `test_train_lora.py`; добавлен override для torch/transformers/peft/
+  datasets, чтобы проверка работала без GPU-пакетов).
+- **Smoke:** `collate_batch` на реальном torch — три `Tensor` `int64`
+  (input_ids/attention_mask/labels); `--dry-run` печатает
+  `skip_too_long=да`, `report_to=auto`, `resume=нет`, `DRY-RUN OK`.
+- **Не выполнено локально:** реальное обучение на A5000, полная
+  backend-сюита — CI/GPU-машина.
+
+### Что дальше
+
+- Повторить обучение на A5000 (CUDA 12.6, `cu126`) с `--skip-too-long`:
+  убедиться, что первая итерация проходит, а чекпоинты пишутся.
+- Проверить TensorBoard (по умолчанию `output_dir/runs`) и
+  `--resume_from_checkpoint` на реальном чекпоинте.
+
+## Итерация 45 — Lichess Golden Dataset Builder (T-092, T-093)
+
+**Дата:** 2026-11-01
+**Статус:** ✅ завершена локально (тесты с моками API/LLM, линтеры и
+типы зелёные); реальные Lichess-загрузка и локальная LLM — на машине с
+сетью/моделью, полная сюита — CI.
+
+### Сделано
+
+- [x] **T-092, Lichess golden dataset builder.**
+  `scripts/fetch_lichess_games.py`: `GET /api/games/user/{username}` или
+  `POST /api/games/export/_ids`, `evals=true`, фильтр WhiteElo/BlackElo
+  1800–2200, standard-вариант, наличие `[%eval]`, запись
+  `data/gold_pgns/*.pgn` по 50–100 партий.
+  `scripts/build_gold_dataset.py`: парсинг `[%eval …]` (White POV →
+  сторона хода), `MoveAnalysis` с `best_move_known=False`, пакет фактов,
+  mock/local LLM (русский ответ), валидация через
+  `app/engine/validator.py`, JSONL `schema_version=2`.
+  В `MoveAnalysis` добавлен `best_move_known`; `build_fact_package`
+  печатает «Лучший ход движка неизвестен» вместо выдуманного хода.
+- [x] **T-093, бесплатные GPU.** `GPU_TRAINING_GUIDE.md` §11: Kaggle
+  Notebooks (T4, 30 ч/нед, датасет, обучение 4B, TensorBoard, zip) и
+  Google Colab (Drive, установка, обучение, resume), ограничения 16 GB.
+- [x] **Тесты.** `test_fetch_lichess_games.py` (16) — MockTransport,
+  URL/параметры, POST-ID, фильтры, чанки, CLI; `test_build_gold_dataset.py`
+  (27) — `[%eval]`/мат, `MoveAnalysis`, v2-контракт, skip no-evals/
+  invalid-pgn/invalid-llm, retry, mock/local, CLI; `test_prompts.py` +1 —
+  пакет без лучшего хода.
+- [x] **Документация.** TODO T-092/T-093, CHANGELOG `[Unreleased]`,
+  `.gitignore` для `data/gold_pgns/` и `data/gold_dataset.jsonl`.
+
+### Метрики
+
+- **Целевые backend-тесты:** fetch **16 passed**, build **27 passed**,
+  prompts **33 passed**; связанный набор — **248 passed** (30.15 с).
+- **ruff:** `All checks passed!`; **mypy app:** 0 (90 файлов);
+  **mypy новых скриптов/тестов:** 0 (4 файла).
+- **Smoke:** `build_gold_dataset.py --provider mock` на PGN с
+  `[%eval 0.20 … -1.50]` → 1 запись, `schema_version=2`, в пакете
+  «Потеря относительно лучшей линии: 160 cp» и «Лучший ход движка
+  неизвестен», assistant 291 символ.
+- **Не выполнено локально:** реальный вызов Lichess API и локальной LLM
+  (в тестах — моки); полная backend-сюита — CI.
+
+### Что дальше
+
+- Скачать 1000+ PGN Lichess с `evals=true` (рейтинг 1800–2200) и собрать
+  `data/gold_dataset.jsonl` с локальной LLM.
+- Обучить LoRA на золотом датасете на A5000 или бесплатном T4 (§10–§11).

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,6 +17,7 @@ from scripts.train_lora import (
     LEGACY_SCHEMA_VERSION,
     SCHEMA_VERSION,
     SUPPORTED_SCHEMA_VERSIONS,
+    TooLongError,
     build_parser,
     collate_batch,
     dataset_stats,
@@ -25,6 +27,8 @@ from scripts.train_lora import (
     main,
     override_system_prompt,
     read_records,
+    resolve_report_to,
+    resolve_resume_checkpoint,
     schema_version_of,
     tokenize_example,
     train,
@@ -454,7 +458,7 @@ def test_tokenize_rejects_prompt_longer_than_max_length() -> None:
         )
     )
 
-    with pytest.raises(ValueError, match="max_length"):
+    with pytest.raises(TooLongError, match="max_length"):
         tokenize_example(MESSAGES, tokenizer, max_length=prompt_length)
 
 
@@ -472,7 +476,23 @@ def test_tokenize_works_without_chat_template() -> None:
     assert encoded["labels"][: len(prompt_text)] == [-100] * len(prompt_text)
 
 
-def test_collate_batch_pads_right_and_masks_padding() -> None:
+class _FakeTensor:
+    """Заглушка torch.Tensor для проверки collate_batch без torch."""
+
+    def __init__(self, values: list[list[int]], dtype: object) -> None:
+        self.values = values
+        self.dtype = dtype
+
+
+def test_collate_batch_returns_torch_tensors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_torch = SimpleNamespace(
+        tensor=lambda values, dtype=None: _FakeTensor(values, dtype),
+        long="torch.long",
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
     batch = collate_batch(
         [
             {"input_ids": [1, 2], "labels": [-100, 5]},
@@ -481,11 +501,13 @@ def test_collate_batch_pads_right_and_masks_padding() -> None:
         pad_token_id=0,
     )
 
-    assert batch == {
-        "input_ids": [[1, 2], [3, 0]],
-        "attention_mask": [[1, 1], [1, 0]],
-        "labels": [[-100, 5], [7, -100]],
-    }
+    assert isinstance(batch["input_ids"], _FakeTensor)
+    assert isinstance(batch["attention_mask"], _FakeTensor)
+    assert isinstance(batch["labels"], _FakeTensor)
+    assert batch["input_ids"].values == [[1, 2], [3, 0]]
+    assert batch["attention_mask"].values == [[1, 1], [1, 0]]
+    assert batch["labels"].values == [[-100, 5], [7, -100]]
+    assert batch["input_ids"].dtype == "torch.long"
 
 
 def test_collate_batch_rejects_empty_batch() -> None:
@@ -617,6 +639,15 @@ def test_parser_defaults() -> None:
     assert args.load_in_4bit is True
     assert args.gradient_checkpointing is True
     assert args.dry_run is False
+    assert args.report_to == "auto"
+    assert args.resume_from_checkpoint is None
+    assert args.skip_too_long is True
+
+
+def test_parser_no_skip_too_long_disables_skipping() -> None:
+    args = build_parser().parse_args(["--no-skip-too-long"])
+
+    assert args.skip_too_long is False
 
 
 def test_parser_no_4bit_turns_quantization_off() -> None:
@@ -638,6 +669,83 @@ def test_parser_rejects_non_positive_limit(value: str) -> None:
         build_parser().parse_args(["--limit", value])
 
     assert exc_info.value.code == 2
+
+
+def test_parser_accepts_resume_checkpoint_and_report_to(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "checkpoint-500"
+    checkpoint.mkdir()
+    args = build_parser().parse_args(
+        [
+            "--resume_from_checkpoint",
+            str(checkpoint),
+            "--report_to",
+            "tensorboard",
+        ]
+    )
+
+    assert args.resume_from_checkpoint == checkpoint
+    assert args.report_to == "tensorboard"
+
+
+def test_parser_rejects_unknown_report_to() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["--report_to", "mlflow"])
+
+    assert exc_info.value.code == 2
+
+
+def test_resolve_resume_checkpoint_none_and_directory(
+    tmp_path: Path,
+) -> None:
+    assert resolve_resume_checkpoint(None) is None
+    assert resolve_resume_checkpoint(tmp_path) == str(tmp_path)
+
+
+def test_resolve_resume_checkpoint_rejects_missing(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="Чекпоинт"):
+        resolve_resume_checkpoint(tmp_path / "missing")
+
+
+def _installed(*names: str) -> Any:
+    def find_spec(name: str) -> object | None:
+        return object() if name in names else None
+
+    return find_spec
+
+
+def test_resolve_report_to_none_disables_logging() -> None:
+    assert resolve_report_to("none", find_spec=_installed()) == []
+
+
+def test_resolve_report_to_auto_prefers_tensorboard() -> None:
+    assert resolve_report_to(
+        "auto", find_spec=_installed("tensorboard", "wandb")
+    ) == ["tensorboard"]
+
+
+def test_resolve_report_to_auto_falls_back_to_wandb() -> None:
+    assert resolve_report_to(
+        "auto", find_spec=_installed("wandb")
+    ) == ["wandb"]
+
+
+def test_resolve_report_to_auto_without_libraries() -> None:
+    assert resolve_report_to("auto", find_spec=_installed()) == []
+
+
+def test_resolve_report_to_explicit_installed() -> None:
+    assert resolve_report_to(
+        "tensorboard", find_spec=_installed("tensorboard")
+    ) == ["tensorboard"]
+
+
+def test_resolve_report_to_warns_when_missing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert resolve_report_to("wandb", find_spec=_installed()) == []
+    assert "не установлен" in capsys.readouterr().err
 
 
 class _FakeBitsAndBytesConfig:
@@ -676,7 +784,6 @@ def _fake_stack() -> Any:
     class _AutoModel:
         @staticmethod
         def from_pretrained(*args: Any, **kwargs: Any) -> _FakeBaseModel:
-            _AutoModel.kwargs = kwargs
             return _FakeBaseModel()
 
     def _prepare(model: _FakeBaseModel) -> _FakeBaseModel:
@@ -786,6 +893,196 @@ def test_train_without_cuda_exits_with_runpod_hint(
     assert "CUDA" in message
     assert "RunPod" in message
     assert "--dry-run" in message
+
+
+class _TrainTokenizer(_FakeTokenizer):
+    """Токенизатор с pad/eos и сохранением (для полного ``train()``)."""
+
+    pad_token: str | None = None
+    eos_token = "</s>"
+    pad_token_id = 0
+
+    def __init__(self) -> None:
+        self.saved_to: Path | None = None
+
+    def save_pretrained(self, path: str) -> None:
+        self.saved_to = Path(path)
+
+
+class _FakeTrainModel:
+    """Модель-заглушка для полного прогона ``train()``."""
+
+    def __init__(self) -> None:
+        self.saved_to: Path | None = None
+
+    def save_pretrained(self, path: str) -> None:
+        self.saved_to = Path(path)
+
+
+class _FakeDataset:
+    """Минимальный Dataset: from_list."""
+
+    def __init__(self, records: list[dict[str, Any]]) -> None:
+        self.records = records
+
+    @classmethod
+    def from_list(cls, records: list[dict[str, Any]]) -> _FakeDataset:
+        return cls(records)
+
+
+def _fake_training_stack(captured: dict[str, Any]) -> Any:
+    """Стек transformers/peft, записывающий аргументы Trainer."""
+
+    class _TrainingArguments:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["training_args"] = kwargs
+
+    class _Trainer:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["trainer"] = kwargs
+
+        def train(self, **kwargs: Any) -> None:
+            captured["train_kwargs"] = kwargs
+
+    class _AutoTokenizer:
+        @staticmethod
+        def from_pretrained(*args: Any, **kwargs: Any) -> _TrainTokenizer:
+            return _TrainTokenizer()
+
+    class _Cuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        @staticmethod
+        def get_device_name(index: int) -> str:
+            return "Fake GPU"
+
+        @staticmethod
+        def is_bf16_supported() -> bool:
+            return True
+
+    return SimpleNamespace(
+        torch=SimpleNamespace(
+            cuda=_Cuda,
+            version=SimpleNamespace(cuda="12.1"),
+        ),
+        AutoTokenizer=_AutoTokenizer,
+        Dataset=_FakeDataset,
+        TrainingArguments=_TrainingArguments,
+        Trainer=_Trainer,
+    )
+
+
+def test_train_passes_resume_checkpoint_and_report_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "checkpoint-500"
+    checkpoint.mkdir()
+    output = tmp_path / "lora-out"
+    args = build_parser().parse_args(
+        [
+            "--dataset",
+            "dataset.jsonl",
+            "--output-dir",
+            str(output),
+            "--resume_from_checkpoint",
+            str(checkpoint),
+            "--report_to",
+            "none",
+        ]
+    )
+    captured: dict[str, Any] = {}
+    model = _FakeTrainModel()
+    monkeypatch.setattr(
+        train_lora,
+        "_import_training_stack",
+        lambda: _fake_training_stack(captured),
+    )
+    monkeypatch.setattr(
+        train_lora, "_prepare_model", lambda *args, **kwargs: model
+    )
+
+    train(args, [_record()])
+
+    assert captured["train_kwargs"] == {
+        "resume_from_checkpoint": str(checkpoint)
+    }
+    assert captured["training_args"]["report_to"] == []
+    assert "logging_dir" not in captured["training_args"]
+    assert "warmup_ratio" not in captured["training_args"]
+    assert model.saved_to == output
+    assert captured["trainer"]["train_dataset"] is not None
+    assert len(captured["trainer"]["train_dataset"].records) == 1
+
+
+def _too_long_record() -> dict[str, Any]:
+    record = _record()
+    record["messages"][0]["content"] = "system " * 200
+    return record
+
+
+def test_train_skips_too_long_records(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--dataset",
+            "dataset.jsonl",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--max-length",
+            "100",
+            "--report_to",
+            "none",
+        ]
+    )
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        train_lora,
+        "_import_training_stack",
+        lambda: _fake_training_stack(captured),
+    )
+    monkeypatch.setattr(
+        train_lora,
+        "_prepare_model",
+        lambda *args, **kwargs: _FakeTrainModel(),
+    )
+
+    train(args, [_too_long_record(), _record()])
+
+    assert len(captured["trainer"]["train_dataset"].records) == 1
+    out = capsys.readouterr().out
+    assert "skipped_too_long" in out
+    assert "Пропущено слишком длинных записей" in out
+
+
+def test_train_without_skip_too_long_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--dataset",
+            "dataset.jsonl",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--max-length",
+            "100",
+            "--no-skip-too-long",
+            "--report_to",
+            "none",
+        ]
+    )
+    monkeypatch.setattr(
+        train_lora,
+        "_import_training_stack",
+        lambda: _fake_training_stack({}),
+    )
+
+    with pytest.raises(SystemExit, match="max-length"):
+        train(args, [_too_long_record()])
 
 
 # --- CLI --------------------------------------------------------------------

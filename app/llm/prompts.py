@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import chess
 
 from app.engine.models import EngineLine, MoveAnalysis
@@ -55,13 +57,17 @@ _KEY_CLASSES = frozenset({"blunder", "mistake", "inaccuracy"})
 
 
 def build_fact_package(
-    game: ParsedGame, analyses: list[MoveAnalysis], level: str
+    game: ParsedGame,
+    analyses: Sequence[MoveAnalysis] | None = None,
+    level: str = "club",
 ) -> str:
     """Собрать пакет фактов для генерации комментария.
 
     Args:
         game: разобранная партия (`ParsedGame`).
         analyses: результат `analyze_game_moves` (по одному на полуход).
+            ``None``/пустой список — внешний PGN без анализа движка
+            (T-087): пакет содержит только проверенные ходы и метаданные.
         level: ``beginner`` / ``club`` / ``gm`` — влияет на рекомендации.
 
     Returns:
@@ -76,6 +82,7 @@ def build_fact_package(
             f"Неизвестный уровень {level!r}; ожидается один из: {expected}"
         )
 
+    analysis_list = list(analyses or [])
     lines: list[str] = ["# Партия"]
     meta = game.metadata
     lines.append(f"Белые: {meta.white or 'неизвестно'}")
@@ -98,24 +105,37 @@ def build_fact_package(
 
     moment_limit = MAX_KEY_MOMENTS_BY_LEVEL[level]
     include_pv = level in PV_LEVELS
-    key_moments = _select_key_moments(analyses, limit=moment_limit)
-    lines.append(
-        f"# Ключевые моменты (до {moment_limit}, по убыванию потери)"
-    )
-    if not key_moments:
-        lines.append("Ключевых моментов не найдено.")
-    for number, analysis in enumerate(key_moments, start=1):
-        lines.extend(
-            _format_key_moment(
-                number, analysis, game, level, include_pv=include_pv
+    if analysis_list:
+        key_moments = _select_key_moments(analysis_list, limit=moment_limit)
+        lines.append(
+            f"# Ключевые моменты (до {moment_limit}, по убыванию потери)"
+        )
+        if not key_moments:
+            lines.append("Ключевых моментов не найдено.")
+        for number, analysis in enumerate(key_moments, start=1):
+            lines.extend(
+                _format_key_moment(
+                    number, analysis, game, level, include_pv=include_pv
+                )
             )
+            lines.append("")
+        lines.append(
+            "Все ходы, оценки и мотивы выше получены от движка и проверены. "
+            "Не добавляй ходы и оценки, которых здесь нет."
+        )
+    else:
+        # Внешний PGN: анализа движка нет, поэтому нельзя выдавать
+        # выдуманные оценки за проверенные факты (T-087).
+        lines.append("# Ключевые моменты")
+        lines.append(
+            "Анализ движка недоступен: партия загружена из внешнего PGN "
+            "без анализа ходов."
         )
         lines.append("")
-
-    lines.append(
-        "Все ходы, оценки и мотивы выше получены от движка и проверены. "
-        "Не добавляй ходы и оценки, которых здесь нет."
-    )
+        lines.append(
+            "Все ходы выше взяты из PGN и проверены. Оценок и лучших ходов "
+            "движка в пакете нет — не выдумывай их."
+        )
     return "\n".join(lines).strip() + "\n"
 
 
@@ -161,10 +181,19 @@ def _format_key_moment(
     ]
     lines.append(f"- Сыграно: {analysis.played_move_san} ({side_nom})")
     lines.append(f"- Оценка после хода (за белых): {_format_eval(analysis)}")
-    lines.append(
-        f"- Лучший ход движка: {analysis.best_move_san}; "
-        f"потеря {analysis.delta_cp} cp; класс: {analysis.classification}"
-    )
+    if analysis.best_move_known:
+        lines.append(
+            f"- Лучший ход движка: {analysis.best_move_san}; "
+            f"потеря {analysis.delta_cp} cp; класс: {analysis.classification}"
+        )
+    else:
+        lines.append(
+            f"- Потеря относительно лучшей линии: {analysis.delta_cp} cp; "
+            f"класс: {analysis.classification}"
+        )
+        lines.append(
+            "- Лучший ход движка неизвестен: в PGN есть только оценка."
+        )
 
     fen_before = _fen_before(game, ply)
     recommended = _recommended(analysis, fen_before, level)

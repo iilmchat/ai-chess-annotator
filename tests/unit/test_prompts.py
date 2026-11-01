@@ -243,6 +243,40 @@ def test_fact_package_contains_metadata_and_moves() -> None:
     assert "Уровень объяснения: club" in package
 
 
+def test_fact_package_without_analyses_marks_engine_data_unavailable() -> None:
+    """T-087: внешний PGN без анализа не должен выдавать оценки за факты."""
+    game = parse_pgn(SHORT_PGN)
+
+    package = build_fact_package(game, level="club")
+
+    assert "# Партия" in package
+    assert "# Ходы партии (SAN)" in package
+    assert "# Ключевые моменты" in package
+    assert "Анализ движка недоступен" in package
+    assert "Оценок и лучших ходов движка в пакете нет" in package
+    assert "Ключевых моментов не найдено" not in package
+    assert "Все ходы, оценки и мотивы выше получены от движка" not in package
+
+
+def test_fact_package_without_best_move_is_honest() -> None:
+    """T-092: из Lichess PGN известна оценка, но не лучший ход."""
+    game = parse_pgn(SHORT_PGN)
+    analysis = _short_analyses()[0].model_copy(
+        update={
+            "best_move_known": False,
+            "delta_cp": 120,
+            "classification": "mistake",
+            "lines": [],
+        }
+    )
+
+    package = build_fact_package(game, [analysis], "club")
+
+    assert "Потеря относительно лучшей линии: 120 cp" in package
+    assert "Лучший ход движка неизвестен: в PGN есть только оценка" in package
+    assert "Лучший ход движка: d4" not in package
+
+
 def test_fact_package_lists_key_moments_with_motifs_and_recommendation() -> None:
     game = parse_pgn(SHORT_PGN)
 

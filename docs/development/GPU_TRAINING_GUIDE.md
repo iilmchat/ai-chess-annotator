@@ -3,7 +3,8 @@
 Практическая инструкция: как подготовить отдельную машину с NVIDIA GPU
 (целевая — **RTX 3060 12 GB**), собрать датасет из PostgreSQL, обучить
 LoRA-адаптер и вернуть его на основную машину. Рассчитана на новичка;
-команды даны для **Linux** и **Windows PowerShell**.
+команды даны для **Linux** и **Windows PowerShell**. С итерации 43 —
+экспорт адаптера в GGUF для LM Studio без vLLM (§10).
 
 > Пайплайн и гиперпараметры подробно описаны в
 > [`docs/development/reports/LORA_TRAINING.md`](reports/LORA_TRAINING.md).
@@ -22,6 +23,8 @@ LoRA-адаптер и вернуть его на основную машину.
 7. [Перенос адаптера обратно](#7-перенос-адаптера-обратно)
 8. [Проверка на основной машине](#8-проверка-на-основной-машине)
 9. [Траблшутинг](#9-траблшутинг)
+10. [Запуск на арендованном сервере (Ubuntu 22.04 + CUDA 12.6)](#10-запуск-на-арендованном-сервере-ubuntu-2204--cuda-126)
+11. [Бесплатные GPU: Kaggle и Colab](#11-бесплатные-gpu-kaggle-и-colab)
 
 ---
 
@@ -68,33 +71,59 @@ python -m pytest tests/unit/test_train_lora.py tests/unit/test_generate_lora_dat
 
 ## 2. PyTorch с CUDA
 
-Для RTX 3060 (Ampere) и Python 3.12 ставим CUDA-сборку torch:
+Для Python 3.12 и CUDA 12.6 (RTX 3060/4090/A5000) ставьте **torch и
+torchvision одной CUDA-сборкой**. Смешивать `cu121`/`cu126` нельзя: это
+даёт `RuntimeError: Detected that PyTorch and torchvision were compiled
+with different CUDA major versions`.
+
+Официальный индекс:
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 
-Проверка **обязательна** — без неё легко обучаться на CPU и не понять,
-почему «всё медленно»:
+Если официальный индекс медленный/недоступен из РФ — зеркало SJTU:
 
 ```bash
-python -c "import torch; print('torch:', torch.__version__); print('cuda:', torch.version.cuda); print('available:', torch.cuda.is_available()); print('gpu:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'НЕТ GPU')"
+pip install torch torchvision \
+    --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu126/
+```
+
+Через `uv` (быстрее и фиксирует окружение):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv pip install torch torchvision \
+    --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu126/
+```
+
+Если драйвер поддерживает только CUDA 12.1, замените `cu126` на `cu121`
+**в обеих** библиотеках.
+
+Проверка **обязательна** — без неё легко обучаться на CPU и не заметить
+рассинхрон CUDA у torch/torchvision:
+
+```bash
+python -c "import torch, torchvision; print('torch:', torch.__version__); print('torchvision:', torchvision.__version__); print('cuda:', torch.version.cuda); print('available:', torch.cuda.is_available()); print('gpu:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'НЕТ GPU')"
 ```
 
 Ожидаемый вывод на исправной машине:
 
 ```text
-torch: 2.x.x+cu121
-cuda: 12.1
+torch: 2.x.x+cu126
+torchvision: 0.2x.x+cu126
+cuda: 12.6
 available: True
-gpu: NVIDIA GeForce RTX 3060
+gpu: NVIDIA GeForce RTX 3060 (или RTX 4090 / A5000)
 ```
 
 Если `available: False`:
 
 - проверьте, что драйвер NVIDIA установлен и `nvidia-smi` показывает GPU;
 - убедитесь, что не установилась CPU-сборка (`torch.__version__` без
-  `+cu121`, например `+cpu`) — переустановите командой выше;
+  `+cu126`, например `+cpu`) — переустановите командой выше;
+- проверьте, что `torch` и `torchvision` собраны с одной CUDA: обе строки
+  должны оканчиваться на `+cu126` (или обе на `+cu121`);
 - на Windows с WSL2 `nvidia-smi` должен работать **внутри** WSL; ставьте
   драйвер Windows (не Linux-драйвер внутри WSL);
 - после обновления драйвера перезагрузите машину.
@@ -323,6 +352,73 @@ python scripts/train_lora.py --dry-run --dataset data/lora_club_v1.jsonl
 `Распределение по schema_version: 2=N` и **нет** предупреждения про
 `schema_version=1`/«user не похож на пакет фактов».
 
+### 5.1. Внешний датасет: bishop-chess-dataset (T-087)
+
+Если правок редакторов мало, данные можно добрать из внешнего
+аннотированного PGN-корпуса. Файл
+`data/external_datasets/bishop_train.jsonl` (15 363 записи, ~60 МБ) в git
+не коммитится — скачайте его отдельно (`pkloats/bishop-chess-dataset`).
+В каждой строке JSONL поле `text` содержит PGN с комментариями в
+`{ ... }`.
+
+Конвертер `scripts/convert_external_datasets.py` собирает из него
+`schema_version=2`: `system` — промпт уровня `club`, `user` — пакет
+фактов `build_fact_package(..., level="club")`, `assistant` — склеенные
+комментарии PGN. Служебные теги `[%eval ...]`/`[%clk ...]` вырезаются,
+`assistant` ограничивается 2000 символами. Анализа движка у внешнего PGN
+нет, поэтому в пакете фактов нет ключевых моментов и оценок — только ходы
+и метаданные; пакет прямо сообщает, что оценок движка в нём нет.
+
+Сначала сухой прогон (файл не пишется):
+
+```bash
+python scripts/convert_external_datasets.py --dry-run --limit 100
+```
+
+Реальная сборка (по умолчанию `--input data/external_datasets/bishop_train.jsonl`,
+`--output data/lora_gold_v1.jsonl`, `--limit 5000`):
+
+```bash
+python scripts/convert_external_datasets.py --limit 5000
+```
+
+PowerShell — те же команды:
+
+```powershell
+python scripts/convert_external_datasets.py --dry-run --limit 100
+python scripts/convert_external_datasets.py --limit 5000
+```
+
+`--limit` — максимум записей в **выходном** файле; чтение идёт, пока лимит
+не набран. Пропуски (`битый PGN`, `нет комментариев`, `комментарии короче
+20 символов`, `битый JSON`, пустой `text`) считаются в сводке и не
+прерывают прогон. Пример:
+
+```text
+Конвертация внешнего датасета: schema_version=2
+Прочитано записей: 12693
+Сконвертировано записей: 5000
+Пропущено записей: 7693
+  битый PGN: 7321
+  нет комментариев: 372
+Средняя длина assistant: 1744 символов (максимум 2000)
+Файл: data/lora_gold_v1.jsonl
+```
+
+Проверка перед обучением:
+
+```bash
+python scripts/train_lora.py --dry-run --dataset data/lora_gold_v1.jsonl
+```
+
+Ожидается `Распределение по schema_version: 2=5000`, `club=5000` и
+отсутствие предупреждения «user не похож на пакет фактов». Файл можно
+обучать отдельно (`--dataset data/lora_gold_v1.jsonl`) или объединить с
+`data/lora_club_v1.jsonl` перед запуском. Внешние комментарии не
+проверены движком и могут содержать опечатки — это данные для стиля, а не
+эталон фактов; при смешивании ориентируйтесь на
+`metadata.source="pkloats/bishop-chess-dataset"`.
+
 ---
 
 ## 6. Обучение
@@ -369,6 +465,14 @@ python scripts/train_lora.py \
   ставьте vLLM на инференсе; на 12 GB это может не поместиться.
 - `--epochs 3`, `--lr 2e-4`, `--lora-r 16`, `--lora-alpha 32` — дефолты
   проекта для первого прогона.
+
+**Логи лосса.** По умолчанию `--report_to auto`: если установлен
+`tensorboard`, логи пишутся в `models/lora-club-v1/runs` (смотреть
+`tensorboard --logdir models/lora-club-v1/runs`); иначе используется
+`wandb`, если он есть; если нет ни одного — остаётся консольный вывод
+Trainer. Явно: `--report_to tensorboard`, `--report_to wandb` или
+`--report_to none`. Прерванное обучение продолжается флагом
+`--resume_from_checkpoint models/lora-club-v1/checkpoint-N` (см. §10.4).
 
 **VRAM на RTX 3060 12 GB.** QLoRA 4B + `batch=1` + `max_length=2048` +
 gradient checkpointing обычно помещается. Следите за `nvidia-smi` в
@@ -477,7 +581,8 @@ git commit -m "chore(lora): club adapter v1"
    ```
 
    LM Studio динамические LoRA через OpenAI-совместимый API не умеет —
-   нужен именно vLLM.
+   нужен именно vLLM. Альтернатива для LM Studio — смерджить адаптер и
+   конвертировать в GGUF (§10.5–10.6), тогда vLLM не нужен.
 
 4. Убедитесь, что адаптер виден:
 
@@ -546,7 +651,7 @@ git commit -m "chore(lora): club adapter v1"
 | :--- | :--- | :--- |
 | `CUDA OOM` / `out of memory` | не хватило VRAM | `--batch-size 1`, `--max-length 1024`, `--grad-accum 16`, `--load-in-4bit`, закрыть другие GPU-приложения; при необходимости GPU с большей памятью |
 | `CUDA driver version is insufficient` | старый драйвер NVIDIA | обновить драйвер, перезагрузиться; проверить `nvidia-smi` |
-| `torch.cuda.is_available()` → `False` | CPU-сборка torch, нет драйвера, WSL без GPU | переустановить torch с `--index-url .../cu121`; проверить `nvidia-smi` в той же среде (в WSL — внутри WSL); перезагрузить |
+| `torch.cuda.is_available()` → `False` | CPU-сборка torch, нет драйвера, WSL без GPU | переустановить `torch` и `torchvision` с `--index-url .../cu126` (или обе с `cu121`); проверить `nvidia-smi` в той же среде (в WSL — внутри WSL); перезагрузить |
 | `Нет зависимостей для обучения LoRA` (exit 1) | не установлены transformers/peft/datasets/accelerate | `pip install transformers peft datasets accelerate bitsandbytes` |
 | `CUDA/GPU не найдена` (exit 1) | torch не видит GPU | см. строки про `torch.cuda.is_available()` |
 | `bitsandbytes` не ставится на Windows | нет нативной сборки | WSL2/Ubuntu (рекомендуется) или Linux-машина |
@@ -555,9 +660,445 @@ git commit -m "chore(lora): club adapter v1"
 | `no games with commentaries found` / exit 2 | нет `edits` или не выполнен `/v1/analyze` | проверить `select count(*) from edits;`, вызвать `/v1/analyze` для партий, повторить `--dry-run` |
 | `Пропущено записей: N` | нет анализа ходов/битый PGN | посмотреть причины в сводке; выполнить `/v1/analyze`; проверить PGN |
 | `schema_version=2, но user не похож на пакет фактов` | файл собран не тем скриптом | пересобрать `scripts/generate_lora_dataset_from_db.py` (v2) |
+| `Ни одной записи не сконвертировано` (exit 2) | нет входного JSONL, пустое поле `text` или все PGN битые | проверить путь к `bishop_train.jsonl`; `--dry-run` покажет причины пропусков |
 | vLLM: `model "lora-club-v1" not found` | basename не совпал с `--lora-modules` | `--lora-modules lora-club-v1=<точный путь>`; проверить `ls models/lora-club-v1` |
 | `llm_lora_adapter_unavailable` в логах | нет `adapter_config.json`/путь неверный | проверить `LORA_ADAPTER_PATH`; каталог должен содержать `adapter_config.json` |
 | Скачивание Qwen зависает | нет доступа к Hugging Face | `HF_TOKEN`, предварительно скачать модель; проверить сеть |
+| `llama.cpp не найден… GGUF не создан` | нет `convert_hf_to_gguf.py`/`convert.py` | установить llama.cpp (см. §10.5) и повторить `export_to_gguf.py --llama_cpp_dir ~/llama.cpp`; HF-модель уже сохранена |
+| `В … нет adapter_config.json` | `--adapter_path` указывает не на LoRA | указать каталог из `--output-dir` обучения (там `adapter_config.json` и `adapter_model.safetensors`) |
+| `tensorboard не установлен` / логов нет | `--report_to tensorboard`, но пакета нет | `pip install tensorboard` или `--report_to none` |
+| `Чекпоинт не найден` | неверный `--resume_from_checkpoint` | `ls models/.../checkpoint-*` и указать существующий каталог |
+| `embedding(): argument 'indices' must be Tensor, not list` | старый `collate_batch` возвращал списки | обновить репозиторий: с итерации 44 `collate_batch` возвращает `torch.tensor` |
+| `Detected that PyTorch and torchvision were compiled with different CUDA major versions` | torch и torchvision из разных индексов | переустановить обе одной командой с `cu126` (или обе с `cu121`), см. §2 |
+| `TypeError: __init__() got an unexpected keyword argument 'logging_dir'` / `'warmup_ratio'` | старый код с аргументами, удалёнными в transformers 4.44+ | обновить репозиторий (итерация 44 убрала эти аргументы) |
+| `skipped_too_long: N` | записи не помещаются в `--max-length` | это не ошибка: увеличьте `--max-length` или оставьте пропуск; `--no-skip-too-long` вернёт падение |
+| `hf: command not found` | старый `huggingface_hub` без CLI `hf` | `pip install -U "huggingface_hub[cli]"`; `huggingface-cli download` устарел |
+| Скачивание Qwen зависает | нет доступа к Hugging Face | `export HF_ENDPOINT=https://hf-mirror.com`, `hf download ...`, `HF_TOKEN` для gated-моделей |
+
+---
+
+## 10. Запуск на арендованном сервере (Ubuntu 22.04 + CUDA 12.6)
+
+Сценарий для арендованной машины с **RTX 4090 / RTX A5000 24 GB** (на
+3060 12 GB осторожнее с batch size, см. §6). Все команды — в SSH-сессии
+на сервере.
+
+### 10.1. Зависимости
+
+Проверьте драйвер и CUDA:
+
+```bash
+nvidia-smi
+```
+
+Если Python 3.12 нет в системе, поставьте его (Ubuntu 22.04):
+
+```bash
+sudo apt-get install -y software-properties-common
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt-get update
+sudo apt-get install -y python3.12 python3.12-venv python3.12-dev git
+```
+
+Клонирование и venv (вариант `pip`):
+
+```bash
+git clone https://github.com/iilmchat/ai-chess-annotator.git
+cd ai-chess-annotator
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+Либо через `uv` (быстрее, меньше конфликтов версий):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+git clone https://github.com/iilmchat/ai-chess-annotator.git
+cd ai-chess-annotator
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+```
+
+PyTorch CUDA 12.6 — **torch и torchvision одной сборкой**:
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# если официальный индекс недоступен из РФ:
+pip install torch torchvision \
+    --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu126/
+pip install peft transformers bitsandbytes accelerate datasets tensorboard
+pip install -e ".[dev]"
+```
+
+С `uv` те же установки: `uv pip install ...` с тем же `--index-url`.
+Не смешивайте `cu121`/`cu126`: `torch` и `torchvision` должны быть
+собраны с одной CUDA.
+
+Проверка **обязательна**:
+
+```bash
+python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python scripts/train_lora.py --check-env
+```
+
+Ожидается `+cu126` у обеих библиотек, `True`, `NVIDIA GeForce RTX 4090`
+(или `A5000`), `cuda: да`, `bf16: да` (Ampere/Ada bf16 поддерживают).
+
+#### Скачивание базовой модели из РФ (HF-зеркало)
+
+Официальный `huggingface.co` из РФ часто недоступен. Используйте зеркало
+`hf-mirror.com` и новый CLI `hf` (`huggingface-cli download` устарел):
+
+```bash
+pip install -U "huggingface_hub[cli]"
+export HF_ENDPOINT=https://hf-mirror.com
+hf download Qwen/Qwen2.5-7B-Instruct \
+    --local-dir models/base/Qwen2.5-7B-Instruct
+```
+
+PowerShell:
+
+```powershell
+$env:HF_ENDPOINT = "https://hf-mirror.com"
+hf download Qwen/Qwen2.5-7B-Instruct `
+    --local-dir models/base/Qwen2.5-7B-Instruct
+```
+
+Через Python API (если `hf` не установился):
+
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen2.5-7B-Instruct', local_dir='models/base/Qwen2.5-7B-Instruct')"
+```
+
+`HF_ENDPOINT` можно добавить в `~/.bashrc`. Для gated-моделей нужен
+`HF_TOKEN` (получить на официальном сайте), зеркало токен не выдаёт.
+Скачанную модель передавайте в обучение локальным путём
+(`--model models/base/Qwen2.5-7B-Instruct`) — тогда сеть при старте не
+нужна.
+
+### 10.2. Датасет
+
+Скопируйте готовый JSONL с основной машины (или соберите на сервере,
+если перенесли БД):
+
+```bash
+# на основной машине
+scp data/lora_gold_v1.jsonl root@<server-ip>:/workspace/ai-chess-annotator/data/
+```
+
+На сервере проверьте файл:
+
+```bash
+python scripts/train_lora.py --dry-run --dataset data/lora_gold_v1.jsonl
+```
+
+Должно быть `schema_version: 2=5000`, `club=5000`, без предупреждений о
+v1/«user не похож на пакет фактов».
+
+### 10.3. Обучение на RTX 4090
+
+```bash
+python scripts/train_lora.py \
+    --dataset data/lora_gold_v1.jsonl \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --output-dir models/lora-club-v2 \
+    --epochs 3 \
+    --batch-size 4 \
+    --grad-accum 4 \
+    --lr 2e-4 \
+    --lora-r 16 \
+    --lora-alpha 32 \
+    --lora-dropout 0.05 \
+    --max-length 2048 \
+    --load-in-4bit \
+    --gradient-checkpointing \
+    --report_to tensorboard \
+    --seed 42
+```
+
+`--batch-size 4 --grad-accum 4` — effective batch 16; на 24 GB это
+рабочая отправная точка для 7B в NF4 с gradient checkpointing. Если
+`CUDA OOM`: `--batch-size 2 --grad-accum 8`, затем `--max-length 1024`.
+Чекпоинты сохраняются по эпохам в `models/lora-club-v2/checkpoint-*`.
+
+`--skip-too-long` включён по умолчанию: записи, которые не помещаются в
+`--max-length`, пропускаются со счётчиком `skipped_too_long`, обучение
+продолжается. Чтобы падать на первой такой записи, добавьте
+`--no-skip-too-long`.
+
+Если базовая модель скачана через зеркало, замените `--model
+Qwen/Qwen2.5-7B-Instruct` на `--model models/base/Qwen2.5-7B-Instruct`.
+
+TensorBoard (по умолчанию логи пишутся в `output_dir/runs`; запускать в
+отдельном терминале или через SSH-туннель):
+
+```bash
+tensorboard --logdir models/lora-club-v2/runs --port 6006 --bind_all
+```
+
+С локальной машины:
+
+```bash
+ssh -L 6006:127.0.0.1:6006 root@<server-ip>
+# открыть http://127.0.0.1:6006
+```
+
+`--report_to auto` (по умолчанию) сам выберет TensorBoard, если он
+установлен; `--report_to wandb` — если нужен Weights & Biases (потребуется
+`wandb login`); `--report_to none` — только консоль.
+
+### 10.4. Продолжение после обрыва аренды
+
+Найдите последний чекпоинт:
+
+```bash
+ls -d models/lora-club-v2/checkpoint-*
+```
+
+Повторите **ту же** команду обучения, добавив путь:
+
+```bash
+python scripts/train_lora.py \
+    --dataset data/lora_gold_v1.jsonl \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --output-dir models/lora-club-v2 \
+    --epochs 3 \
+    --batch-size 4 \
+    --grad-accum 4 \
+    --max-length 2048 \
+    --load-in-4bit \
+    --gradient-checkpointing \
+    --report_to tensorboard \
+    --resume_from_checkpoint models/lora-club-v2/checkpoint-500
+```
+
+`--epochs` — общее число эпох, а не «добавить ещё»; Trainer восстановит
+оптимизатор, scheduler и RNG. Не меняйте `--output-dir` и гиперпараметры
+без необходимости: иначе продолжение будет несогласованным. Если путь
+неверный, скрипт завершится с сообщением «Чекпоинт не найден», не начиная
+обучение заново.
+
+### 10.5. Экспорт в GGUF
+
+LM Studio не умеет динамические LoRA, поэтому адаптер нужно смерджить и
+конвертировать. Установите llama.cpp (нужен Python-конвертер из репозитория):
+
+```bash
+sudo apt-get install -y cmake build-essential
+git clone https://github.com/ggerganov/llama.cpp ~/llama.cpp
+cd ~/llama.cpp
+cmake -B build
+cmake --build build --config Release -j
+pip install -r requirements.txt
+cd ~/ai-chess-annotator
+```
+
+Экспорт (по умолчанию merge идёт на CPU — для 7B нужно ~16 ГБ RAM;
+`--device cuda` быстрее, если хватает VRAM):
+
+```bash
+python scripts/export_to_gguf.py \
+    --base_model Qwen/Qwen2.5-7B-Instruct \
+    --adapter_path models/lora-club-v2 \
+    --output_dir models/qwen2.5-7b-chess-gguf \
+    --llama_cpp_dir ~/llama.cpp \
+    --gguf_outtype f16
+```
+
+Результат:
+
+```text
+models/qwen2.5-7b-chess-gguf/
+├── config.json
+├── model.safetensors          # смердженная HF-модель
+├── tokenizer.json
+├── tokenizer_config.json
+└── model.gguf                 # если llama.cpp найден и конвертация удалась
+```
+
+Если llama.cpp не найден или конвертер упал, скрипт печатает warning,
+**не удаляет** HF-модель и завершается с кодом 0. Можно установить
+llama.cpp и повторить только конвертацию (обучение не нужно). Для LM Studio
+на слабой машине имеет смысл квантовать f16 в Q4_K_M:
+
+```bash
+~/llama.cpp/build/bin/llama-quantize \
+    models/qwen2.5-7b-chess-gguf/model.gguf \
+    models/qwen2.5-7b-chess-gguf/model-Q4_K_M.gguf Q4_K_M
+```
+
+### 10.6. Скачать GGUF и загрузить в LM Studio
+
+С сервера на основную машину:
+
+```bash
+scp root@<server-ip>:/workspace/ai-chess-annotator/models/qwen2.5-7b-chess-gguf/model-Q4_K_M.gguf .
+```
+
+(или `rsync -avP` для докачки при обрыве).
+
+В LM Studio:
+
+1. **My Models → Import** (или скопируйте `.gguf` в каталог моделей
+   LM Studio, например `~/.lmstudio/models/local/chess/`).
+2. Выберите файл, при необходимости укажите context length `8192` и
+   загрузите модель.
+3. **Developer → Start Server** (OpenAI-совместимый сервер, по умолчанию
+   `http://127.0.0.1:1234`).
+4. Проверьте:
+
+   ```bash
+   curl -s http://127.0.0.1:1234/v1/models
+   ```
+
+5. В `.env` приложения укажите LM Studio вместо vLLM:
+
+   ```dotenv
+   VLLM_BASE_URL=http://127.0.0.1:1234/v1
+   VLLM_MODEL=<model id из /v1/models>
+   LORA_ADAPTER_PATH=
+   ```
+
+   Перезапустите backend. Теперь `/v1/commentary` использует смердженный
+   GGUF через LM Studio, без vLLM и без отдельного LoRA-адаптера.
+
+---
+
+## 11. Бесплатные GPU: Kaggle и Colab
+
+Бесплатные GPU подходят для первого прогона **4B-модели** (Qwen3-4B) на
+T4 16 GB. 7B на T4 обычно не помещается даже в NF4 с `batch=1`; для 7B
+берите арендованную A5000/4090 (§10). Оба сервиса дают временную машину:
+рабочий каталог может исчезнуть после сессии, поэтому чекпоинты и готовый
+адаптер сохраняйте на Drive/Kaggle Dataset или скачивайте сразу.
+
+### 11.1. Kaggle Notebooks
+
+Бесплатный аккаунт: ~30 GPU-часов в неделю, T4 ×2 (16 GB каждая) или
+P100. Для QLoRA выбирайте **T4**, а не P100: на P100 нет bf16, а
+bitsandbytes-сборка капризнее.
+
+1. Создайте Notebook → **Settings → Accelerator → GPU T4 ×2**.
+2. Проверьте GPU и окружение:
+
+   ```python
+   !nvidia-smi
+   !python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+   ```
+
+3. Клонируйте репозиторий и поставьте пакеты (torch в Kaggle уже есть;
+   не переустанавливайте его без необходимости):
+
+   ```python
+   !git clone https://github.com/iilmchat/ai-chess-annotator.git
+   %cd ai-chess-annotator
+   !pip install -q -U peft transformers datasets accelerate bitsandbytes tensorboard
+   ```
+
+4. Загрузите `data/lora_gold_v1.jsonl` как **Kaggle Dataset** (например,
+   `chess-gold`). В ноутбуке он будет в
+   `/kaggle/input/chess-gold/lora_gold_v1.jsonl`.
+5. Запустите обучение (4B, T4, QLoRA; effective batch 16):
+
+   ```python
+   !python scripts/train_lora.py \
+       --dataset /kaggle/input/chess-gold/lora_gold_v1.jsonl \
+       --model Qwen/Qwen3-4B-Instruct-2507 \
+       --output-dir /kaggle/working/models/lora-club-v1 \
+       --epochs 3 \
+       --batch-size 1 \
+       --grad-accum 16 \
+       --max-length 1024 \
+       --load-in-4bit \
+       --gradient-checkpointing \
+       --report_to tensorboard \
+       --seed 42
+   ```
+
+6. TensorBoard в Kaggle: запустите `%tensorboard --logdir
+   /kaggle/working/models/lora-club-v1/runs` (если расширение доступно)
+   либо скачайте `runs/` и откройте локально.
+7. Упакуйте и скачайте адаптер из вкладки **Output**:
+
+   ```python
+   !cd /kaggle/working && zip -r lora-club-v1.zip models/lora-club-v1
+   ```
+
+8. Продолжение после обрыва: Kaggle-сессия ограничена (~12 ч). Если
+   `checkpoint-*` успели сохраниться в `/kaggle/working`, перезапустите
+   ячейку с `--resume_from_checkpoint
+   /kaggle/working/models/lora-club-v1/checkpoint-N`. Если сессия
+   уничтожила каталог — загрузите прошлый zip как Dataset, распакуйте в
+   `/kaggle/working` и только потом продолжайте.
+
+### 11.2. Google Colab
+
+Бесплатный Colab: T4 16 GB, сессия до ~12 ч, но при простое среда
+отключается раньше. Диск не сохраняется между сессиями — используйте
+Google Drive.
+
+1. Подключите Drive:
+
+   ```python
+   from google.colab import drive
+   drive.mount('/content/drive')
+   ```
+
+2. Клонируйте репозиторий и поставьте зависимости:
+
+   ```python
+   !git clone https://github.com/iilmchat/ai-chess-annotator.git
+   %cd ai-chess-annotator
+   !pip install -q -U peft transformers datasets accelerate bitsandbytes tensorboard
+   ```
+
+3. Положите `lora_gold_v1.jsonl` в
+   `/content/drive/MyDrive/chess/lora_gold_v1.jsonl` (через веб-интерфейс
+   Drive или `files.upload()`).
+4. Обучение с сохранением прямо на Drive:
+
+   ```python
+   !python scripts/train_lora.py \
+       --dataset /content/drive/MyDrive/chess/lora_gold_v1.jsonl \
+       --model Qwen/Qwen3-4B-Instruct-2507 \
+       --output-dir /content/drive/MyDrive/chess/models/lora-club-v1 \
+       --epochs 3 \
+       --batch-size 1 \
+       --grad-accum 16 \
+       --max-length 1024 \
+       --load-in-4bit \
+       --gradient-checkpointing \
+       --report_to tensorboard \
+       --seed 42
+   ```
+
+5. После обучения скачайте `models/lora-club-v1` из Drive или упакуйте:
+
+   ```python
+   !cd /content/drive/MyDrive/chess/models && zip -r lora-club-v1.zip lora-club-v1
+   ```
+
+6. Продолжение: `--resume_from_checkpoint
+   /content/drive/MyDrive/chess/models/lora-club-v1/checkpoint-N`. Drive
+   переживает сессию, поэтому чекпоинты не теряются.
+
+### 11.3. Ограничения бесплатных GPU
+
+- **VRAM 16 GB:** 4B в NF4 + `batch=1` + `max_length=1024` — рабочая
+  точка; при OOM уменьшите `--max-length` до 512.
+- **Нет bf16 на P100/старых T4-сборках:** скрипт сам выставляет bf16
+  только если `torch.cuda.is_bf16_supported()`; обучение продолжится, но
+  менее эффективно.
+- **Прерывания:** сессия может закончиться в любой момент. Сохраняйте
+  `output_dir` на Drive/Kaggle Dataset и используйте
+  `--resume_from_checkpoint`.
+- **Сеть:** скачивание Qwen может занимать долго; заранее положите модель
+  в Kaggle Dataset/Drive и передайте локальный путь `--model ...`.
+- **GGUF-экспорт** лучше делать не на бесплатном T4: merge 7B требует
+  ~16 ГБ RAM и много времени; используйте арендованный CPU/GPU или
+  основную машину (§10.5).
 
 ---
 
@@ -569,9 +1110,19 @@ git commit -m "chore(lora): club adapter v1"
 - [ ] `alembic upgrade head` выполнен; в БД есть `edits` и `moves`.
 - [ ] `--dry-run` сборщика датасета: `Экспортировано записей` > 0,
       пропуски объяснены.
+- [ ] Внешний gold-датасет (если используется): конвертер отработал без
+      ошибок, `train_lora.py --dry-run` показывает `schema_version: 2`.
 - [ ] `train_lora.py --dry-run`: `schema_version=2`, токены помещаются в
       `--max-length`.
 - [ ] После обучения в `models/lora-club-v1/adapter_config.json` есть
       `r=16`, `lora_alpha=32`.
+- [ ] Логи лосса пишутся (`models/.../runs` для TensorBoard или
+      `--report_to none` осознанно).
+- [ ] При обрыве обучение продолжено с `--resume_from_checkpoint
+      models/.../checkpoint-N`, а не запущено заново.
+- [ ] `export_to_gguf.py` отработал: есть `model.gguf` (или HF-модель при
+      отсутствии llama.cpp); файл открывается в LM Studio.
+- [ ] На бесплатном GPU (Kaggle/Colab): T4, 4B-модель, `batch=1`,
+      `--max-length 1024`, output/checkpoint на Drive или Kaggle Dataset.
 - [ ] Адаптер скопирован на основную машину, `/v1/models` содержит
       `lora-club-v1`, smoke `/v1/commentary` вернул 200.

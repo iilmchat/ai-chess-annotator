@@ -119,6 +119,7 @@ requires_redis = pytest.mark.skipif(
 
 def _settings(**overrides: Any) -> Settings:
     """Настройки приложения с ВЫКЛЮЧЕННЫМ тестовым bypass-ом авторизации."""
+    configured = get_settings()
     base: dict[str, Any] = {
         "_env_file": None,
         "app_env": "test",
@@ -129,6 +130,11 @@ def _settings(**overrides: Any) -> Settings:
         "prompt_pubsub_enabled": False,
         "semantic_cache_enabled": False,
         "cors_origins": "http://localhost:5173",
+        # `_env_file=None` не читает `.env`, поэтому без явного значения
+        # приложение ходило бы в дефолтный Redis (6379/6380), тогда как
+        # `requires_redis` проверяет порт из `.env` (KI-001: на dev-машине
+        # порты сдвинуты, чтобы не конфликтовать с другими проектами).
+        "redis_url": configured.redis_url,
         # PyJWT предупреждает про HMAC-ключи < 32 байт; фиксируем длинный.
         "jwt_secret": "integration-test-secret-0123456789-0123456789",
     }

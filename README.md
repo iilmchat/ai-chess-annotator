@@ -237,8 +237,8 @@ observability-стек Grafana/Tempo/Prometheus.
 ## Быстрый старт
 
 **Требования:** Python 3.12+, Node.js 22+, pnpm 12+, Docker Desktop,
-Stockfish 17 в PATH (локальный бинарник; UCI-over-TCP не поддержан —
-KI-013).
+Stockfish 17 (локальный бинарник; UCI-over-TCP не поддержан — KI-013).
+На Windows/Linux/macOS x86_64 его ставит `python scripts/install_stockfish.py`.
 
 ### Dev: backend на хосте, инфраструктура в Docker
 
@@ -249,13 +249,12 @@ cd ai-chess-annotator
 
 # 2. Поднять PostgreSQL 17 + pgvector и Redis
 docker compose up -d postgres redis
-# Stockfish — локально в PATH или в .env: STOCKFISH_PATH=...
-# (на Windows — ASCII-путь, напр. D:\Tools\stockfish\stockfish.exe)
 
-# 3. Установить зависимости и применить миграции
+# 3. Установить зависимости, окружение, Stockfish и миграции
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 cp .env.example .env
+python scripts/install_stockfish.py   # Stockfish 17.1 → bin/stockfish + STOCKFISH_PATH
 alembic upgrade head
 
 # 4. Запустить backend

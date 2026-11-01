@@ -107,6 +107,28 @@ exclude = ["alembic/"]
 module = ["stockfish.*", "chess.*", "cairosvg.*"]
 ignore_missing_imports = true
 
+# T-090: torch/transformers/peft/datasets — опциональные пакеты обучения.
+# Они не входят в [project.dependencies], поэтому mypy скриптов должен
+# работать и на машине без них (CI), и с ними (GPU-машина).
+[[tool.mypy.overrides]]
+module = [
+    "torch",
+    "torch.*",
+    "torchvision",
+    "torchvision.*",
+    "transformers",
+    "transformers.*",
+    "peft",
+    "peft.*",
+    "datasets",
+    "datasets.*",
+    "accelerate",
+    "accelerate.*",
+    "bitsandbytes",
+    "bitsandbytes.*",
+]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

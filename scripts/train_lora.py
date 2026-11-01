@@ -30,9 +30,18 @@ python scripts/train_lora.py \
     --output-dir models/lora-club-v1 --load-in-4bit
 ```
 
+Логи лосса: `--report_to auto` (по умолчанию) включает TensorBoard,
+если пакет установлен, иначе wandb; `--report_to none` оставляет только
+консоль. Прерванное обучение продолжается с чекпоинта:
+`--resume_from_checkpoint models/lora-club-v1/checkpoint-500`.
+Записи, не помещающиеся в `--max-length`, по умолчанию пропускаются
+(`--skip-too-long`); `--no-skip-too-long` возвращает падение.
+
 После обучения укажите `LORA_ADAPTER_PATH=models/lora-club-v1` и запустите
 vLLM с `--lora-modules lora-club-v1=models/lora-club-v1`: клиент использует
 basename пути как имя adapter-модели (см. `Settings.lora_model`).
+Для LM Studio адаптер сначала смердживается и конвертируется в GGUF:
+`scripts/export_to_gguf.py` (T-088).
 """
 
 from __future__ import annotations
@@ -44,7 +53,7 @@ import json
 import platform
 import sys
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,9 +70,11 @@ __all__ = [
     "DEFAULT_TARGET_MODULES",
     "FACT_PACKAGE_MARKERS",
     "LEGACY_SCHEMA_VERSION",
+    "REPORT_TO_CHOICES",
     "SCHEMA_VERSION",
     "SUPPORTED_SCHEMA_VERSIONS",
     "DatasetStats",
+    "TooLongError",
     "build_parser",
     "collate_batch",
     "dataset_stats",
@@ -72,6 +83,8 @@ __all__ = [
     "looks_like_fact_package",
     "main",
     "read_records",
+    "resolve_report_to",
+    "resolve_resume_checkpoint",
     "tokenize_example",
     "validate_dataset",
 ]
@@ -95,6 +108,8 @@ DEFAULT_DATASET = PROJECT_ROOT / "data" / "lora_dataset.jsonl"
 DEFAULT_OUTPUT = PROJECT_ROOT / "models" / "lora-club-v1"
 DEFAULT_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
 DEFAULT_TARGET_MODULES = ("q_proj", "v_proj")
+#: Допустимые значения --report_to.
+REPORT_TO_CHOICES = ("auto", "tensorboard", "wandb", "none")
 
 INSTALL_HINT = (
     "Нет зависимостей для обучения LoRA: нужны torch, transformers, peft,\n"
@@ -449,7 +464,10 @@ def _format_hyperparams(args: argparse.Namespace) -> str:
         f"lr={args.lr:g}, max_length={args.max_length}, "
         f"4bit={'да' if args.load_in_4bit else 'нет'}, "
         f"gradient_checkpointing="
-        f"{'да' if args.gradient_checkpointing else 'нет'}"
+        f"{'да' if args.gradient_checkpointing else 'нет'}, "
+        f"report_to={args.report_to}, "
+        f"resume={'да' if args.resume_from_checkpoint else 'нет'}, "
+        f"skip_too_long={'да' if args.skip_too_long else 'нет'}"
     )
 
 
@@ -512,6 +530,10 @@ def _encode_text(text: str, tokenizer: Any) -> list[int]:
     return [int(token_id) for token_id in token_ids]
 
 
+class TooLongError(ValueError):
+    """Запись не помещается в ``max_length``: prompt не оставил места ответу."""
+
+
 def tokenize_example(
     messages: Sequence[Mapping[str, Any]],
     tokenizer: Any,
@@ -526,8 +548,8 @@ def tokenize_example(
     «полный диалог», поэтому не зависит от конкретного chat-шаблона.
 
     Raises:
-        ValueError: нет assistant-ответа, нет общего префикса или ответ
-            целиком не влез в `max_length`.
+        ValueError: нет assistant-ответа или нет общего префикса prompt.
+        TooLongError: ответ целиком не влез в `max_length`.
     """
     if max_length < 2:
         raise ValueError("max_length должен быть ≥ 2")
@@ -557,11 +579,20 @@ def tokenize_example(
     input_ids = full_ids[:max_length]
     labels = ([-100] * prompt_length + full_ids[prompt_length:])[:max_length]
     if not any(label != -100 for label in labels):
-        raise ValueError(
+        raise TooLongError(
             f"prompt занимает {prompt_length} токенов и не оставляет места "
             f"assistant при max_length={max_length}; увеличьте --max-length"
         )
     return {"input_ids": input_ids, "labels": labels}
+
+
+def _torch_tensor(values: Sequence[Sequence[int]]) -> Any:
+    """Создать ``torch.LongTensor`` (импорт torch — лениво, для dry-run)."""
+    try:
+        import torch
+    except ImportError as exc:
+        raise SystemExit(INSTALL_HINT) from exc
+    return torch.tensor(values, dtype=torch.long)
 
 
 def collate_batch(
@@ -569,8 +600,12 @@ def collate_batch(
     *,
     pad_token_id: int,
     label_pad_token_id: int = -100,
-) -> dict[str, list[list[int]]]:
-    """Собрать батч с right-padding; padding в labels — `-100`."""
+) -> dict[str, Any]:
+    """Собрать батч с right-padding и вернуть тензоры PyTorch.
+
+    ``Trainer`` передаёт батч напрямую в модель, поэтому списки Python
+    недопустимы: ``embedding()`` ждёт ``Tensor``. Паддинг labels — ``-100``.
+    """
     if not features:
         raise ValueError("пустой батч")
     batch_length = max(len(feature["input_ids"]) for feature in features)
@@ -585,15 +620,71 @@ def collate_batch(
         attention_mask.append([1] * len(tokens) + [0] * padding)
         labels.append(feature_labels + [label_pad_token_id] * padding)
     return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "labels": labels,
+        "input_ids": _torch_tensor(input_ids),
+        "attention_mask": _torch_tensor(attention_mask),
+        "labels": _torch_tensor(labels),
     }
 
 
 def _is_oom_error(exc: BaseException) -> bool:
     """Похоже ли исключение на CUDA OOM (OutOfMemoryError — подкласс RuntimeError)."""
     return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
+
+
+def resolve_report_to(
+    requested: str,
+    *,
+    find_spec: Callable[[str], object | None] = importlib.util.find_spec,
+) -> list[str]:
+    """Выбрать интеграцию логирования для ``TrainingArguments.report_to``.
+
+    ``auto`` включает TensorBoard, если он установлен, иначе wandb, иначе
+    ничего (остаётся консольный вывод Trainer). Явно запрошенная, но не
+    установленная интеграция не роняет обучение: печатается предупреждение,
+    логирование отключается.
+
+    Args:
+        requested: ``auto`` / ``tensorboard`` / ``wandb`` / ``none``.
+        find_spec: точка подмены для unit-тестов (по умолчанию
+            ``importlib.util.find_spec``).
+
+    Returns:
+        Список интеграций для ``report_to`` (может быть пустым).
+    """
+    if requested == "none":
+        return []
+    if requested == "auto":
+        for candidate in ("tensorboard", "wandb"):
+            if find_spec(candidate) is not None:
+                return [candidate]
+        return []
+    if find_spec(requested) is None:
+        print(
+            f"ВНИМАНИЕ: {requested} не установлен — логирование лосса "
+            "отключено (останется консольный вывод Trainer).",
+            file=sys.stderr,
+        )
+        return []
+    return [requested]
+
+
+def resolve_resume_checkpoint(path: Path | None) -> str | None:
+    """Проверить путь ``--resume_from_checkpoint`` и вернуть его строкой.
+
+    ``None`` означает «начать с нуля» и возвращается как ``None``.
+
+    Raises:
+        SystemExit: путь задан, но не является каталогом чекпоинта.
+    """
+    if path is None:
+        return None
+    if not path.is_dir():
+        raise SystemExit(
+            f"Чекпоинт не найден: {path}\n"
+            "Укажите каталог checkpoint-* из --output-dir или уберите "
+            "--resume_from_checkpoint, чтобы начать обучение заново."
+        )
+    return str(path)
 
 
 # --- реальное обучение ------------------------------------------------------
@@ -603,7 +694,11 @@ def _import_training_stack() -> Any:
     """Импортировать тяжёлые библиотеки; вызывается только из `train()`."""
     import torch
     from datasets import Dataset
-    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from peft import (
+        LoraConfig,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+    )
     from transformers import (
         AutoModelForCausalLM,
         AutoTokenizer,
@@ -679,6 +774,12 @@ def train(
     except ImportError as exc:
         raise SystemExit(INSTALL_HINT) from exc
 
+    resume_from_checkpoint = resolve_resume_checkpoint(
+        args.resume_from_checkpoint
+    )
+    if resume_from_checkpoint is not None:
+        print(f"Продолжение обучения с чекпоинта: {resume_from_checkpoint}")
+
     torch = stack.torch
     if not torch.cuda.is_available():
         raise SystemExit(NO_CUDA_HINT)
@@ -694,6 +795,46 @@ def train(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    tokenized_records: list[dict[str, list[int]]] = []
+    skipped_too_long = 0
+    for index, record in enumerate(records, start=1):
+        try:
+            tokenized_records.append(
+                tokenize_example(
+                    record["messages"],
+                    tokenizer,
+                    max_length=args.max_length,
+                )
+            )
+        except TooLongError as exc:
+            if not args.skip_too_long:
+                raise SystemExit(
+                    f"Запись {index} не помещается в --max-length: {exc}\n"
+                    "Увеличьте --max-length или включите --skip-too-long."
+                ) from exc
+            skipped_too_long += 1
+            if skipped_too_long <= 5:
+                print(
+                    f"ВНИМАНИЕ: пропущена слишком длинная запись {index} "
+                    f"(skipped_too_long): {exc}"
+                )
+        except ValueError as exc:
+            raise SystemExit(
+                f"Не удалось подготовить датасет: {exc}\n"
+                "Проверьте --max-length и содержимое JSONL."
+            ) from exc
+    if not tokenized_records:
+        raise SystemExit(
+            "Все записи пропущены: ни одна не помещается в --max-length "
+            f"({args.max_length}). Увеличьте --max-length."
+        )
+    if skipped_too_long:
+        print(
+            "Пропущено слишком длинных записей "
+            f"(skipped_too_long): {skipped_too_long}"
+        )
+    tokenized = stack.Dataset.from_list(tokenized_records)
+
     try:
         model = _prepare_model(args, stack, torch, tokenizer)
     except RuntimeError as exc:
@@ -701,25 +842,11 @@ def train(
             raise SystemExit(OOM_HINT) from exc
         raise
 
-    dataset = stack.Dataset.from_list([dict(record) for record in records])
-
-    def tokenize(example: Mapping[str, Any]) -> dict[str, list[int]]:
-        return tokenize_example(
-            example["messages"], tokenizer, max_length=args.max_length
-        )
-
-    try:
-        tokenized = dataset.map(
-            tokenize,
-            remove_columns=dataset.column_names,
-            desc="tokenize",
-        )
-    except ValueError as exc:
-        raise SystemExit(
-            f"Не удалось подготовить датасет: {exc}\n"
-            "Проверьте --max-length и содержимое JSONL."
-        ) from exc
-
+    report_to = resolve_report_to(args.report_to)
+    print(
+        "Логирование лосса: "
+        f"{', '.join(report_to) if report_to else 'консоль'}"
+    )
     training_args = stack.TrainingArguments(
         output_dir=str(args.output_dir),
         num_train_epochs=args.epochs,
@@ -733,9 +860,8 @@ def train(
         gradient_checkpointing=args.gradient_checkpointing,
         optim="paged_adamw_8bit" if args.load_in_4bit else "adamw_torch",
         lr_scheduler_type="cosine",
-        warmup_ratio=0.03,
         seed=args.seed,
-        report_to=[],
+        report_to=report_to,
         remove_unused_columns=False,
     )
     collator = functools.partial(
@@ -748,7 +874,7 @@ def train(
         data_collator=collator,
     )
     try:
-        trainer.train()
+        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     except RuntimeError as exc:
         if _is_oom_error(exc):
             raise SystemExit(OOM_HINT) from exc
@@ -814,6 +940,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--grad-accum", type=_positive_int, default=8)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--max-length", type=_positive_int, default=2048)
+    parser.add_argument(
+        "--skip-too-long",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "пропускать записи, которые не помещаются в --max-length "
+            "(по умолчанию включено; --no-skip-too-long — падать)"
+        ),
+    )
     parser.add_argument("--lora-r", type=_positive_int, default=16)
     parser.add_argument("--lora-alpha", type=_positive_int, default=32)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
@@ -824,6 +959,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="модули через запятую (по умолчанию q_proj,v_proj)",
     )
     parser.add_argument("--logging-steps", type=_positive_int, default=10)
+    parser.add_argument(
+        "--report_to",
+        choices=REPORT_TO_CHOICES,
+        default="auto",
+        help=(
+            "куда логировать лосс: auto (TensorBoard/wandb, если есть) | "
+            "tensorboard | wandb | none (по умолчанию auto)"
+        ),
+    )
+    parser.add_argument(
+        "--resume_from_checkpoint",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "продолжить обучение с каталога checkpoint-* "
+            "(например, models/lora-club-v1/checkpoint-500)"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--gradient-checkpointing",
@@ -874,6 +1028,8 @@ def _print_env_check() -> None:
         "accelerate",
         "bitsandbytes",
         "trl",
+        "tensorboard",
+        "wandb",
     )
     for package in packages:
         installed = importlib.util.find_spec(package) is not None

@@ -6,8 +6,73 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Совместимость LoRA-обучения с transformers 4.44+ (T-090, итерация 44):**
+  `collate_batch` теперь возвращает `torch.Tensor` для `input_ids`,
+  `attention_mask` и `labels` (иначе `embedding()` падал с
+  `argument 'indices' must be Tensor, not list`); из `TrainingArguments`
+  убраны `logging_dir` и `warmup_ratio`, вызывавшие `TypeError` в новых
+  версиях. Добавлен `--skip-too-long` (по умолчанию включён): записи,
+  которые не помещаются в `--max-length`, пропускаются со счётчиком
+  `skipped_too_long`, обучение продолжается; `--no-skip-too-long`
+  возвращает прежнее падение. В `pyproject.toml` добавлен mypy-override
+  для опциональных torch/transformers/peft/datasets, чтобы проверка
+  скриптов работала и без них.
+
+### Changed
+
+- **GPU-гайд для запуска из РФ (T-091, итерация 44):**
+  `GPU_TRAINING_GUIDE.md` — `hf download` вместо устаревшего
+  `huggingface-cli`, `HF_ENDPOINT=https://hf-mirror.com` и Python API
+  `snapshot_download`; установка через `uv`; зеркало PyTorch SJTU
+  `mirror.sjtu.edu.cn/pytorch-wheels/cu126/`; совместимые `torch` и
+  `torchvision` одной сборкой `cu126`; §10 переименован под CUDA 12.6
+  (RTX 4090/A5000) и дополнен траблшутингом.
+
 ### Added
 
+- **Lichess golden dataset builder (T-092, итерация 45):**
+  `scripts/fetch_lichess_games.py` скачивает PGN Lichess с
+  `evals=true` (по нику или ID), фильтрует рейтинг 1800–2200,
+  standard-вариант и наличие `[%eval]`, раскладывает по
+  `data/gold_pgns/*.pgn` по 50–100 партий.
+  `scripts/build_gold_dataset.py` парсит `[%eval ...]`, пересчитывает
+  оценки в сторону хода, собирает `MoveAnalysis` с
+  `best_move_known=False`, вызывает `build_fact_package`, генерирует
+  русский ответ локальной LLM или mock-клиентом, валидирует ходы через
+  `app/engine/validator.py` и пишет `data/gold_dataset.jsonl`
+  (`schema_version=2`). В `MoveAnalysis` добавлен `best_move_known`;
+  пакет фактов честно сообщает, что лучший ход неизвестен.
+- **Бесплатные GPU в гайде (T-093, итерация 45):**
+  `GPU_TRAINING_GUIDE.md` §11 — Kaggle Notebooks (T4, 30 ч/нед, датасет,
+  обучение 4B, TensorBoard, zip-адаптер) и Google Colab (Drive,
+  установка, обучение, `--resume_from_checkpoint`), ограничения 16 GB.
+- **Экспорт LoRA в GGUF (T-088, итерация 43):**
+  `scripts/export_to_gguf.py` — merge LoRA в базовую модель через `peft`
+  (`merge_and_unload`), сохранение HF-модели и токенизатора, опциональная
+  конвертация в GGUF через `llama.cpp` (`convert_hf_to_gguf.py` /
+  `convert.py`). CLI: `--base_model`, `--adapter_path`, `--output_dir`,
+  `--llama_cpp_dir`, `--gguf_outtype`, `--device`. Без llama.cpp или при
+  ошибке конвертации — warning, HF-формат сохранён, exit 0.
+- **Возобновление обучения и логирование лосса (T-089, итерация 43):**
+  `scripts/train_lora.py` — `--resume_from_checkpoint PATH` (передаётся в
+  `Trainer.train`, проверка каталога `checkpoint-*`) и
+  `--report_to auto|tensorboard|wandb|none` (auto выбирает установленную
+  интеграцию; отсутствующая — warning, обучение продолжается). TensorBoard
+  пишет в `output_dir/runs`; `--check-env` показывает tensorboard/wandb.
+- **Конвертер внешних PGN-датасетов (T-087, итерация 42):**
+  `scripts/convert_external_datasets.py` читает JSONL с PGN в поле `text`,
+  извлекает комментарии `{ ... }`, очищает служебные теги
+  `[%eval ...]`/`[%clk ...]`, склеивает текст и ограничивает `assistant`
+  2000 символами; `user` собирается через
+  `build_fact_package(..., level="club")` без анализа движка, запись —
+  `schema_version=2` (совместима с `scripts/train_lora.py`). CLI:
+  `--input`, `--output`, `--limit`, `--dry-run`; в сводке — прочитано,
+  пропущено (битый JSON/PGN, нет/короткие комментарии), сконвертировано,
+  средняя длина `assistant`. `data/external_datasets/` и
+  `data/lora_gold_v1.jsonl` добавлены в `.gitignore`; в
+  `GPU_TRAINING_GUIDE.md` — раздел §5.1.
 - **Stripe Checkout и подписка Pro (T-083, итерация 40):** `stripe` SDK,
   настройки `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`/`STRIPE_PRICE_ID`,
   миграция `f2b3c4d5e6a7` (`users.tier` free/pro + CHECK, backfill

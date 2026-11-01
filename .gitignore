@@ -41,6 +41,9 @@ web/blob-report/
 data/*
 !data/.gitkeep
 
+# Stockfish (scripts/install_stockfish.py): бинарник ~80 МБ, ставится локально
+/bin/
+
 # LoRA-адаптеры и веса моделей (T-104/T-080): локальные артефакты обучения,
 # не коммитятся. Явные расширения страхуют веса вне `models/`.
 models/
@@ -52,3 +55,12 @@ models/
 # в git не попадают. Явные шаблоны дублируют `data/*` для читаемости.
 data/lora_*.jsonl
 data/*.jsonl
+
+# Внешние датасеты и gold-датасет (T-087): скачанные корпуса и результат
+# конвертации — десятки мегабайт, в git не коммитятся.
+data/external_datasets/
+data/lora_gold_v1.jsonl
+
+# Lichess golden dataset (T-092): скачанные PGN и сгенерированный JSONL.
+data/gold_pgns/
+data/gold_dataset.jsonl

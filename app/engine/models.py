@@ -80,6 +80,13 @@ class MoveAnalysis(BaseModel):
     )
     best_move_uci: str = Field(pattern=_UCI_MOVE_PATTERN)
     best_move_san: str = Field(min_length=1)
+    best_move_known: bool = Field(
+        default=True,
+        description=(
+            "Лучший ход известен (движок); False — в PGN есть только "
+            "оценка [%eval], лучший ход не восстановить (T-092)"
+        ),
+    )
     delta_cp: int = Field(ge=0, description="Потеря в сантипешках (≥ 0)")
     classification: MoveClassification
     engine_depth: int | None = Field(

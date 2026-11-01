@@ -926,6 +926,95 @@
   получает free; unit/integration-тесты зелёные.
 - **Статус:** выполнено (итерация 40).
 
+### [x] T-087. Конвертер внешних PGN-датасетов (итерация 42)
+- **Зависит от:** T-080, T-104
+- **Что:** `scripts/convert_external_datasets.py` читает JSONL с PGN в поле
+  `text`, парсит через `python-chess`, извлекает комментарии узлов,
+  вырезает служебные теги `[%eval ...]`/`[%clk ...]`, ограничивает
+  `assistant` 2000 символами, собирает `user` через
+  `build_fact_package(..., level="club")` (внешний PGN без анализа движка)
+  и пишет `schema_version=2`; CLI `--input`, `--output`, `--limit`,
+  `--dry-run`; сводка прочитанных/пропущенных/сконвертированных записей и
+  средней длины `assistant`.
+- **DoD:** скрипт покрыт unit-тестами; на `bishop_train.jsonl` создаётся
+  `data/lora_gold_v1.jsonl`; `train_lora.py --dry-run` валиден;
+  `.gitignore` и `GPU_TRAINING_GUIDE.md` обновлены.
+- **Статус:** выполнено (итерация 42).
+
+### [x] T-088. Экспорт LoRA-адаптера в GGUF (итерация 43)
+- **Зависит от:** T-080, T-104
+- **Что:** `scripts/export_to_gguf.py` загружает базовую модель и LoRA через
+  `peft`, выполняет `merge_and_unload()`, сохраняет смердженную HF-модель
+  (`save_pretrained` + токенизатор) и конвертирует её в GGUF через
+  `llama.cpp` (`convert_hf_to_gguf.py`/`convert.py`). CLI:
+  `--base_model`, `--adapter_path`, `--output_dir`, `--llama_cpp_dir`,
+  `--gguf_outtype`, `--device`. Если llama.cpp не найден или конвертация
+  не удалась — warning и успешное завершение с сохранённым HF-форматом.
+- **DoD:** скрипт покрыт unit-тестами с моками peft/transformers/subprocess;
+  ruff/mypy зелёные; инструкция в `GPU_TRAINING_GUIDE.md` §10.
+- **Статус:** выполнено (итерация 43).
+
+### [x] T-089. Возобновление обучения и логирование лосса (итерация 43)
+- **Зависит от:** T-104
+- **Что:** `scripts/train_lora.py` принимает `--resume_from_checkpoint PATH`
+  и передаёт его в `Trainer.train`; добавлен `--report_to
+  auto|tensorboard|wandb|none` (auto выбирает установленную интеграцию,
+  отсутствующая — warning без падения); в `--check-env` добавлены
+  tensorboard/wandb.
+- **DoD:** unit-тесты на парсер, выбор интеграции, проверку чекпоинта и
+  передачу `resume_from_checkpoint` в Trainer; `--dry-run` не меняется.
+- **Статус:** выполнено (итерация 43).
+
+### [x] T-090. Совместимость `train_lora.py` с transformers 4.44+ (итерация 44)
+- **Зависит от:** T-104, T-089
+- **Что:** `collate_batch` возвращает `torch.Tensor` (input_ids,
+  attention_mask, labels), а не списки Python; из `TrainingArguments`
+  убраны `logging_dir` и `warmup_ratio` (TypeError в новых версиях);
+  добавлен `--skip-too-long` (по умолчанию True) — записи, не помещающиеся
+  в `--max-length`, пропускаются со счётчиком `skipped_too_long`, а не
+  останавливают обучение; `--no-skip-too-long` возвращает падение;
+  mypy-override для опциональных torch/transformers/peft/datasets.
+- **DoD:** тесты на тензоры (мок `torch.tensor`) и пропуск длинных записей;
+  ruff/mypy зелёные; dry-run не меняется.
+- **Статус:** выполнено (итерация 44).
+
+### [x] T-091. GPU-гайд для РФ: HF-зеркало, uv, cu126 (итерация 44)
+- **Зависит от:** T-080, T-088
+- **Что:** `GPU_TRAINING_GUIDE.md`: `hf download` вместо устаревшего
+  `huggingface-cli`, `HF_ENDPOINT=https://hf-mirror.com` и Python API
+  `snapshot_download`; установка через `uv`; зеркало PyTorch SJTU
+  (`mirror.sjtu.edu.cn/pytorch-wheels/cu126/`); совместимые `torch` +
+  `torchvision` одной сборкой `cu126`; раздел §10 переименован под CUDA
+  12.6, добавлены траблшутинг-строки.
+- **DoD:** инструкция для Ubuntu 22.04 + CUDA 12.6 (RTX 4090/A5000),
+  команды скачивания модели и проверки версий CUDA.
+- **Статус:** выполнено (итерация 44).
+
+### [x] T-092. Lichess golden dataset builder (итерация 45)
+- **Зависит от:** T-104, T-090
+- **Что:** `scripts/fetch_lichess_games.py` — Lichess API
+  (`/api/games/user/{username}` или `POST /api/games/export/_ids`),
+  `evals=true`, фильтр рейтинга 1800–2200, standard-вариант, наличие
+  `[%eval]`, раскладка `data/gold_pgns/*.pgn` по 50–100 партий.
+  `scripts/build_gold_dataset.py` — парсинг `[%eval ...]` (White POV →
+  сторона хода), `MoveAnalysis` с `best_move_known=False`, пакет фактов,
+  локальная LLM/mock, валидация через `app/engine/validator.py`, JSONL
+  `schema_version=2`. В `MoveAnalysis` добавлен `best_move_known`, в
+  пакет фактов — честная строка «лучший ход неизвестен».
+- **DoD:** оба скрипта покрыты unit-тестами с моками API/LLM; реальный
+  прогон на PGN Lichess; ruff/mypy зелёные.
+- **Статус:** выполнено (итерация 45).
+
+### [x] T-093. Бесплатные GPU: Kaggle и Colab (итерация 45)
+- **Зависит от:** T-080, T-104
+- **Что:** `GPU_TRAINING_GUIDE.md` §11 — Kaggle Notebooks (T4, 30 ч/нед,
+  датасет, `train_lora.py`, TensorBoard, output zip) и Google Colab
+  (Drive, установка, обучение, checkpoint/resume), ограничения 16 GB и
+  4B-модели.
+- **DoD:** пошаговая инструкция для обоих сервисов с реальными командами
+  `train_lora.py` и сохранением адаптера.
+- **Статус:** выполнено (итерация 45).
+
 ## Backlog (после MVP)
 
 - **T-101.** Leela Chess Zero как второй движок для гроссмейстерского

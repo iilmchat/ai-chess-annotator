@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-chess}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chess_dev_password}
     ports:
-      - "127.0.0.1:5434:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
