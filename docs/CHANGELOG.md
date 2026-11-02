@@ -6,6 +6,39 @@
 
 ## [Unreleased]
 
+### Added
+
+- **CJK-детектор и защита от языкового дрейфа (KI-060, итерация 49):**
+  в `app/commentary/semantic.py` появились `has_cjk`, `count_cjk`,
+  `cjk_share`, `strip_cjk_sentences`, `sanitize_cjk` и `cjk_warning`
+  (диапазон CJK Unified Ideographs U+4E00–U+9FFF, порог
+  `CJK_MAX_SHARE = 0.10`). `app/commentary/service.py` при иероглифах
+  переспрашивает модель **один раз** с подсказкой «Отвечай только на
+  русском языке. Убери китайские иероглифы», затем вырезает предложения
+  с иероглифами, а при их большой доле отклоняет ответ (502); в лог
+  пишутся только счётчики (`commentary_cjk_detected` /
+  `commentary_cjk_stripped` / `commentary_cjk_dropped`). Тесты:
+  `tests/unit/test_cjk_detector.py`, `tests/unit/test_commentary_cjk.py`.
+- **Генератор golden dataset v2 через DeepSeek (T-104b, итерация 49):**
+  `scripts/build_gold_dataset_v2.py` умеет два режима. **PGN:** читает
+  `data/gold_pgns/`, собирает `build_fact_package(..., max_tokens=2048)`,
+  отправляет системный промпт уровня `club` + требование «только текст
+  комментария» в `deepseek-chat` (ключ — `Settings.deepseek_api_key`).
+  **Positions:** `--positions data-chess/positions.jsonl` читает FEN из
+  JSONL (`fen`, `evaluation`, `best_move`; есть синонимы) и строит
+  упрощённый пакет — только текущая позиция и оценка, без истории ходов.
+  Оба режима валидируют SAN-ходы и CJK, повторяют запрос при ошибках и
+  пишут `schema_version=2` JSONL в `data/gold_dataset_v2.jsonl`. CLI:
+  `--limit`, `--output`, `--dry-run` (пайплайн без API), `--positions`,
+  `--max-tokens`, `--max-retries`, `--model`, `--level`. Тесты с
+  `httpx.MockTransport`: `tests/unit/test_build_gold_dataset_v2.py`.
+- **Гиперпараметры v0.2.0 (итерация 49):** `scripts/train_lora.py`
+  получил явные `DEFAULT_EPOCHS`/`DEFAULT_LR` и help-текст для
+  `--epochs`/`--lr`; значения по-прежнему переопределяются флагами без
+  правки кода (`--lr 1e-4 --epochs 1`). В
+  `docs/development/GPU_TRAINING_GUIDE.md` добавлен §6.1 «Обучение
+  v0.2.0 (DeepSeek Teacher)» с командой сборки v2-датасета и обучения.
+
 ### Fixed
 
 - **LLM_TEMPERATURE: проброс подтверждён и покрыт тестом (итерация 48):**

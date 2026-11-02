@@ -1,8 +1,10 @@
-import json
 import glob
-import chess.pgn
-import chess.engine
+import json
 from pathlib import Path
+
+import chess.engine
+import chess.pgn
+
 from app.config import Settings
 
 # Загружаем настройки из .env

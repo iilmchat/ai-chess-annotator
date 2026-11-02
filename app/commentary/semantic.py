@@ -25,6 +25,13 @@ SAN-валидатор (:mod:`app.engine.validator`) проверяет толь
    :func:`strip_invalid_claims`, а :func:`semantic_retry_prompt` формулирует
    подсказку для повтора.
 
+4. KI-060 (итерация 49): отдельный языковой слой. Мультиязычные модели
+   (Qwen2.5) иногда подмешивают китайские иероглифы в русский текст.
+   :func:`has_cjk` находит символы CJK Unified Ideographs (U+4E00–U+9FFF),
+   :func:`cjk_warning` даёт подсказку для одного retry, а
+   :func:`sanitize_cjk` на повторной ошибке вырезает предложения с
+   иероглифами или отклоняет ответ, если их слишком много.
+
 Границы проверки (важно для ревью): проверяется **существование** фигуры на
 поле, а не тактическая корректность. Геометрия связки (кто кого связывает и
 куда направлен удар), оценки, мотивы, «лучший ход» и атрибуция вариантов не
@@ -49,10 +56,19 @@ from app.ingestion.parser import parse_fen
 from app.observability import get_tracer
 
 __all__ = [
+    "CJK_MAX_SHARE",
+    "CJK_PATTERN",
+    "CjkSanitizeResult",
     "SemanticClaim",
+    "cjk_share",
+    "cjk_warning",
+    "count_cjk",
     "extract_semantic_claims",
+    "has_cjk",
+    "sanitize_cjk",
     "semantic_retry_prompt",
     "semantic_warning",
+    "strip_cjk_sentences",
     "strip_invalid_claims",
     "validate_semantic_claims",
 ]
@@ -85,11 +101,21 @@ _EN_PIECE_ALT = "|".join(name for name, _ in _EN_PIECES)
 
 #: Границы предложения: тело до терминатора/перевода строки + сами
 #: терминаторы. Перевод строки — тоже граница, поэтому утверждение не
-#: «переползает» из одного предложения в другое.
-_SENTENCE_TOKEN = re.compile(r"[^.!?…\n]+[.!?…]*")
+#: «переползает» из одного предложения в другое. Китайские терминаторы
+#: (``。！？``) добавлены для вырезания CJK-предложений (KI-060).
+_SENTENCE_TOKEN = re.compile(r"[^.!?…。！？\n]+[.!?…。！？]*")
 
 #: Разделитель абзацев: пустая строка (возможно, с пробелами).
 _PARAGRAPH_SPLIT = re.compile(r"(?:[ \t]*\r?\n){2,}")
+
+#: CJK Unified Ideographs (U+4E00–U+9FFF): китайские иероглифы. В диапазон
+#: попадают и японские кандзи — для русского комментария это такой же дрейф.
+CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]")
+
+#: Доля иероглифов среди непустых символов, после которой ответ отклоняется
+#: целиком (вырезать почти весь комментарий бессмысленно). Один случайный
+#: иероглиф в длинном тексте порог не превышает — вырезается одно предложение.
+CJK_MAX_SHARE = 0.10
 
 #: «Фигура на поле»: «слон на e6», «чёрный конь на d4»,
 #: «the white rook on a1». Требуется предлог «на/on» — иначе фразу
@@ -409,6 +435,137 @@ def semantic_retry_prompt(
         Промпт для повторного запроса к LLM.
     """
     return f"{package}\n\n{semantic_warning(problems, language)}"
+
+
+@dataclass(frozen=True, slots=True)
+class CjkSanitizeResult:
+    """Итог очистки текста от CJK-иероглифов (KI-060).
+
+    Attributes:
+        text: очищенный текст; пустая строка, если ответ отклонён.
+        cjk_chars: сколько иероглифов было в исходном тексте.
+        removed_sentences: сколько предложений вырезано.
+        share: доля иероглифов среди непустых символов исходного текста.
+        rejected: ответ отклонён целиком (иероглифов слишком много или после
+            вырезания не осталось текста).
+    """
+
+    text: str
+    cjk_chars: int
+    removed_sentences: int
+    share: float
+    rejected: bool
+
+
+def count_cjk(text: str) -> int:
+    """Число символов CJK Unified Ideographs в тексте."""
+    return len(CJK_PATTERN.findall(text))
+
+
+def has_cjk(text: str) -> bool:
+    """Есть ли в тексте хотя бы один китайский иероглиф."""
+    return CJK_PATTERN.search(text) is not None
+
+
+def cjk_share(text: str) -> float:
+    """Доля иероглифов среди непустых символов (0.0 для пустого текста)."""
+    meaningful = sum(1 for char in text if not char.isspace())
+    if meaningful == 0:
+        return 0.0
+    return count_cjk(text) / meaningful
+
+
+def strip_cjk_sentences(text: str) -> tuple[str, int]:
+    """Вырезать предложения, содержащие иероглифы.
+
+    Абзацы (пустые строки) сохраняются; одиночные переводы строк внутри
+    абзаца схлопываются в пробел. Если иероглифов нет или вырезать нечего,
+    возвращается исходный текст и ``0``.
+
+    Args:
+        text: текст ответа LLM.
+
+    Returns:
+        ``(очищенный_текст, число_вырезанных_предложений)``; пустая строка,
+        если все предложения оказались с иероглифами.
+    """
+    if not has_cjk(text):
+        return text, 0
+    removed = 0
+    paragraphs: list[str] = []
+    for paragraph in _PARAGRAPH_SPLIT.split(text):
+        kept: list[str] = []
+        for match in _SENTENCE_TOKEN.finditer(paragraph):
+            sentence = match.group(0).strip()
+            if not sentence:
+                continue
+            if has_cjk(sentence):
+                removed += 1
+                continue
+            kept.append(sentence)
+        if kept:
+            paragraphs.append(" ".join(kept))
+    if removed == 0:
+        return text, 0
+    return "\n\n".join(paragraphs), removed
+
+
+def sanitize_cjk(
+    text: str, *, max_share: float = CJK_MAX_SHARE
+) -> CjkSanitizeResult:
+    """Очистить ответ LLM от иероглифов или отклонить его.
+
+    Логика повторной ошибки после одного retry (KI-060):
+
+    * иероглифов нет — текст возвращается без изменений;
+    * доля иероглифов выше ``max_share`` — ответ отклоняется целиком
+      (``rejected=True``), потому что вырезание оставит бессмысленный
+      огрызок;
+    * иначе вырезаются предложения с иероглифами; если текста не осталось,
+      ответ тоже отклоняется.
+
+    Args:
+        text: текст ответа LLM.
+        max_share: максимальная допустимая доля иероглифов (0..1).
+
+    Returns:
+        :class:`CjkSanitizeResult` с очищенным текстом и счётчиками.
+
+    Raises:
+        ValueError: ``max_share`` вне диапазона 0..1.
+    """
+    if not 0.0 <= max_share <= 1.0:
+        raise ValueError(f"max_share должен быть в 0..1, получено {max_share}")
+    cjk_chars = count_cjk(text)
+    share = cjk_share(text)
+    if cjk_chars == 0:
+        return CjkSanitizeResult(text, 0, 0, 0.0, False)
+    if share > max_share:
+        return CjkSanitizeResult("", cjk_chars, 0, share, True)
+    stripped, removed = strip_cjk_sentences(text)
+    if not stripped.strip():
+        return CjkSanitizeResult("", cjk_chars, removed, share, True)
+    return CjkSanitizeResult(stripped, cjk_chars, removed, share, False)
+
+
+def cjk_warning(language: str = "ru") -> str:
+    """Подсказка для одного retry без китайских иероглифов.
+
+    Args:
+        language: ``ru`` или ``en`` — язык подсказки.
+
+    Returns:
+        Короткое предупреждение без пакета фактов.
+    """
+    if language == "en":
+        return (
+            "WARNING: the previous answer contained Chinese characters. "
+            "Answer in English only. Remove all Chinese characters."
+        )
+    return (
+        "ВНИМАНИЕ: в предыдущем ответе были китайские иероглифы. "
+        "Отвечай только на русском языке. Убери китайские иероглифы."
+    )
 
 
 def _sentence_spans(text: str) -> list[tuple[int, int]]:

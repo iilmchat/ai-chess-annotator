@@ -77,6 +77,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 __all__ = [
     "DEFAULT_DATASET",
+    "DEFAULT_EPOCHS",
+    "DEFAULT_LR",
     "DEFAULT_MODEL",
     "DEFAULT_OUTPUT",
     "DEFAULT_TARGET_MODULES",
@@ -120,6 +122,10 @@ DEFAULT_DATASET = PROJECT_ROOT / "data" / "lora_dataset.jsonl"
 DEFAULT_OUTPUT = PROJECT_ROOT / "models" / "lora-club-v1"
 DEFAULT_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
 DEFAULT_TARGET_MODULES = ("q_proj", "v_proj")
+#: Дефолты первого прогона (v0.1.x). Для v0.2.0 (DeepSeek Teacher) они
+#: переопределяются флагами без правки кода: ``--lr 1e-4 --epochs 1``.
+DEFAULT_EPOCHS = 3.0
+DEFAULT_LR = 2e-4
 #: Допустимые значения --report_to.
 REPORT_TO_CHOICES = ("auto", "tensorboard", "wandb", "none")
 
@@ -995,10 +1001,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="взять первые N записей",
     )
-    parser.add_argument("--epochs", type=float, default=3.0)
+    parser.add_argument(
+        "--epochs",
+        type=float,
+        default=DEFAULT_EPOCHS,
+        help=(
+            "число эпох (по умолчанию 3; для v0.2.0 рекомендуется 1 — "
+            "переопределяется без правки кода)"
+        ),
+    )
     parser.add_argument("--batch-size", type=_positive_int, default=1)
     parser.add_argument("--grad-accum", type=_positive_int, default=8)
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=DEFAULT_LR,
+        help=(
+            "learning rate (по умолчанию 2e-4; для v0.2.0 рекомендуется "
+            "1e-4 — переопределяется без правки кода)"
+        ),
+    )
     parser.add_argument("--max-length", type=_positive_int, default=2048)
     parser.add_argument(
         "--force-fp16",

@@ -2967,3 +2967,66 @@ ruff и mypy зелёные.
   5/5 чистых русских комментариев у 7B.
 - **KI-023:** расширить eval до 30–50 партий и проверять атрибуцию
   оценок/мотивов/«лучшего хода».
+
+---
+
+## Итерация 49 — Data Generation & CJK Detector (T-104b, KI-060, v0.2.0)
+
+**Дата:** 2026-11-03
+**Статус:** ✅ завершена (подготовка данных и кода; реальная генерация
+v2-датасета и обучение не запускались)
+
+### Что сделано
+
+- [x] **CJK-детектор в `app/commentary/semantic.py`.** `has_cjk`,
+  `count_cjk`, `cjk_share`, `strip_cjk_sentences`, `sanitize_cjk`,
+  `cjk_warning`; диапазон U+4E00–U+9FFF, порог `CJK_MAX_SHARE = 0.10`.
+  `app/commentary/service.py` делает один retry «Отвечай только на
+  русском языке. Убери китайские иероглифы», затем вырезает предложения
+  с иероглифами или отклоняет ответ; логи — только счётчики.
+- [x] **`scripts/build_gold_dataset_v2.py`.** Учитель DeepSeek
+  (`deepseek-chat`, ключ `Settings.deepseek_api_key`), два режима:
+  PGN из `data/gold_pgns/` (полный пакет фактов, `max_tokens=2048`) и
+  `--positions data-chess/positions.jsonl` (упрощённый пакет — только
+  FEN, сторона хода, оценка, лучший ход; `best_move` SAN или UCI).
+  SAN- и CJK-валидация, retry, `schema_version=2`, `--dry-run` без API.
+- [x] **Гиперпараметры v0.2.0.** В `scripts/train_lora.py` выделены
+  `DEFAULT_EPOCHS`/`DEFAULT_LR`, help для `--epochs`/`--lr`; значения
+  переопределяются флагами (`--lr 1e-4 --epochs 1`). В
+  `GPU_TRAINING_GUIDE.md` добавлен §6.1 «Обучение v0.2.0 (DeepSeek
+  Teacher)» с командами сборки PGN/positions-датасета и обучения.
+- [x] **Документация и KI.** KI-060 переведён в «Open (частично
+  исправлен)» с описанием детектора, v2-режимов и остатка (SSE/eval);
+  `CHANGELOG.md`, `TODO.md` (T-104b), этот раздел.
+- [x] **Тесты.** 70 новых unit-тестов: детектор (включая граничные
+  кодовые точки), сервисный retry/вырезание/отказ, v2-билдер с
+  `httpx.MockTransport` (PGN + positions), переопределение LR/эпох.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Реальная генерация `data/gold_dataset_v2.jsonl` через DeepSeek | DoD требует покрытия MockTransport; платный API и лимиты не тратились, `--dry-run` проверен на реальных PGN | T-104b |
+| Переобучение 7B (1 эпоха, LR 1e-4) и repeat-eval | В итерации 49 нет GPU и явного запрета запускать обучение | T-104b, KI-060 |
+| `data-chess/positions.jsonl` | Файл готовит сосед (`generate_positions.py`); режим проверен на фикстурах и smoke-файле | `--positions` |
+| CJK в SSE-стриминге | Текст уже отправлен клиенту; нужен отдельный буферизующий фильтр | KI-060 |
+| CJK-метрика в `evaluate_llm.py` | Вне DoD итерации; оценка опирается на судью | KI-060 |
+
+### Метрики
+
+- **Backend-тесты:** 1267 passed, 9 skipped, 1 xfailed (полная сюита).
+- **Новые тесты:** 70 passed (`test_cjk_detector.py`,
+  `test_commentary_cjk.py`, `test_build_gold_dataset_v2.py`).
+- **ruff:** `All checks passed!`; **mypy app + scripts:** 0 ошибок.
+- **Smoke:** `--dry-run` на реальных PGN — 23 файла, 2–3 пакета; positions
+  smoke на схеме `generate_positions.py` — 2 позиции, 2 пакета, 0 API.
+
+### Что дальше
+
+- **T-104b:** запустить `build_gold_dataset_v2.py` на выбранном объёме
+  (PGN и/или positions), проверить `train_lora.py --dry-run`, обучить 7B
+  с `--lr 1e-4 --epochs 1`, прогнать тот же eval; цель — не ниже
+  4.40/10 и 5/5 без CJK.
+- **KI-060:** после переобучения закрыть; при необходимости добавить
+  CJK-метрику в eval и фильтр для SSE.
+- **KI-023:** расширить eval до 30–50 партий.

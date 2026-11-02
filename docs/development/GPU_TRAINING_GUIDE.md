@@ -466,6 +466,73 @@ python scripts/train_lora.py \
 - `--epochs 3`, `--lr 2e-4`, `--lora-r 16`, `--lora-alpha 32` — дефолты
   проекта для первого прогона.
 
+### 6.1. Обучение v0.2.0 (DeepSeek Teacher)
+
+Стратегия v0.2.0 меняет два параметра пайплайна:
+
+* **данные** генерирует сильный учитель DeepSeek, а не локальная 4B-модель
+  (иначе датасет дистиллирует её галлюцинации — KI-030);
+* **обучение** идёт 1 эпоху с LR `1e-4`, чтобы не переобучиться на узком
+  наборе и не усилить языковой дрейф 7B (KI-060).
+
+Сначала соберите датасет v2 на машине, где задан
+`DEEPSEEK_API_KEY` (ключ читается из `Settings.deepseek_api_key`):
+
+```bash
+# проверка пайплайна без вызова API
+python scripts/build_gold_dataset_v2.py --dry-run --limit 20
+
+# реальная генерация (по умолчанию data/gold_dataset_v2.jsonl)
+python scripts/build_gold_dataset_v2.py --limit 1000
+
+# режим 2: изолированные позиции (FEN, evaluation, best_move)
+python scripts/build_gold_dataset_v2.py \
+    --positions data-chess/positions.jsonl --dry-run --limit 20
+python scripts/build_gold_dataset_v2.py \
+    --positions data-chess/positions.jsonl --limit 1000
+```
+
+Скрипт `scripts/build_gold_dataset_v2.py` берёт PGN из `data/gold_pgns/`
+(или FEN из `--positions`), собирает пакет фактов (`build_fact_package` с
+`max_tokens=2048` для PGN; для позиций — только текущая позиция и оценка,
+без истории ходов), отправляет системный промпт уровня `club` в
+`deepseek-chat` и требует **только текст комментария**. Каждый ответ
+проверяется валидатором: нелегальные SAN-ходы дают retry, китайские
+иероглифы — один retry «отвечай только на русском», затем предложения с
+иероглифами вырезаются. Выход — `schema_version=2`
+(`system → user → assistant`) в обоих режимах.
+
+Проверка датасета перед обучением:
+
+```bash
+python scripts/train_lora.py --dry-run --dataset data/gold_dataset_v2.jsonl
+```
+
+Обучение v0.2.0 (отличия от §6 — датасет, `--lr`, `--epochs` и
+`--output-dir`):
+
+```bash
+python scripts/train_lora.py \
+    --dataset data/gold_dataset_v2.jsonl \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --output-dir models/lora-club-v2 \
+    --epochs 1 \
+    --lr 1e-4 \
+    --batch-size 1 \
+    --grad-accum 8 \
+    --max-length 2048 \
+    --load-in-4bit \
+    --gradient-checkpointing \
+    --seed 42
+```
+
+`--lr` и `--epochs` — обычные CLI-флаги: их можно переопределить, не правя
+код. Дефолты (`2e-4`, 3 эпохи) оставлены для воспроизводимости прогонов
+v0.1.x. Для 4B-базы замените `--model` на `Qwen/Qwen3-4B-Instruct-2507`
+и `--output-dir` на `models/lora-club-v2-4b`. После обучения прогоните тот
+же 5-партийный eval (`scripts/evaluate_llm.py`); ориентир — не ниже
+baseline 4B (4.40/10) и 5/5 комментариев без CJK.
+
 **Логи лосса.** По умолчанию `--report_to auto`: если установлен
 `tensorboard`, логи пишутся в `models/lora-club-v1/runs` (смотреть
 `tensorboard --logdir models/lora-club-v1/runs`); иначе используется

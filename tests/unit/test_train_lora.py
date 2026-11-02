@@ -13,6 +13,8 @@ import pytest
 
 from scripts import train_lora
 from scripts.train_lora import (
+    DEFAULT_EPOCHS,
+    DEFAULT_LR,
     DEFAULT_OUTPUT,
     DEFAULT_TARGET_MODULES,
     LEGACY_SCHEMA_VERSION,
@@ -631,8 +633,8 @@ def test_parser_defaults() -> None:
     assert args.dataset == Path("dataset.jsonl")
     assert args.output_dir == DEFAULT_OUTPUT
     assert DEFAULT_OUTPUT.name == "lora-club-v1"
-    assert args.epochs == 3.0
-    assert args.lr == 2e-4
+    assert args.epochs == DEFAULT_EPOCHS == 3.0
+    assert args.lr == DEFAULT_LR == 2e-4
     assert args.lora_r == 16
     assert args.lora_alpha == 32
     assert args.target_modules == DEFAULT_TARGET_MODULES
@@ -643,6 +645,19 @@ def test_parser_defaults() -> None:
     assert args.report_to == "auto"
     assert args.resume_from_checkpoint is None
     assert args.skip_too_long is True
+
+
+def test_parser_v020_hyperparameters_override_defaults() -> None:
+    """v0.2.0: LR/эпохи меняются флагами, а не правкой кода."""
+    args = build_parser().parse_args(["--lr", "1e-4", "--epochs", "1"])
+
+    assert args.lr == pytest.approx(1e-4)
+    assert args.epochs == pytest.approx(1.0)
+    assert args.lr != DEFAULT_LR
+    assert args.epochs != DEFAULT_EPOCHS
+    rendered = train_lora._format_hyperparams(args)
+    assert "lr=0.0001" in rendered
+    assert "epochs=1" in rendered
 
 
 def test_parser_no_skip_too_long_disables_skipping() -> None:

@@ -22,6 +22,9 @@ T-015 он не используется — валидация чисто ша�
 T-030b: публичный вход :func:`validate_moves` (его же вызывает
 :func:`validate_llm_response`) обёрнут в OTel-спан ``validator.validate``;
 атрибуты — только счётчики/флаг валидности и `trace.id`, без текста LLM.
+
+KI-060 (итерация 49): проверка **алфавита** (китайские иероглифы) живёт в
+:mod:`app.commentary.semantic` — это текстовый слой, а не шахматный.
 """
 
 from __future__ import annotations

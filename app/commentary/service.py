@@ -7,6 +7,11 @@ KI-023 (итерация 37): retry-цикл проверяет не тольк�
 но и семантические утверждения о позиции («слон на e6», «связка пешки f7»);
 на последней попытке offending-предложения вырезаются вместо ошибки 502.
 
+KI-060 (итерация 49): перед семантической проверкой текст проверяется на
+китайские иероглифы. При дрейфе модель переспрашивается **один раз** с
+подсказкой «отвечай только по-русски»; если иероглифы остались, предложения
+с ними вырезаются, а при их слишком большой доле ответ отклоняется (502).
+
 Почему отдельный модуль, а не всё в эндпоинте: генерация — это сценарий
 (несколько шагов, ретраи, валидация), который хочется тестировать без HTTP
 и без реальной модели.
@@ -34,7 +39,10 @@ from app.cache import (
     store,
 )
 from app.commentary.semantic import (
-    semantic_retry_prompt,
+    cjk_warning,
+    count_cjk,
+    has_cjk,
+    sanitize_cjk,
     semantic_warning,
     strip_invalid_claims,
     validate_semantic_claims,
@@ -47,7 +55,10 @@ from app.engine.models import (
     MoveAnalysis,
     MoveClassification,
 )
-from app.engine.validator import extract_moves_from_text, validate_moves
+from app.engine.validator import (
+    extract_moves_from_text,
+    validate_moves,
+)
 from app.errors import LLMValidationError, NotFoundError
 from app.ingestion import ParsedGame, parse_pgn
 from app.llm import BaseLLMClient, LLMUsage, get_llm_client
@@ -334,6 +345,11 @@ async def _generate_with_validation(
     получает безопасный, хоть и более короткий текст. Нелегальные ходы
     обрабатываются как раньше — retry, затем :class:`LLMValidationError`.
 
+    KI-060: текст с китайскими иероглифами переспрашивается один раз с
+    подсказкой «отвечай только на русском». Если иероглифы остались,
+    предложения с ними вырезаются (:func:`sanitize_cjk`); при слишком
+    большой доле или пустом остатке — :class:`LLMValidationError`.
+
     Args:
         llm: клиент LLM.
         package: пакет фактов (исходный промпт).
@@ -354,9 +370,14 @@ async def _generate_with_validation(
     last_attempt = max_retries + 1
     illegal: list[str] = []
     semantic_problems: list[str] = []
+    cjk_present = False
+    cjk_retry_used = False
     for attempt in range(1, last_attempt + 1):
-        prompt = _attempt_prompt(package, illegal, semantic_problems, language)
+        prompt = _attempt_prompt(
+            package, illegal, semantic_problems, language, cjk_present
+        )
         result = await llm.complete(prompt, system_prompt=system_prompt)
+        cjk_present = has_cjk(result.text)
         moves = extract_moves_from_text(result.text)
         legal, illegal = validate_moves(
             moves,
@@ -368,26 +389,61 @@ async def _generate_with_validation(
             # Семантические проблемы прошлого ответа сохраняем: в подсказке
             # следующей попытки уживаются оба предупреждения (combined).
             continue
+        text = result.text
+        if cjk_present:
+            cjk_chars = count_cjk(result.text)
+            if not cjk_retry_used and attempt < last_attempt:
+                # KI-060: ровно один retry «ответь по-русски», затем чистим.
+                cjk_retry_used = True
+                logger.warning(
+                    "commentary_cjk_detected",
+                    attempt=attempt,
+                    cjk_chars=cjk_chars,
+                    retry_left=last_attempt - attempt,
+                )
+                continue
+            outcome = sanitize_cjk(text)
+            if outcome.rejected:
+                # В лог — только счётчики, без текста LLM.
+                logger.warning(
+                    "commentary_cjk_dropped",
+                    attempt=attempt,
+                    cjk_chars=outcome.cjk_chars,
+                    cjk_share=round(outcome.share, 3),
+                    removed_sentences=outcome.removed_sentences,
+                )
+                raise LLMValidationError(
+                    "LLM вернула китайские иероглифы после "
+                    f"{attempt} попыток; ответ отклонён (KI-060)"
+                )
+            logger.warning(
+                "commentary_cjk_stripped",
+                attempt=attempt,
+                cjk_chars=outcome.cjk_chars,
+                cjk_share=round(outcome.share, 3),
+                removed_sentences=outcome.removed_sentences,
+            )
+            text = outcome.text
         semantic_problems = []
         if not semantic_validation_enabled:
-            return result.text, result.usage, attempt
+            return text, result.usage, attempt
         all_ok, semantic_problems = validate_semantic_claims(
-            result.text,
+            text,
             parsed.initial_fen,
             mainline_san=mainline,
             extra_fens=extra_fens,
         )
         if all_ok:
-            return result.text, result.usage, attempt
+            return text, result.usage, attempt
         if attempt >= last_attempt:
             # Не 502: вырезаем предложения с выдуманными фигурами.
-            stripped = strip_invalid_claims(result.text, semantic_problems)
+            stripped = strip_invalid_claims(text, semantic_problems)
             # В лог — только счётчики и факт обрезки, без текста LLM.
             logger.warning(
                 "commentary_semantic_stripped",
                 attempt=attempt,
                 problems=len(semantic_problems),
-                stripped=stripped != result.text,
+                stripped=stripped != text,
             )
             return stripped, result.usage, attempt
         logger.warning(
@@ -444,23 +500,26 @@ def _attempt_prompt(
     illegal: Sequence[str],
     semantic_problems: Sequence[str],
     language: str,
+    cjk_present: bool = False,
 ) -> str:
     """Собрать промпт попытки с учётом ошибок предыдущего ответа.
 
     KI-023: подсказки комбинируются. Если в прошлом ответе были нелегальные
     ходы — сохраняется прежний текст предупреждения о ходах; семантические
     проблемы (например, «слон на e6», которого нет) добавляются отдельным
-    блоком. Если проблемы только семантические — пакет фактов берётся как
-    есть, чтобы не дублировать его в промпте.
+    блоком. KI-060 добавляет третий блок — требование убрать китайские
+    иероглифы. Пакет фактов идёт первым и не дублируется.
     """
+    warnings: list[str] = []
     if illegal:
-        prompt = f"{package}\n\n{_moves_warning(illegal, language)}"
-        if semantic_problems:
-            prompt = f"{prompt}\n\n{semantic_warning(semantic_problems, language)}"
-        return prompt
+        warnings.append(_moves_warning(illegal, language))
     if semantic_problems:
-        return semantic_retry_prompt(package, semantic_problems, language)
-    return package
+        warnings.append(semantic_warning(semantic_problems, language))
+    if cjk_present:
+        warnings.append(cjk_warning(language))
+    if not warnings:
+        return package
+    return "\n\n".join([package, *warnings])
 
 
 def _moves_warning(illegal: Sequence[str], language: str = "ru") -> str:
