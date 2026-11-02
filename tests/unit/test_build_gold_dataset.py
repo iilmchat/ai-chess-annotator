@@ -150,7 +150,7 @@ def test_analyses_from_evals_mate() -> None:
 def test_analyses_from_evals_rejects_mismatch() -> None:
     parsed = parse_pgn(EVAL_PGN)
 
-    with pytest.raises(ValueError, match="полуходов"):
+    with pytest.raises(ValueError, match="а ходов"):
         analyses_from_evals(parsed, [])
 
 
@@ -217,8 +217,11 @@ async def test_run_build_mock_writes_v2_dataset(tmp_path: Path) -> None:
     assert record["schema_version"] == 2
     assert record["messages"][2]["content"] == MOCK_RESPONSE
     assert record["messages"][1]["content"].startswith("# Партия")
-    assert "Лучший ход движка неизвестен" in record["messages"][1]["content"]
-    assert "Потеря относительно лучшей линии: 160 cp" in record["messages"][1]["content"]
+    fact_sheet = record["messages"][1]["content"]
+    assert "Лучший ход движка неизвестен" in fact_sheet
+    assert "Потеря относительно лучшей линии: 160 cp" in fact_sheet
+    assert "## 1. Ход 2 белых: Nf3" in fact_sheet
+    assert "полуход" not in fact_sheet.lower()
     assert validate_dataset(output) == (1, [])
 
 

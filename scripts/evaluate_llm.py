@@ -560,7 +560,8 @@ def _report(
     else:
         lines.append(
             f"Средняя оценка **{average:.2f}/10** — ниже порога **7/10**. "
-            "Заведён KI-030 с планом улучшения промптов; релиз не блокируется."
+            "Сравнение с baseline и решение по модели — в "
+            "`docs/development/reports/LLM_EVAL.md` и `docs/KNOWN_ISSUES.md`."
         )
     if errors:
         lines.append(

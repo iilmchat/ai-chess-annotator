@@ -245,6 +245,8 @@ async def test_rag_context_builder_returns_section(
     assert context is not None
     assert "RAG" in context
     assert "Похожая партия" in context
+    assert "## Ход 1 белых (d4)" in context
+    assert "полуход" not in context.lower()
 
 
 async def test_rag_context_builder_returns_none_without_mistakes(

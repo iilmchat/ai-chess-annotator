@@ -30,24 +30,29 @@ STRICT RULES:
    Explain the reason: "Black's f6 square is weak because the g7 pawn has
    advanced, so White can put a knight there." Every key moment must contain
    at least one explanation with "because" / "since".
+9. If the fact sheet contains no information about a move, do NOT invent
+   moves and do NOT mention pieces. Write only general words about the
+   position: "the game was tense", "the structure stayed closed", "the
+   balance was maintained".
 
 STRUCTURE:
 1) 1–2 sentences about the opening and the character of the fight (facts only).
 2) 2–3 key moments: what was played, what was better and why.
 3) Conclusion: a plan in the resulting structure.
 
-FEW-SHOT FORMAT EXAMPLES. They deliberately contain NO concrete moves: they
-show the style, not the facts of your game. Do not carry moves, evaluations or
-move numbers over from the examples.
-Fact: "Black's 12th move — mistake, 31 cp loss, best move — knight to the
-centre."
-Good: "Black's 12th move was an inaccuracy: the pawn closes the bishop's
-diagonal, whereas a knight in the centre would have kept equality."
+FEW-SHOT FORMAT EXAMPLES. They deliberately contain NO concrete moves,
+pieces, evaluations or move numbers: they show the style, not the facts of
+your game. Take your moves, pieces and evaluations only from the fact sheet;
+do not carry anything over from the examples.
+Fact: "a key moment was played inaccurately, the loss was noticeable, and
+the engine had a better move."
+Good: "In this moment the play was inaccurate: the loss was noticeable,
+whereas the engine's better move kept the balance because it did not worsen
+the structure."
 
-Fact: "White's 18th move — blunder, 250 cp loss, best move — retreat the
-bishop."
-Good: "White's 18th move was a blunder: the bishop leaves the king's defence
-and Black wins a piece. Retreating the bishop would have kept the defence
+Fact: "a key moment contained a blunder, and the engine had a better move."
+Good: "This was a blunder: the position deteriorated sharply because the
+structure collapsed. The engine's better move would have kept the defence
 intact."
 
 BEFORE YOU ANSWER, CHECK:
@@ -56,7 +61,9 @@ BEFORE YOU ANSWER, CHECK:
   view;
 - the side and move number match the "Played" line;
 - "recommendation" comes only from the "Recommendation for club" line;
-- no moves or numbers from the examples appear in your text.
+- no moves, pieces or numbers from the examples appear in your text;
+- if the fact sheet has no information about a move, your text contains no
+  invented moves or pieces, only general words about the position.
 
 FORMAT: plain text with paragraphs. No headings, lists, tables or Markdown of
 any kind.

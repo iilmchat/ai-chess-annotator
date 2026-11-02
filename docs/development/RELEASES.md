@@ -2780,3 +2780,190 @@ Stockfish нет в PATH).
 - Скачать 1000+ PGN Lichess с `evals=true` (рейтинг 1800–2200) и собрать
   `data/gold_dataset.jsonl` с локальной LLM.
 - Обучить LoRA на золотом датасете на A5000 или бесплатном T4 (§10–§11).
+
+## Итерация 46 — Prompt Terminology & Kaggle Notebook (T-094)
+
+**Дата:** 2026-11-01
+**Статус:** ✅ завершена локально (промпт, ноутбук, тесты, ruff и mypy
+зелёные); реальный прогон на Kaggle/T4 и полная backend-сюита — CI/GPU.
+
+### Сделано
+
+- [x] **T-094, терминология «ход».** `app/llm/prompts.py`: метаданные —
+  `Ходов: N` без счётчика полуходов, ключевой момент — `Ход N
+  белых/чёрных` (номер хода, не ply). `app/rag/context.py` выводит
+  `Ход N белых/чёрных`; `scripts/build_gold_dataset.py` синхронизирован;
+  в пакет фактов попадает номер хода.
+- [x] **T-094, Kaggle Notebook.** `notebooks/kaggle_train_lora.ipynb`:
+  установка зависимостей, клонирование репозитория, автопоиск
+  `gold_dataset.jsonl`, `--dry-run`, QLoRA Qwen2.5-7B (`batch=1`,
+  `grad_accum=16`, `max_length=2048`, `--load-in-4bit`), TensorBoard,
+  zip-адаптер и resume. `GPU_TRAINING_GUIDE.md` §11.1 — быстрый старт за
+  5 минут со ссылкой на ноутбук.
+- [x] **T4 dtype.** `scripts/train_lora.py` выбирает fp16, если bf16
+  недоступен (T4/P100), и передаёт fp16 в `TrainingArguments`; иначе
+  QLoRA на T4 могла идти в bf16/без mixed precision и падать.
+- [x] **Тесты.** `test_prompts.py` — нет слова «полуход» в пакете и
+  системном промпте, номер хода для чёрных; `test_train_lora.py` — fp16
+  fallback; `test_kaggle_notebook.py` — 5 проверок контракта ноутбука;
+  фикстура `lora_sample_v2.jsonl` приведена к новому формату.
+- [x] **Документация.** TODO T-092 (прогресс 130 записей), T-094;
+  CHANGELOG `[Unreleased]`; RELEASES (эта запись).
+
+### Метрики
+
+- **Целевые backend-тесты:** prompts + build_gold + kaggle — **70
+  passed**; связанный набор (prompts, build_gold, kaggle, train_lora,
+  dataset_export, generate_lora_dataset, convert_external,
+  export_to_gguf) — **244 passed** (3.46 с).
+- **ruff:** `All checks passed!`; **mypy app:** 0 (90 файлов);
+  **mypy app + изменённые скрипты/тест ноутбука:** 0 (93 файла).
+- **Smoke:** `build_gold_dataset.py --provider mock` → 1 запись,
+  `Ходов: 2`, `## 1. Ход 2 белых: Nf3`, слова «полуход» нет.
+  `train_lora.py --dry-run --dataset data/gold_dataset.jsonl` → 19
+  записей, `schema_version=2`, `DRY-RUN OK`.
+- **Не выполнено локально:** реальный Kaggle/T4 (7B/2048), скачивание
+  Qwen2.5-7B, полная backend-сюита — окружение/CI.
+
+### Что дальше
+
+- Импортировать ноутбук в Kaggle, загрузить 130 записей как Dataset
+  `chess-gold` и прогнать T4; при OOM — 4B/1024.
+- Пересобрать/нормализовать старые 130 записей: они созданы до фикса
+  промпта и могут содержать «полуход» в user/assistant.
+
+---
+
+## Итерация 47 — Colab/T4 Compatibility & Dataset Truncation (T-095)
+
+**Дата:** 2026-11-02
+**Статус:** ✅ завершена локально (код, ноутбук, гайд, тесты, ruff и mypy
+зелёные); реальный прогон на Colab/T4 и полная backend-сюита — CI/GPU.
+
+### Сделано
+
+- [x] **T-095, лимит пакета фактов.** `build_fact_package(...,
+  max_tokens=2048)`: длинная партия сокращается до первых/последних 10
+  ходов и ходов ключевых моментов, в пакет добавляется пометка о
+  сокращении; ключевые моменты сохраняются, пока хватает лимита.
+  `max_tokens < 1` → `ValueError`.
+- [x] **T-095, TensorFlow в Colab.** `scripts/train_lora.py` на импорте
+  выставляет `USE_TF=0` и `TRANSFORMERS_NO_TF=1` до ленивого импорта
+  torch/transformers: TF больше не инициализирует CUDA 13.0 и не уводит
+  PyTorch на CPU.
+- [x] **T-095, `--force-fp16` и T4.** Новый CLI-флаг принудительно ставит
+  `fp16=True`/`bf16=False`; `_looks_like_t4` определяет «Tesla T4» по
+  имени устройства и делает то же автоматически, даже если
+  `is_bf16_supported()` вернул `True`. `--check-env` предупреждает о T4.
+- [x] **T-095, ноутбук.** `torchao>=0.16.0 --no-deps`, отдельная ячейка
+  блокировки TF до импорта torch, запуск с `--no-4bit --force-fp16
+  --max-length 2048`; модель по умолчанию 4B (7B без 4-bit не влезает в
+  T4 16 GB) — 7B оставлена комментарием с `--load-in-4bit`/1024.
+- [x] **T-095, гайд.** `GPU_TRAINING_GUIDE.md` §11.1/§11.3 обновлены,
+  добавлен §11.3.1 «Решение проблем (Troubleshooting)» (libcudart/TF,
+  torchao, bf16/`--force-fp16`, почему `--no-4bit`, OOM) и заметка, что
+  `--max-length` считает всю запись.
+- [x] **Тесты и документация.** 13 новых unit-тестов (6 prompts, 1
+  notebook, 6 train_lora); TODO T-095, CHANGELOG `[Unreleased]`,
+  RELEASES (эта запись), отчёт `ITERATION-47.md`.
+
+### Метрики
+
+- **Целевые тесты:** prompts + train_lora + kaggle + build_gold +
+  dataset_export + generate_lora + convert_external — **239 passed**
+  (9.38 с).
+- **Полная unit-сюита:** `pytest tests/unit -q` — **844 passed,
+  1 skipped, 1 xfailed** (24.96 с).
+- **ruff:** `All checks passed!`; **mypy app:** 0 (90 файлов);
+  **mypy app + скрипты + изменённые тесты:** 0 (95 файлов).
+- **Smoke обрезки:** партия 1200 ходов, полный пакет — 2141 токен,
+  после обрезки — 274 токена при лимите 2048; начало `1. Nf3 Nf6 …`,
+  конец `600. Ng1 Ng8`, 3/3 ключевых момента на месте.
+- **Smoke dry-run:** `data/gold_dataset.jsonl` — 1000 записей,
+  `schema_version: 2=1000`, оценка max ~1810 токенов, `DRY-RUN OK`.
+- **TF-блокировка:** `import scripts.train_lora` → `USE_TF=0`,
+  `TRANSFORMERS_NO_TF=1`.
+- **Не выполнено локально:** реальный Colab/T4 (4B/2048, `--no-4bit`),
+  полная backend-сюита с PostgreSQL/Stockfish — окружение/CI.
+
+### Что дальше
+
+- Прогнать ноутбук в Colab: убедиться, что `skipped_too_long = 0`;
+  если пропуски остались — это бюджет system+assistant, поднять
+  `--max-length` до 3072 (§11.3.1).
+- Проверить на T4, что `--no-4bit` + 4B + 2048 помещается в 16 GB; иначе
+  `--max-length 1536`.
+- Пересобрать golden dataset с новым `build_fact_package`: длинные
+  партии теперь дают пакеты ≤ 2048 оценённых токенов.
+
+---
+
+## Итерация 48 — LLM Evaluation & KI-030 Closure (T-096)
+
+**Дата:** 2026-11-02
+**Статус:** ✅ завершена — оценка 3B/7B зафиксирована, промпты очищены,
+`LLM_TEMPERATURE` покрыт тестом, KI-030 закрыт, KI-060 заведён; тесты,
+ruff и mypy зелёные.
+
+### Что сделано
+
+- [x] **T-096, оценка LoRA 3B/7B.** `chess-annotator-3b` (Qwen2.5-3B) —
+  **2.87/10** (2.20/2.80/3.60), `qwen-7b-tokenizer` (Qwen2.5-7B) —
+  **3.33/10** (2.80/3.40/3.80) против baseline zero-shot Qwen3-4B —
+  **4.40/10**. Оба прогона: 5/5 генераций, 0 ошибок `502`, ≈ 10 с.
+  Отчёт — `docs/development/reports/LLM_EVAL.md`.
+- [x] **`LLM_TEMPERATURE`.** Проверен проброс `Settings.llm_temperature` →
+  `app/llm/factory.py` → `OpenAICompatibleClient` → JSON payload
+  (`complete` и `stream_generate`) для LM Studio и DeepSeek. Проброс уже
+  был корректным; добавлены 4 теста (env → Settings, фабрика → payload
+  для club/gm, стрим), `LLM_TEMPERATURE=0.2` — в `.env.example`.
+- [x] **Few-shot contamination.** Из `app/prompts/club.txt` и
+  `club_en.txt` убраны примеры с конкретными ходами/фигурами; добавлено
+  правило «если в пакете нет информации о ходе — не выдумывать ходы и не
+  упоминать фигуры, писать только общие слова о позиции».
+  `NO_MOVE_DATA_INSTRUCTION` добавлена в пакет без анализа и в обычный
+  пакет; 12 новых тестовых кейсов в `test_prompts.py`.
+- [x] **KI-030 закрыт.** LoRA на 3B и 7B не дала прироста (2.87 и 3.33
+  против 4.40); выявлено переобучение, галлюцинации, путаница сторон и
+  языковой дрейф 7B. Возврат к базовой 4B; пересборка golden dataset
+  более сильной моделью (DeepSeek) — T-104b.
+- [x] **KI-060 заведён.** Языковой дрейф (китайский текст) LoRA 7B:
+  причина — переобучение на узком шумном датасете; план — CJK-детектор,
+  пересборка данных, переобучение с language-replay.
+- [x] **Документация.** `LLM_EVAL.md` (3 модели, дельты, пер-партийные
+  оценки, вывод), `KNOWN_ISSUES.md` (KI-030 Closed, KI-060 Open, счётчики
+  60/26/34), `CHANGELOG.md`, `README.md`, `ARCHITECTURE.md`,
+  `GETTING_STARTED.md`, `LORA_TRAINING.md`, `TODO.md` (T-096, T-104b).
+- [x] **Изоляция export-тестов.** Пять тестов
+  `test_admin_exports.py`/`test_export_jobs.py` ограничены датами
+  сидируемых правок: реальная `gm`-правка от 2026-10-28 в dev-БД больше
+  не даёт ложные «2 строки вместо 1».
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Контрольный eval 3B/7B на очищенном промпте | Оценка уже показала разрыв −1.07/−1.53; повторный прогон 5 партий не меняет решение | §5 отчёта ITERATION-48 |
+| Пересборка golden dataset (DeepSeek) и переобучение 7B | Требует внешней модели/GPU и нового цикла генерации | T-104b, KI-060 |
+| CJK-детектор в eval/валидаторе | Языковой дрейф пока ловится только судьёй | KI-060 |
+| Raw JSON 3B | Перезаписан прогоном 7B (общий `llm_eval_results.json`) | LLM_EVAL.md, ограничения |
+
+### Метрики
+
+- **Backend-тесты:** 1196 passed, 9 skipped, 1 xfailed (полная сюита).
+- **Целевые тесты:** `test_prompts.py` — 56 passed; `test_llm.py` — 26
+  passed; `test_evaluate_llm_explanations.py` — 13 passed.
+- **ruff:** `All checks passed!`; **mypy app:** 0 (90 файлов); **mypy app +
+  `scripts/evaluate_llm.py` + unit-тесты:** 0 (93 файла).
+- **Eval:** 3B — 2.87/10, 7B — 3.33/10, baseline 4B — 4.40/10; 5/5 и 0
+  `502` у обеих LoRA-моделей.
+
+### Что дальше
+
+- **T-104b:** пересобрать golden dataset с DeepSeek (меньше шума и
+  галлюцинаций), переобучить 7B с меньшим LR/эпохами и language-replay,
+  прогнать тот же eval-набор; ориентир — не ниже 4.40/10.
+- **KI-060:** CJK/кириллица-детектор в eval и валидаторе, закрыть после
+  5/5 чистых русских комментариев у 7B.
+- **KI-023:** расширить eval до 30–50 партий и проверять атрибуцию
+  оценок/мотивов/«лучшего хода».

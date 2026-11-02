@@ -18,7 +18,12 @@
   Принимается для сравнения, `--dry-run` печатает предупреждение.
 
 Маскирование лосса: labels для `system`/`user` (и служебных токенов шаблона)
-равны `-100`, обучаются только токены `assistant`-ответа.
+равны `-100`, обучаются только токены `assistant`-ответа. На GPU без bf16
+(T4/P100) QLoRA автоматически идёт в fp16, на Ampere+ — в bf16; на T4 bf16
+отключается принудительно (`--force-fp16` или определение «Tesla T4»).
+TensorFlow блокируется через `USE_TF`/`TRANSFORMERS_NO_TF` до импорта
+torch/transformers: в Colab он инициализирует CUDA 13.0, падает на
+`libcudart.so.12` и уводит PyTorch на CPU.
 
 ```bash
 python scripts/export_dataset.py --level club --schema-version 2 \
@@ -27,7 +32,7 @@ python scripts/train_lora.py --dry-run --dataset data/lora_dataset.jsonl
 python scripts/train_lora.py \
     --dataset data/lora_dataset.jsonl \
     --model Qwen/Qwen3-4B-Instruct-2507 \
-    --output-dir models/lora-club-v1 --load-in-4bit
+    --output-dir models/lora-club-v1 --no-4bit --force-fp16
 ```
 
 Логи лосса: `--report_to auto` (по умолчанию) включает TensorBoard,
@@ -50,6 +55,7 @@ import argparse
 import functools
 import importlib.util
 import json
+import os
 import platform
 import sys
 from collections import Counter
@@ -58,6 +64,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+# Colab/Kaggle: встроенный TensorFlow инициализирует CUDA 13.0, падает на
+# libcudart.so.12 и переключает PyTorch на CPU. Блокируем TF до импорта
+# torch/transformers (итерация 47); сами библиотеки импортируются лениво.
+os.environ["USE_TF"] = "0"
+os.environ["TRANSFORMERS_NO_TF"] = "1"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -721,23 +733,60 @@ def _import_training_stack() -> Any:
     )
 
 
+def _looks_like_t4(torch: Any) -> bool:
+    """Похоже ли устройство на Tesla T4 (Turing без аппаратного bf16).
+
+    На части сборок Colab ``is_bf16_supported()`` возвращает ``True``,
+    хотя bf16 на T4 нестабилен и обучение зависает. Поэтому T4 определяем
+    и по имени устройства, а не только по флагу.
+    """
+    cuda = getattr(torch, "cuda", None)
+    get_device_name = getattr(cuda, "get_device_name", None)
+    if get_device_name is None:
+        return False
+    try:
+        name = str(get_device_name(0))
+    except (AssertionError, IndexError, RuntimeError, TypeError):
+        return False
+    return "t4" in name.lower()
+
+
+def _force_fp16(args: argparse.Namespace, torch: Any) -> bool:
+    """``--force-fp16`` или T4: bf16 отключается принудительно."""
+    return bool(getattr(args, "force_fp16", False)) or _looks_like_t4(torch)
+
+
+def _training_dtype(torch: Any, *, force_fp16: bool = False) -> Any:
+    """bf16 на Ampere+, fp16 на T4/P100 и при ``--force-fp16``."""
+    if force_fp16:
+        return getattr(torch, "float16", torch.bfloat16)
+    cuda = getattr(torch, "cuda", None)
+    is_bf16_supported = getattr(cuda, "is_bf16_supported", None)
+    if is_bf16_supported is not None and is_bf16_supported():
+        return torch.bfloat16
+    return getattr(torch, "float16", torch.bfloat16)
+
+
 def _prepare_model(
     args: argparse.Namespace, stack: Any, torch: Any, tokenizer: Any
 ) -> Any:
     """Загрузить базовую модель (опционально 4-bit) и навесить LoRA."""
+    model_dtype = _training_dtype(
+        torch, force_fp16=_force_fp16(args, torch)
+    )
     quantization_config = None
     if args.load_in_4bit:
         quantization_config = stack.BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_compute_dtype=model_dtype,
             bnb_4bit_use_double_quant=True,
         )
     model = stack.AutoModelForCausalLM.from_pretrained(
         args.model,
         quantization_config=quantization_config,
         device_map="auto",
-        torch_dtype=torch.bfloat16,
+        torch_dtype=model_dtype,
         trust_remote_code=True,
     )
     if args.load_in_4bit:
@@ -783,11 +832,22 @@ def train(
     torch = stack.torch
     if not torch.cuda.is_available():
         raise SystemExit(NO_CUDA_HINT)
+    supports_bf16 = bool(torch.cuda.is_bf16_supported())
+    force_fp16 = _force_fp16(args, torch)
+    if force_fp16:
+        supports_bf16 = False
     print(
         f"GPU: {torch.cuda.get_device_name(0)}; "
         f"CUDA {torch.version.cuda}; "
-        f"bf16={'да' if torch.cuda.is_bf16_supported() else 'нет'}"
+        f"bf16={'да' if supports_bf16 else 'нет'}"
     )
+    if force_fp16:
+        reason = (
+            "--force-fp16"
+            if getattr(args, "force_fp16", False)
+            else "Tesla T4"
+        )
+        print(f"Mixed precision: fp16 ({reason}); bf16 отключён")
 
     tokenizer = stack.AutoTokenizer.from_pretrained(
         args.model, trust_remote_code=True
@@ -855,8 +915,8 @@ def train(
         learning_rate=args.lr,
         logging_steps=args.logging_steps,
         save_strategy="epoch",
-        bf16=torch.cuda.is_bf16_supported(),
-        fp16=False,
+        bf16=supports_bf16,
+        fp16=not supports_bf16,
         gradient_checkpointing=args.gradient_checkpointing,
         optim="paged_adamw_8bit" if args.load_in_4bit else "adamw_torch",
         lr_scheduler_type="cosine",
@@ -940,6 +1000,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--grad-accum", type=_positive_int, default=8)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--max-length", type=_positive_int, default=2048)
+    parser.add_argument(
+        "--force-fp16",
+        action="store_true",
+        help=(
+            "принудительно fp16 (bf16=False): нужно на T4, где bf16 "
+            "нестабилен даже если torch сообщает о поддержке"
+        ),
+    )
     parser.add_argument(
         "--skip-too-long",
         action=argparse.BooleanOptionalAction,
@@ -1047,6 +1115,8 @@ def _print_env_check() -> None:
         print("  cuda: да")
         print(f"  device: {torch.cuda.get_device_name(0)}")
         print(f"  bf16: {'да' if torch.cuda.is_bf16_supported() else 'нет'}")
+        if _looks_like_t4(torch):
+            print("  T4: bf16 будет отключён, обучение пойдёт в fp16")
     else:
         print("  cuda: НЕТ (GPU не видна)")
 

@@ -102,7 +102,7 @@ _EVAL_RE = re.compile(r"\[%eval\s+([^\]]+)\]")
 
 @dataclass(frozen=True, slots=True)
 class EvalPoint:
-    """Оценка после полухода: cp за белых или мат в N."""
+    """Оценка после хода: cp за белых или мат в N."""
 
     cp: int | None
     mate: int | None = None
@@ -136,7 +136,7 @@ def parse_eval_comment(comment: str) -> EvalPoint | None:
 
 
 def extract_eval_points(game: chess.pgn.Game) -> list[EvalPoint | None]:
-    """Оценки после каждого хода mainline (по одной на полуход)."""
+    """Оценки после каждого хода mainline (по одной на ход)."""
     return [
         parse_eval_comment(node.comment or "") for node in game.mainline()
     ]
@@ -170,12 +170,15 @@ def analyses_from_evals(
     игрока, сделавшего ход; ``delta_cp = max(0, before − after)``.
     ``best_move_known=False``: в PGN есть только оценка, а не лучший ход.
 
+    В пакет фактов попадает номер хода («Ход N белых/чёрных»), а не
+    служебный индекс: так текст комментария звучит естественно.
+
     Raises:
-        ValueError: число оценок не совпало с числом полуходов.
+        ValueError: число оценок не совпало с числом ходов.
     """
     if len(eval_points) != parsed.ply_count:
         raise ValueError(
-            f"оценок {len(eval_points)}, а полуходов {parsed.ply_count}"
+            f"оценок {len(eval_points)}, а ходов {parsed.ply_count}"
         )
     analyses: list[MoveAnalysis] = []
     white_before = 0

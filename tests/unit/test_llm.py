@@ -175,6 +175,75 @@ async def test_system_prompt_is_sent_first() -> None:
     await client.aclose()
 
 
+# --- LLM_TEMPERATURE (итерация 48) ----------------------------------------
+
+
+def test_temperature_env_var_maps_to_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`LLM_TEMPERATURE` из окружения попадает в `Settings.llm_temperature`."""
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.55")
+
+    assert Settings(_env_file=None).llm_temperature == pytest.approx(0.55)
+
+
+@pytest.mark.parametrize(
+    ("level", "expected_model"),
+    [("club", "qwen3-8b"), ("gm", "deepseek-chat")],
+)
+async def test_factory_sends_settings_temperature_in_payload(
+    level: str, expected_model: str
+) -> None:
+    """Фабрика пробрасывает `llm_temperature` в JSON-запрос провайдера."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=_completion(model=expected_model))
+
+    client = _mock_client(handler)
+    llm = get_llm_client(
+        level, _settings(llm_temperature=0.65), client=client
+    )
+
+    await llm.generate("привет")
+
+    payload = json.loads(captured[0].content)
+    assert payload["model"] == expected_model
+    assert payload["temperature"] == pytest.approx(0.65)
+
+    await client.aclose()
+
+
+async def test_stream_payload_carries_temperature() -> None:
+    """Стрим использует тот же `_build_payload` и тоже передаёт температуру."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            content=_stream_body("e4"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _mock_client(handler)
+    llm = OpenAICompatibleClient(
+        base_url="http://local/v1",
+        model="m",
+        provider_name="test",
+        client=client,
+        temperature=0.9,
+    )
+
+    chunks = [chunk async for chunk in llm.stream_generate("prompt")]
+
+    assert chunks == ["e4"]
+    assert json.loads(captured[0].content)["temperature"] == pytest.approx(0.9)
+
+    await client.aclose()
+
+
 async def test_retry_on_429_then_success() -> None:
     calls: list[int] = []
 

@@ -969,12 +969,38 @@ scp root@<server-ip>:/workspace/ai-chess-annotator/models/qwen2.5-7b-chess-gguf/
 ## 11. Бесплатные GPU: Kaggle и Colab
 
 Бесплатные GPU подходят для первого прогона **4B-модели** (Qwen3-4B) на
-T4 16 GB. 7B на T4 обычно не помещается даже в NF4 с `batch=1`; для 7B
-берите арендованную A5000/4090 (§10). Оба сервиса дают временную машину:
-рабочий каталог может исчезнуть после сессии, поэтому чекпоинты и готовый
-адаптер сохраняйте на Drive/Kaggle Dataset или скачивайте сразу.
+T4 16 GB. 7B на T4 — верхняя граница: NF4 + `batch=1` может не влезть,
+особенно с `max_length=2048`; для стабильного 7B берите арендованную
+A5000/4090 (§10). Оба сервиса дают временную машину: рабочий каталог
+может исчезнуть после сессии, поэтому чекпоинты и готовый адаптер
+сохраняйте на Drive/Kaggle Dataset или скачивайте сразу.
 
-### 11.1. Kaggle Notebooks
+### 11.1. Как запустить обучение на Kaggle за 5 минут
+
+Готовый ноутбук — [`notebooks/kaggle_train_lora.ipynb`](../../notebooks/kaggle_train_lora.ipynb)
+(на GitHub: [kaggle_train_lora.ipynb](https://github.com/iilmchat/ai-chess-annotator/blob/main/notebooks/kaggle_train_lora.ipynb)).
+Он сам ставит зависимости, клонирует репозиторий, находит датасет,
+проверяет его через `--dry-run`, запускает `train_lora.py` и пакует
+адаптер в zip.
+
+1. **Откройте ноутбук в Kaggle:** File → Import Notebook → GitHub → URL
+   `https://github.com/iilmchat/ai-chess-annotator/blob/main/notebooks/kaggle_train_lora.ipynb`
+   (или скачайте файл и загрузите его в Kaggle).
+2. **Включите GPU:** Settings → Accelerator → **GPU T4 ×2**; Settings →
+   Internet → **On**.
+3. **Загрузите датасет:** Datasets → New Dataset → `gold_dataset.jsonl`
+   (130 записей на 2026-11-01) → имя датасета `chess-gold`.
+4. **Run All.** Ноутбук сам выполнит установку, dry-run, обучение и
+   упаковку; готовый архив появится в **Output**.
+
+Ноутбук по умолчанию повторяет параметры итерации 47:
+`Qwen/Qwen3-4B-Instruct-2507`, `batch_size=1`, `grad_accum=16`,
+`max_length=2048`, `--no-4bit`, `--force-fp16`. Режим без 4-bit требует
+модели до 4B на T4 16 GB; 7B (`Qwen/Qwen2.5-7B-Instruct`) запускается
+только с `--load-in-4bit`, а `MAX_LENGTH` — `1024` (консервативный ручной
+сценарий ниже).
+
+### 11.2. Kaggle Notebooks (ручной сценарий)
 
 Бесплатный аккаунт: ~30 GPU-часов в неделю, T4 ×2 (16 GB каждая) или
 P100. Для QLoRA выбирайте **T4**, а не P100: на P100 нет bf16, а
@@ -997,14 +1023,16 @@ bitsandbytes-сборка капризнее.
    !pip install -q -U peft transformers datasets accelerate bitsandbytes tensorboard
    ```
 
-4. Загрузите `data/lora_gold_v1.jsonl` как **Kaggle Dataset** (например,
+4. Загрузите `data/gold_dataset.jsonl` как **Kaggle Dataset** (например,
    `chess-gold`). В ноутбуке он будет в
-   `/kaggle/input/chess-gold/lora_gold_v1.jsonl`.
+   `/kaggle/input/chess-gold/gold_dataset.jsonl`. Старое имя
+   `lora_gold_v1.jsonl` тоже поддерживается — замените имя файла в
+   командах ниже.
 5. Запустите обучение (4B, T4, QLoRA; effective batch 16):
 
    ```python
    !python scripts/train_lora.py \
-       --dataset /kaggle/input/chess-gold/lora_gold_v1.jsonl \
+       --dataset /kaggle/input/chess-gold/gold_dataset.jsonl \
        --model Qwen/Qwen3-4B-Instruct-2507 \
        --output-dir /kaggle/working/models/lora-club-v1 \
        --epochs 3 \
@@ -1033,7 +1061,7 @@ bitsandbytes-сборка капризнее.
    уничтожила каталог — загрузите прошлый zip как Dataset, распакуйте в
    `/kaggle/working` и только потом продолжайте.
 
-### 11.2. Google Colab
+### 11.3. Google Colab
 
 Бесплатный Colab: T4 16 GB, сессия до ~12 ч, но при простое среда
 отключается раньше. Диск не сохраняется между сессиями — используйте
@@ -1046,29 +1074,37 @@ Google Drive.
    drive.mount('/content/drive')
    ```
 
-2. Клонируйте репозиторий и поставьте зависимости:
+2. Клонируйте репозиторий, поставьте зависимости и **заблокируйте
+   TensorFlow** до импорта `torch` (иначе Colab переключает PyTorch на CPU,
+   см. §11.3.1):
 
    ```python
    !git clone https://github.com/iilmchat/ai-chess-annotator.git
    %cd ai-chess-annotator
    !pip install -q -U peft transformers datasets accelerate bitsandbytes tensorboard
+   !pip install -q --upgrade "torchao>=0.16.0" --no-deps
+
+   import os
+   os.environ["USE_TF"] = "0"
+   os.environ["TRANSFORMERS_NO_TF"] = "1"
    ```
 
-3. Положите `lora_gold_v1.jsonl` в
-   `/content/drive/MyDrive/chess/lora_gold_v1.jsonl` (через веб-интерфейс
+3. Положите `gold_dataset.jsonl` в
+   `/content/drive/MyDrive/chess/gold_dataset.jsonl` (через веб-интерфейс
    Drive или `files.upload()`).
-4. Обучение с сохранением прямо на Drive:
+4. Обучение с сохранением прямо на Drive (4B, T4, без 4-bit, fp16):
 
    ```python
    !python scripts/train_lora.py \
-       --dataset /content/drive/MyDrive/chess/lora_gold_v1.jsonl \
+       --dataset /content/drive/MyDrive/chess/gold_dataset.jsonl \
        --model Qwen/Qwen3-4B-Instruct-2507 \
        --output-dir /content/drive/MyDrive/chess/models/lora-club-v1 \
        --epochs 3 \
        --batch-size 1 \
        --grad-accum 16 \
-       --max-length 1024 \
-       --load-in-4bit \
+       --max-length 2048 \
+       --no-4bit \
+       --force-fp16 \
        --gradient-checkpointing \
        --report_to tensorboard \
        --seed 42
@@ -1084,13 +1120,43 @@ Google Drive.
    /content/drive/MyDrive/chess/models/lora-club-v1/checkpoint-N`. Drive
    переживает сессию, поэтому чекпоинты не теряются.
 
-### 11.3. Ограничения бесплатных GPU
+#### 11.3.1. Решение проблем (Troubleshooting)
+
+| Симптом | Причина | Что делать |
+| :--- | :--- | :--- |
+| `OSError: libcudart.so.12`, `torch.cuda.is_available() == False` после импорта TensorFlow | Colab-овский TF инициализирует CUDA 13.0, падает и уводит PyTorch на CPU | выполнить `os.environ["USE_TF"] = "0"` и `os.environ["TRANSFORMERS_NO_TF"] = "1"` **до** импорта `torch`; в ноутбуке это ячейка 1.1, затем **Runtime → Restart and run all** |
+| `ImportError: torchao` / `peft` падает при импорте | в образе Colab старая `torchao`, на которой не работает `peft` | `!pip install -q --upgrade "torchao>=0.16.0" --no-deps`, затем **Restart** |
+| Обучение зависает на первом шаге, в логе `bf16` | T4 (Turing) не поддерживает bf16, но `torch.cuda.is_bf16_supported()` иногда возвращает `True` | запускать с `--force-fp16`: скрипт выставит `bf16=False`, `fp16=True` |
+| `CUDA out of memory` сразу при загрузке модели | 7B без 4-bit не помещается в 16 GB | взять 4B (`Qwen/Qwen3-4B-Instruct-2507`) или вернуть `--load-in-4bit`, `--max-length 1024` |
+| `bitsandbytes` падает с ошибкой CUDA-версии | wheel bitsandbytes не совпал с CUDA образа | режим `--no-4bit` (как в команде выше); не переустанавливать `torch` из Colab-образа |
+
+**Почему `--no-4bit` и `--force-fp16` на T4.** В Colab сборка
+`bitsandbytes` часто конфликтует с CUDA 13.0/драйвером: QLoRA падает уже
+на загрузке модели, а не на обучении. Отказ от 4-bit убирает этот слой
+(ценой ~4× памяти), поэтому на 16 GB T4 без квантования помещается только
+модель до 4B. T4 — архитектура Turing: bf16 аппаратно не поддерживается,
+а `is_bf16_supported()` на части сборок Colab врёт (`True`), из-за чего
+`Trainer` зависает. `--force-fp16` принудительно ставит `fp16=True` и
+`bf16=False`; `train_lora.py` делает то же автоматически, если видит
+«Tesla T4» в имени устройства.
+
+**Если `skipped_too_long` остался.** `--max-length` считает **всю** запись:
+system-промпт + пакет фактов + ответ. На «золотом датасете» (1000 записей,
+2026-11-02) медиана — ~5900 символов на запись, из них system ~2600 и
+assistant ~1700; при ~3 символах на токен это ~2000 токенов, поэтому
+лимит 2048 режет часть записей даже после сокращения пакета. Поднимите
+`--max-length` до `3072` (T4/4B/fp16 это выдерживает с gradient
+checkpointing) или сократите system-промпт/ответ.
+
+### 11.4. Ограничения бесплатных GPU
 
 - **VRAM 16 GB:** 4B в NF4 + `batch=1` + `max_length=1024` — рабочая
-  точка; при OOM уменьшите `--max-length` до 512.
-- **Нет bf16 на P100/старых T4-сборках:** скрипт сам выставляет bf16
-  только если `torch.cuda.is_bf16_supported()`; обучение продолжится, но
-  менее эффективно.
+  точка; без квантования (`--no-4bit`) на T4 помещается только 4B при
+  `max_length=2048`. При OOM уменьшите `--max-length` до 512.
+- **Нет bf16 на P100/T4:** скрипт сам выставляет fp16, если
+  `torch.cuda.is_bf16_supported()` == `False`, а при `--force-fp16` или
+  имени устройства «Tesla T4» — принудительно, даже когда флаг сообщает
+  `True`. Для T4 это штатный режим, а не ошибка.
 - **Прерывания:** сессия может закончиться в любой момент. Сохраняйте
   `output_dir` на Drive/Kaggle Dataset и используйте
   `--resume_from_checkpoint`.
@@ -1122,7 +1188,9 @@ Google Drive.
       models/.../checkpoint-N`, а не запущено заново.
 - [ ] `export_to_gguf.py` отработал: есть `model.gguf` (или HF-модель при
       отсутствии llama.cpp); файл открывается в LM Studio.
-- [ ] На бесплатном GPU (Kaggle/Colab): T4, 4B-модель, `batch=1`,
-      `--max-length 1024`, output/checkpoint на Drive или Kaggle Dataset.
+- [ ] На бесплатном GPU (Kaggle/Colab): T4, открыт
+      `notebooks/kaggle_train_lora.ipynb` (4B/2048, `--no-4bit`
+      `--force-fp16`) или ручной сценарий §11.2 (4B/1024); output/checkpoint
+      на Drive или Kaggle Dataset.
 - [ ] Адаптер скопирован на основную машину, `/v1/models` содержит
       `lora-club-v1`, smoke `/v1/commentary` вернул 200.

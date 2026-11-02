@@ -75,8 +75,13 @@ def make_rag_context_builder(
                     logger.warning("rag_lookup_failed", error=str(exc))
                     continue
                 if texts:
+                    move_number = (analysis.ply + 1) // 2
+                    side_gen = (
+                        "белых" if analysis.ply % 2 == 1 else "чёрных"
+                    )
                     chunks.append(
-                        f"## Полуход {analysis.ply} ({analysis.played_move_san})\n"
+                        f"## Ход {move_number} {side_gen} "
+                        f"({analysis.played_move_san})\n"
                         + "\n".join(f"- {text}" for text in texts)
                     )
 

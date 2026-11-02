@@ -415,13 +415,15 @@ FinOps: TokenBudgetMiddleware --> users.tier (free 50k / pro 500k)
   `scripts/generate_blind_test.py` готов (итерация 35).
 - Локализация: русский «пакет фактов», en-промпты файлами, без вычитки
   носителем — остатки закрытого KI-058.
-- LLM-качество ниже целевого 7/10 (KI-030 Open); обучение LoRA не
-  выполнялось (нет GPU).
+- LLM-качество ниже целевого 7/10; KI-030 **Closed** в итерации 48:
+  LoRA 3B/7B — 2.87/3.33 против zero-shot 4B 4.40/10, адаптеры отклонены,
+  возврат к 4B; пересборка golden dataset — T-104b; KI-060 — языковой
+  дрейф 7B.
 
 ## 9. Что дальше
 
 v1.0.0 — стабильный релиз: админка, prompt registry, OTel/LLMOps,
 FinOps, semantic cache, guardrails, audit, фоновые выгрузки и
 observability-стек закрыты. Дальше: живой слепой тест (T-024), вычитка
-EN-промптов носителем, качество LLM/LoRA (KI-030), signed URL (KI-057),
+EN-промптов носителем, качество LLM/LoRA (7B, T-104b), signed URL (KI-057),
 multi-tenant и SSO (Backlog T-111…T-119).

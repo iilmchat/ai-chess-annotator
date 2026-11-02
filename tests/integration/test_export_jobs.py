@@ -147,6 +147,9 @@ async def _seed_edit() -> dict[str, int]:
             commentary_id=commentary.id,
             original_text=COMMENTARY_TEXT,
             edited_text=EDITED_TEXT,
+            # Фиксированная дата: тест не должен зависеть от «сегодня» и от
+            # посторонних правок в общей dev-БД (изоляция выборки).
+            created_at=datetime(2020, 5, 5, 9, 0, tzinfo=UTC),
         )
         session.add(edit)
         await session.commit()
@@ -672,7 +675,12 @@ def test_admin_cookie_session_can_create_and_download(
     """Кнопка в админке: cookie admin_session без Bearer-токена."""
     _login_admin(client)
     response = client.post(
-        "/v1/admin/exports/jobs", json={"schema_version": 1}
+        "/v1/admin/exports/jobs",
+        json={
+            "schema_version": 1,
+            "date_from": "2020-05-05",
+            "date_to": "2020-05-05",
+        },
     )
     assert response.status_code == 202, response.text
     job_id = response.json()["id"]

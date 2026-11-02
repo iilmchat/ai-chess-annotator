@@ -106,6 +106,14 @@ def test_report_contains_explanation_metric() -> None:
     assert "| Объяснения |" in report
 
 
+def test_report_does_not_reopen_closed_ki_030() -> None:
+    """Итерация 48: KI-030 закрыт, отчёт не должен писать «Заведён KI-030»."""
+    report = _report(_rows(), [GAME], ["club", "gm"], 300.0)
+
+    assert "Заведён KI-030" not in report
+    assert "LLM_EVAL.md" in report
+
+
 def test_json_dump_contains_has_explanation(tmp_path: Path) -> None:
     path = tmp_path / "llm_eval.json"
 

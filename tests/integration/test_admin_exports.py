@@ -384,7 +384,8 @@ def test_export_v1_uses_original_text(
     seeded: dict[str, int],
 ) -> None:
     response = client.get(
-        "/v1/admin/exports/edits.jsonl?level=gm&schema_version=1",
+        "/v1/admin/exports/edits.jsonl?level=gm&schema_version=1"
+        "&date_from=2020-05-05&date_to=2020-05-05",
         headers=_bearer(settings, users, "admin"),
     )
     assert response.status_code == 200, response.text
@@ -404,7 +405,8 @@ def test_export_filters_by_human_edited(
 ) -> None:
     headers = _bearer(settings, users, "admin")
     humans = client.get(
-        "/v1/admin/exports/edits.jsonl?human_edited=true&schema_version=1",
+        "/v1/admin/exports/edits.jsonl?human_edited=true&schema_version=1"
+        "&date_from=2020-05-05&date_to=2020-05-05",
         headers=headers,
     )
     assert humans.status_code == 200
@@ -413,7 +415,8 @@ def test_export_filters_by_human_edited(
     assert human_lines[0]["messages"][2]["content"] == EDITED_GM
 
     not_humans = client.get(
-        "/v1/admin/exports/edits.jsonl?human_edited=false&schema_version=1",
+        "/v1/admin/exports/edits.jsonl?human_edited=false&schema_version=1"
+        "&date_from=2026-10-20&date_to=2026-10-20",
         headers=headers,
     )
     assert not_humans.status_code == 200
@@ -430,7 +433,8 @@ def test_export_filters_by_date(
 ) -> None:
     headers = _bearer(settings, users, "admin")
     recent = client.get(
-        "/v1/admin/exports/edits.jsonl?date_from=2026-01-01&schema_version=1",
+        "/v1/admin/exports/edits.jsonl?date_from=2026-01-01"
+        "&date_to=2026-10-25&schema_version=1",
         headers=headers,
     )
     assert recent.status_code == 200
@@ -439,7 +443,8 @@ def test_export_filters_by_date(
     assert recent_lines[0]["messages"][2]["content"] == EDITED_CLUB
 
     old = client.get(
-        "/v1/admin/exports/edits.jsonl?date_to=2025-12-31&schema_version=1",
+        "/v1/admin/exports/edits.jsonl?date_from=2020-01-01"
+        "&date_to=2025-12-31&schema_version=1",
         headers=headers,
     )
     assert old.status_code == 200
@@ -625,7 +630,8 @@ def test_export_audit_for_auditor_jwt(
 ) -> None:
     before = asyncio.run(_max_audit_id())
     response = client.get(
-        "/v1/admin/exports/edits.jsonl?level=gm&schema_version=1",
+        "/v1/admin/exports/edits.jsonl?level=gm&schema_version=1"
+        "&date_from=2020-01-01&date_to=2025-12-31",
         headers=_bearer(settings, users, "auditor"),
     )
     assert response.status_code == 200, response.text

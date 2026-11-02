@@ -8,6 +8,58 @@
 
 ### Fixed
 
+- **LLM_TEMPERATURE: проброс подтверждён и покрыт тестом (итерация 48):**
+  `Settings.llm_temperature` (`LLM_TEMPERATURE`, по умолчанию `0.2`) уже
+  передавался из `app/llm/factory.py` в `OpenAICompatibleClient` и уходил
+  в JSON payload (`complete` и `stream_generate`) для LM Studio и
+  DeepSeek — проброс не менялся. Добавлены тесты: env →
+  `Settings.llm_temperature`, фабрика → `temperature` в payload
+  (`club`/`gm`), стрим; `LLM_TEMPERATURE=0.2` добавлен в `.env.example`.
+- **Few-shot contamination в промптах (KI-030, итерация 48):**
+  из `app/prompts/club.txt` и `club_en.txt` убраны примеры с конкретными
+  ходами и фигурами («отвести слона», «конь в центр»), которые локальная
+  3B-модель копировала в комментарий. Примеры сведены к форме изложения
+  без SAN, фигур, оценок и номеров хода. Добавлено правило: если в пакете
+  фактов нет информации о ходе — не выдумывать ходы и не упоминать
+  фигуры, писать только общие слова о позиции. В `build_fact_package`
+  появилась константа `NO_MOVE_DATA_INSTRUCTION`, которая попадает и в
+  пакет без анализа движка, и в обычный пакет. Тесты —
+  `tests/unit/test_prompts.py` (56 passed).
+- **Изоляция export-тестов от данных dev-БД (итерация 48):**
+  `tests/integration/test_admin_exports.py` и `test_export_jobs.py`
+  ограничили выборку датами сидируемых правок: в общей dev-БД лежит
+  реальная `gm`-правка от 2026-10-28, из-за которой пять тестов,
+  рассчитанных на пустую БД, видели две строки вместо одной. В CI на
+  чистой БД поведение не меняется; локально `pytest` снова зелёный.
+- **Пакет фактов не раздувает контекст (T-095, итерация 47):**
+  у `build_fact_package` появился параметр `max_tokens` (по умолчанию
+  2048): длинная партия сокращается до первых и последних 10 ходов плюс
+  ходы ключевых моментов, в пакете появляется пометка о сокращении. Это
+  снимает раздувание пакета на длинных партиях; на текущем датасете
+  `skipped_too_long` может сохраниться, пока не поднят `--max-length`
+  (бюджет считает system + пакет + ответ, см. `GPU_TRAINING_GUIDE.md`
+  §11.3.1). Добавлены тесты на 1200-ходовую партию.
+- **TensorFlow в Colab больше не уводит PyTorch на CPU (T-095, итерация 47):**
+  `scripts/train_lora.py` выставляет `USE_TF=0` и `TRANSFORMERS_NO_TF=1`
+  до импорта torch/transformers: встроенный TF падал на
+  `libcudart.so.12` и переключал обучение на CPU.
+- **bf16 на T4 (T-095, итерация 47):** новый флаг `--force-fp16`
+  принудительно ставит `fp16=True`/`bf16=False`; Tesla T4 определяется по
+  имени устройства, даже если `torch.cuda.is_bf16_supported()` возвращает
+  `True` (на таких сборках обучение зависало).
+- **Терминология «ход» в пакете фактов (T-094, итерация 46):**
+  `app/llm/prompts.py` больше не пишет «полуход»: метаданные — «Ходов: N»,
+  ключевой момент — «Ход N белых/чёрных» (номер хода, а не ply);
+  `app/rag/context.py` выводит «Ход N белых/чёрных»;
+  `scripts/build_gold_dataset.py` синхронизирован с новой формулировкой.
+  Добавлены тесты на отсутствие слова «полуход» в пакете и системном
+  промпте.
+- **QLoRA на T4/P100 без bf16 (T-094, итерация 46):**
+  `scripts/train_lora.py` выбирает `fp16`, если
+  `torch.cuda.is_bf16_supported()` == `False`, и передаёт тот же dtype в
+  `BitsAndBytesConfig` и `torch_dtype`; `TrainingArguments` получает
+  `fp16=True`/`bf16=False` вместо молчаливого fp32. Это делает T4
+  пригодным для ноутбука из §11.1.
 - **Совместимость LoRA-обучения с transformers 4.44+ (T-090, итерация 44):**
   `collate_batch` теперь возвращает `torch.Tensor` для `input_ids`,
   `attention_mask` и `labels` (иначе `embedding()` падал с
@@ -22,6 +74,30 @@
 
 ### Changed
 
+- **KI-030 закрыт: LoRA 3B и 7B отклонены, возврат к 4B (итерация 48).**
+  `chess-annotator-3b` (Qwen2.5-3B) — **2.87/10**, `qwen-7b-tokenizer`
+  (Qwen2.5-7B) — **3.33/10** против **4.40/10** у zero-shot Qwen3-4B.
+  7B лучше 3B (+0.46), но обе хуже baseline (−1.07 и −1.53); судья выявил
+  переобучение, выдуманные лучшие ходы, путаницу сторон и смешанный
+  китайский текст у 7B. Причина — шум и нехватка данных golden-датасета.
+  Возвращаемся к 4B; для T-104b нужна пересборка датасета более сильной
+  моделью (DeepSeek). Подробности — `docs/development/reports/LLM_EVAL.md`.
+- **KI-060 — языковой дрейф LoRA 7B (итерация 48).** Новый KI: в
+  комментариях `qwen-7b-tokenizer` появляется китайский текст; нужен
+  детектор CJK/кириллицы в eval/валидаторе и переобучение на очищенном
+  датасете. См. `docs/KNOWN_ISSUES.md`.
+- **Colab/T4-профиль ноутбука (T-095, итерация 47):**
+  `notebooks/kaggle_train_lora.ipynb` ставит `torchao>=0.16.0 --no-deps`,
+  блокирует TensorFlow отдельной ячейкой до импорта torch и запускает
+  обучение с `--no-4bit`, `--force-fp16`, `--max-length 2048`; модель по
+  умолчанию — `Qwen/Qwen3-4B-Instruct-2507` (7B без 4-bit не помещается в
+  T4 16 GB). В `GPU_TRAINING_GUIDE.md` §11.3 переписан под эти флаги и
+  добавлен §11.3.1 «Решение проблем (Troubleshooting)».
+- **Быстрый старт на Kaggle (T-094, итерация 46):**
+  `GPU_TRAINING_GUIDE.md` §11.1 «Как запустить обучение на Kaggle за
+  5 минут» со ссылкой на `notebooks/kaggle_train_lora.ipynb`; §11.2–§11.4
+  перенумерованы, примеры переведены на `gold_dataset.jsonl`, добавлено
+  предупреждение о 7B/2048 на T4 16 GB и fallback 4B/1024.
 - **GPU-гайд для запуска из РФ (T-091, итерация 44):**
   `GPU_TRAINING_GUIDE.md` — `hf download` вместо устаревшего
   `huggingface-cli`, `HF_ENDPOINT=https://hf-mirror.com` и Python API
@@ -32,6 +108,14 @@
 
 ### Added
 
+- **Kaggle Notebook для LoRA (T-094, итерация 46):**
+  `notebooks/kaggle_train_lora.ipynb` — установка зависимостей,
+  клонирование репозитория, автопоиск `gold_dataset.jsonl`, `--dry-run`,
+  QLoRA-обучение `Qwen/Qwen2.5-7B-Instruct` на T4 (`batch=1`,
+  `grad_accum=16`, `max_length=2048`, `--load-in-4bit`, gradient
+  checkpointing, TensorBoard), упаковка адаптера в zip и resume с
+  `--resume_from_checkpoint`. Ноутбук проверяется
+  `tests/unit/test_kaggle_notebook.py`.
 - **Lichess golden dataset builder (T-092, итерация 45):**
   `scripts/fetch_lichess_games.py` скачивает PGN Lichess с
   `evals=true` (по нику или ID), фильтрует рейтинг 1800–2200,
@@ -44,6 +128,9 @@
   `app/engine/validator.py` и пишет `data/gold_dataset.jsonl`
   (`schema_version=2`). В `MoveAnalysis` добавлен `best_move_known`;
   пакет фактов честно сообщает, что лучший ход неизвестен.
+- **Прогресс золотого датасета (T-092, итерация 46):** на 2026-11-01
+  собрано **130 записей** (`data/gold_dataset.jsonl`, `schema_version=2`);
+  файл локальный и в git не входит.
 - **Бесплатные GPU в гайде (T-093, итерация 45):**
   `GPU_TRAINING_GUIDE.md` §11 — Kaggle Notebooks (T4, 30 ч/нед, датасет,
   обучение 4B, TensorBoard, zip-адаптер) и Google Colab (Drive,

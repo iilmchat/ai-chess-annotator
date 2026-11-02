@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,7 +45,7 @@ FACT_PACKAGE_USER = (
     "# Партия\nБелые: A\nЧёрные: B\n\n"
     "# Ходы партии (SAN)\n1. e4 e5\n\n"
     "# Ключевые моменты (до 3, по убыванию потери)\n"
-    "## 1. Ход 1 белых: e4 (полуход 1)\n"
+    "## 1. Ход 1 белых: e4\n"
 )
 
 MESSAGES: list[dict[str, str]] = [
@@ -844,6 +845,102 @@ def test_prepare_model_passes_4bit_quantization_config() -> None:
     assert isinstance(quantization, _FakeBitsAndBytesConfig)
     assert quantization.kwargs["load_in_4bit"] is True
     assert quantization.kwargs["bnb_4bit_quant_type"] == "nf4"
+    assert quantization.kwargs["bnb_4bit_compute_dtype"] == "bfloat16"
+    assert captured["torch_dtype"] == "bfloat16"
+
+
+def test_prepare_model_uses_fp16_when_bf16_unsupported() -> None:
+    """T4/P100: bf16 нет — QLoRA должна идти в fp16 (итерация 46)."""
+    captured: dict[str, Any] = {}
+
+    def _from_pretrained(*args: Any, **kwargs: Any) -> _FakeBaseModel:
+        captured.update(kwargs)
+        return _FakeBaseModel()
+
+    stack = _fake_stack()
+    stack.AutoModelForCausalLM = SimpleNamespace(
+        from_pretrained=_from_pretrained
+    )
+    torch = SimpleNamespace(
+        bfloat16="bfloat16",
+        float16="float16",
+        cuda=SimpleNamespace(is_bf16_supported=lambda: False),
+    )
+
+    train_lora._prepare_model(
+        build_parser().parse_args([]), stack, torch, object()
+    )
+
+    quantization = captured["quantization_config"]
+    assert isinstance(quantization, _FakeBitsAndBytesConfig)
+    assert quantization.kwargs["bnb_4bit_compute_dtype"] == "float16"
+    assert captured["torch_dtype"] == "float16"
+
+
+def test_tensorflow_is_blocked_before_training_imports() -> None:
+    """Итерация 47: TF не должен перехватывать CUDA в Colab."""
+    assert os.environ["USE_TF"] == "0"
+    assert os.environ["TRANSFORMERS_NO_TF"] == "1"
+
+
+def test_force_fp16_cli_flag() -> None:
+    assert build_parser().parse_args([]).force_fp16 is False
+    assert build_parser().parse_args(["--force-fp16"]).force_fp16 is True
+
+
+def test_prepare_model_uses_fp16_when_force_fp16_flag() -> None:
+    captured: dict[str, Any] = {}
+
+    def _from_pretrained(*args: Any, **kwargs: Any) -> _FakeBaseModel:
+        captured.update(kwargs)
+        return _FakeBaseModel()
+
+    stack = _fake_stack()
+    stack.AutoModelForCausalLM = SimpleNamespace(
+        from_pretrained=_from_pretrained
+    )
+    torch = SimpleNamespace(
+        bfloat16="bfloat16",
+        float16="float16",
+        cuda=SimpleNamespace(is_bf16_supported=lambda: True),
+    )
+
+    train_lora._prepare_model(
+        build_parser().parse_args(["--force-fp16"]), stack, torch, object()
+    )
+
+    quantization = captured["quantization_config"]
+    assert isinstance(quantization, _FakeBitsAndBytesConfig)
+    assert quantization.kwargs["bnb_4bit_compute_dtype"] == "float16"
+    assert captured["torch_dtype"] == "float16"
+
+
+def test_prepare_model_uses_fp16_on_t4_even_if_bf16_reported() -> None:
+    """Colab иногда сообщает bf16=True на T4 — верим имени устройства."""
+    captured: dict[str, Any] = {}
+
+    def _from_pretrained(*args: Any, **kwargs: Any) -> _FakeBaseModel:
+        captured.update(kwargs)
+        return _FakeBaseModel()
+
+    stack = _fake_stack()
+    stack.AutoModelForCausalLM = SimpleNamespace(
+        from_pretrained=_from_pretrained
+    )
+    torch = SimpleNamespace(
+        bfloat16="bfloat16",
+        float16="float16",
+        cuda=SimpleNamespace(
+            is_bf16_supported=lambda: True,
+            get_device_name=lambda index: "Tesla T4",
+        ),
+    )
+
+    train_lora._prepare_model(
+        build_parser().parse_args([]), stack, torch, object()
+    )
+
+    assert captured["torch_dtype"] == "float16"
 
 
 def test_oom_detection() -> None:
@@ -930,7 +1027,12 @@ class _FakeDataset:
         return cls(records)
 
 
-def _fake_training_stack(captured: dict[str, Any]) -> Any:
+def _fake_training_stack(
+    captured: dict[str, Any],
+    *,
+    bf16: bool = True,
+    device_name: str = "Fake GPU",
+) -> Any:
     """Стек transformers/peft, записывающий аргументы Trainer."""
 
     class _TrainingArguments:
@@ -956,11 +1058,11 @@ def _fake_training_stack(captured: dict[str, Any]) -> Any:
 
         @staticmethod
         def get_device_name(index: int) -> str:
-            return "Fake GPU"
+            return device_name
 
         @staticmethod
         def is_bf16_supported() -> bool:
-            return True
+            return bf16
 
     return SimpleNamespace(
         torch=SimpleNamespace(
@@ -1009,11 +1111,112 @@ def test_train_passes_resume_checkpoint_and_report_to(
         "resume_from_checkpoint": str(checkpoint)
     }
     assert captured["training_args"]["report_to"] == []
+    assert captured["training_args"]["bf16"] is True
+    assert captured["training_args"]["fp16"] is False
     assert "logging_dir" not in captured["training_args"]
     assert "warmup_ratio" not in captured["training_args"]
     assert model.saved_to == output
     assert captured["trainer"]["train_dataset"] is not None
     assert len(captured["trainer"]["train_dataset"].records) == 1
+
+
+def test_train_uses_fp16_when_bf16_unsupported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T4: TrainingArguments получает fp16 вместо bf16 (итерация 46)."""
+    args = build_parser().parse_args(
+        [
+            "--dataset",
+            "dataset.jsonl",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--report_to",
+            "none",
+        ]
+    )
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        train_lora,
+        "_import_training_stack",
+        lambda: _fake_training_stack(captured, bf16=False),
+    )
+    monkeypatch.setattr(
+        train_lora,
+        "_prepare_model",
+        lambda *args, **kwargs: _FakeTrainModel(),
+    )
+
+    train(args, [_record()])
+
+    assert captured["training_args"]["bf16"] is False
+    assert captured["training_args"]["fp16"] is True
+
+
+def test_train_force_fp16_disables_bf16(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--force-fp16: bf16=False и fp16=True даже при поддержке bf16."""
+    args = build_parser().parse_args(
+        [
+            "--dataset",
+            "dataset.jsonl",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--report_to",
+            "none",
+            "--force-fp16",
+        ]
+    )
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        train_lora,
+        "_import_training_stack",
+        lambda: _fake_training_stack(captured, bf16=True),
+    )
+    monkeypatch.setattr(
+        train_lora,
+        "_prepare_model",
+        lambda *args, **kwargs: _FakeTrainModel(),
+    )
+
+    train(args, [_record()])
+
+    assert captured["training_args"]["bf16"] is False
+    assert captured["training_args"]["fp16"] is True
+
+
+def test_train_detects_t4_and_uses_fp16(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T4 определяется по имени устройства, даже если bf16 «поддерживается»."""
+    args = build_parser().parse_args(
+        [
+            "--dataset",
+            "dataset.jsonl",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--report_to",
+            "none",
+        ]
+    )
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        train_lora,
+        "_import_training_stack",
+        lambda: _fake_training_stack(
+            captured, bf16=True, device_name="Tesla T4"
+        ),
+    )
+    monkeypatch.setattr(
+        train_lora,
+        "_prepare_model",
+        lambda *args, **kwargs: _FakeTrainModel(),
+    )
+
+    train(args, [_record()])
+
+    assert captured["training_args"]["bf16"] is False
+    assert captured["training_args"]["fp16"] is True
 
 
 def _too_long_record() -> dict[str, Any]:

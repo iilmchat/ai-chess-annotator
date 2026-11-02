@@ -146,7 +146,8 @@ observability-стек Grafana/Tempo/Prometheus.
   второй запрос — миллисекунды.
 - **LLM-evals**: `llm_evaluations` и `scripts/evaluate_llm.py`
   (LLM-as-judge); LoRA-пайплайн `scripts/export_dataset.py` +
-  `train_lora.py` (обучение не выполнялось — нет GPU, KI-030).
+  `train_lora.py` (3B/7B-адаптеры обучены и оценены в итерации 48:
+  2.87 и 3.33/10, отклонены; KI-030 Closed, KI-060 — языковой дрейф 7B).
 - **GPU-перенос (T-080)**: `.gitignore` закрывает веса (`models/`,
   `*.safetensors`), `scripts/generate_lora_dataset_from_db.py` собирает
   датасет v2 из БД (по умолчанию 500 партий), пошаговая инструкция —
@@ -388,7 +389,7 @@ docker compose -f docker-compose.observability.yml up -d
 
 | Показатель | Значение |
 |---|---|
-| Версия | **v1.2.0** (качество LLM по-прежнему ниже 7/10 — KI-030 Open; LoRA-обучение вынесено на GPU-машину — [GPU_TRAINING_GUIDE.md](docs/development/GPU_TRAINING_GUIDE.md)) |
+| Версия | **v1.2.0** (KI-030 **Closed** в итерации 48: LoRA 3B/7B — 2.87/3.33 против zero-shot 4B 4.40/10, возврат к 4B; пересборка golden dataset — T-104b; KI-060 — языковой дрейф 7B) |
 | Итерация | **40 — Stripe Checkout + webhook (T-083), billing UI (T-084), FinOps из `users.tier` (T-085)**; итерации 1–39 закрыты |
 | Backend-тесты | **1029 passed, 3 skipped, 1 xfailed** (85 файлов, прогон итерации 40, 132.22 с; skip — 2 cairo-кейса на Windows-dev и `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
 | Frontend-тесты | **132 passed** (13 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, billing-API, auth-flow, PDF-API, eval, PGN-экспорт, варианты, загрузка PGN, стрелки; Vitest) |
@@ -405,7 +406,7 @@ docker compose -f docker-compose.observability.yml up -d
 | Security | Guardrails чата: NFKC, control/zero-width/bidi, лимит 2000, 7 RU/EN-эвристик, `422 prompt_injection` + аудит; в sysprompt — запрет раскрывать инструкции |
 | Audit | Append-only `audit_logs` с hash-chain, advisory-lock, триггером `UPDATE/DELETE/TRUNCATE`; аудит промптов (атомарно с правкой), правок комментариев, инъекций и **выгрузки датасета (`dataset.export`: актор, фильтры, число строк, completed)**; read-only view + страница проверки целостности |
 | Semantic cache | `semantic_cache` (vector 768, HNSW): exact `fen_hash+level+prompt_hash`, semantic cosine < 0.05, TTL 30 дней; `/commentary`, `/chat` и SSE; второй запрос — 0.030 с |
-| LoRA | `scripts/export_dataset.py` — **schema_version=2** по умолчанию: `user` = пакет фактов (`build_fact_package`), `assistant` = `edited_text`, `metadata`/`fact_sheet_chars`; v1 — legacy-флаг. `scripts/train_lora.py` — реальный SFT (peft/transformers, QLoRA 4-bit, r=16/alpha=32/q_proj,v_proj, маскирование на assistant, `--dry-run`/`--check-env`, поддержка schema {1,2}); `LORA_ADAPTER_PATH` → adapter basename для vLLM; инструкция — [LORA_TRAINING.md](docs/development/reports/LORA_TRAINING.md); обучение на GPU не выполнялось (нет CUDA, KI-030 Open) |
+| LoRA | `scripts/export_dataset.py` — **schema_version=2** по умолчанию: `user` = пакет фактов (`build_fact_package`), `assistant` = `edited_text`, `metadata`/`fact_sheet_chars`; v1 — legacy-флаг. `scripts/train_lora.py` — реальный SFT (peft/transformers, QLoRA 4-bit, r=16/alpha=32/q_proj,v_proj, маскирование на assistant, `--dry-run`/`--check-env`, поддержка schema {1,2}); `LORA_ADAPTER_PATH` → adapter basename для vLLM; инструкция — [LORA_TRAINING.md](docs/development/reports/LORA_TRAINING.md); 3B/7B-адаптеры обучены и оценены в итерации 48 (2.87/3.33), отклонены, KI-030 **Closed**, KI-060 — языковой дрейф 7B |
 | E2E | Playwright 1.64.1: **34 сценария** (`auth`, `auth-flow`, `analyze`, `billing`, `board-arrows`, `board-variant`, `chat-context`, `commentary`, `history`, `limits`, `pgn-export`, `pgn-upload`, `profile`, `pwa`) × chromium/mobile; mocked-режим **68 passed**, real-backend 5 passed (chromium, итерация 32); CI job `e2e` + trace/screenshot при падении; локально на Windows/DSH — `E2E_PREVIEW=1` (esbuild-кэш заблокирован); ограничение — KI-040 |
 | Commentary | `POST /v1/commentary`: пакет фактов → LLM → валидатор (до 2 retry) → `commentaries`; `language`/`Accept-Language` (`ru`/`en`, T-106, английские промпты `*_en.txt`); `PATCH` пишет правку в `edits`; **PDF-экспорт** (`GET .../export/pdf?language=ru\|en`, fpdf2 + TTF-шрифт, английские подписи с итерации 35, диаграммы доски: финальная позиция + критические моменты, кнопка «Скачать PDF» в UI) |
 | Chat | `POST /v1/chat`: вопрос → контекст анализа → LLM → валидатор → `{reply, tokens_used}`; `language` (`ru`/`en`, `app/prompts/chat_en.txt`, итерация 35), SSE-вариант |
@@ -418,10 +419,10 @@ docker compose -f docker-compose.observability.yml up -d
 | RAG | `POST /v1/ingest` (PGN, до 5 МБ, `X-Admin-Token`) → `annotated_games` (LM Studio 768; **624** записи: 102 `my-collection` + 522 `new_samples`, итерация 25); `find_similar_positions` по FEN; контекст для `gm`; eval — `evaluate_llm.py --source new_samples` |
 | Motifs | Проходные пешки, слабые поля, открытые линии/диагонали, безопасность короля, вилки/связки, мат — в таблице `motifs` (до 6 на позицию) |
 | Policy | `choose_recommended_move`: gm — топ-1, club — альтернатива при разнице < 20 cp, beginner — фильтр раннего ферзя и зевков |
-| LLM-eval | 5 партий × club/gm, 3 шкалы; база **5.19/10** (9 из 10); после итерации 16 `club` — **4.40/10** (было 3.83), отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md); ниже 7/10 — KI-030 |
+| LLM-eval | 5 партий × club/gm, 3 шкалы; база **5.19/10** (9 из 10); baseline `club` после итерации 16 — **4.40/10** (V3, Qwen3-4B); LoRA в итерации 48 — 3B **2.87/10**, 7B **3.33/10** (2.80/3.40/3.80), отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md); KI-030 **Closed**, 3B/7B отклонены, пересборка golden dataset — T-104b, KI-060 |
 | Streaming | SSE `/v1/commentary/stream` и `/v1/chat/stream`: `meta`/`delta`/`done`/`error`, финальная SAN-валидация; UI печатает постепенно |
 | Observability | **LLMOps (T-030):** durable `llm_calls` (provider/model/level, tokens/cost/latency/cache_hit/status, prompt_slug/version, actor/game/commentary) — запись best-effort после `complete`/`stream_generate` + warmup, `cache_hit=true` для semantic cache; W3C `traceparent` → `trace_id` в `request.state`, contextvars, structlog, заголовок **`X-Trace-Id`** и OTel-спанах (`http_request` + вложенные `llm_*`); спаны `validator.validate` и `rag.retrieve`; OTel-экспорт `console`/`otlp`, admin-view `llm_calls`; **LLMOps-дашборд `/admin/llmops`** (T-109): p50/p95/p99, error rate, токены/стоимость, cache-hit rate, топ-5; **Grafana/Tempo/Prometheus-стек** (T-109b): `docker-compose.observability.yml`, spanmetrics по `http.route`, дашборд p95/p99 + 5xx + tokens/cost, провижининг datasource'ов; **alert rules (T-113)** — HighErrorRate/HighLatency/LLMBudgetExceeded; **retention** — `scripts/prune_llm_calls.py` (KI-048) и `scripts/prune_export_jobs.py` (KI-054); ограничения — KI-052, KI-057 |
-| KI-реестр | **58** записей: 25 Open, 33 Closed (KI-058 закрыт в итерации 35: локализация PDF/чата/ошибок API; KI-030 остаётся Open) |
+| KI-реестр | **60** записей: 26 Open, 34 Closed (KI-058 закрыт в итерации 35: локализация PDF/чата/ошибок API; KI-030 **Closed** в итерации 48: LoRA 3B/7B отклонены; KI-060 — языковой дрейф 7B) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, Playwright E2E, docker build + smoke `import app.main` (KI-051); **`publish-docker` по тегу `v*` → GHCR (`:vX.Y.Z`, `:X.Y.Z`, `:latest`)**; pip + pnpm store cache |
 | Docker | multi-stage образ (Node → Python + SPA), `docker-compose.prod.yml` (app + worker + postgres + redis, общий volume экспортов), loopback-порты БД/Redis; **сервис `worker`** (`arq worker.WorkerSettings`) в dev/prod compose; публикация в GHCR готово к тегу `v1.0.0` (T-027) |
 | Слепой тест | `scripts/generate_blind_test.py` — 3 партии × 3 уровня, слоты A/B/C (seed), `answer_form.md` + `answers_key.json` (итерация 35); сам тест с 10 шахматистами не проведён (T-024, вручную) |
