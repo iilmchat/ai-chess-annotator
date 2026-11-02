@@ -8,6 +8,17 @@
 
 ### Added
 
+- **CJK-метрика в LLM-eval (KI-060, итерация 50):**
+  `scripts/evaluate_llm.py` считает долю иероглифов U+4E00–U+9FFF среди
+  непустых символов и число комментариев с CJK. Метрика печатается в
+  консоль, попадает в `LLM_EVAL.md` (итог, колонки по уровням и партиям)
+  и в `llm_eval_results.json` (`cjk_chars`, `cjk_share`). Имя модели не
+  влияет на код: `qwen-7b-tokenizer` оценивается через
+  `VLLM_MODEL`/`LORA_ADAPTER_PATH`. В `GPU_TRAINING_GUIDE.md` Kaggle-
+  раздел переведён на `gold_dataset_v2.jsonl` и
+  `--lr 1e-4 --epochs 1`; Kaggle-ноутбук обновлён (v2-датасет,
+  `LR=1e-4`, `EPOCHS=1`).
+
 - **CJK-детектор и защита от языкового дрейфа (KI-060, итерация 49):**
   в `app/commentary/semantic.py` появились `has_cjk`, `count_cjk`,
   `cjk_share`, `strip_cjk_sentences`, `sanitize_cjk` и `cjk_warning`

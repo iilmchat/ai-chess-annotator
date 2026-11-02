@@ -1042,6 +1042,11 @@ A5000/4090 (§10). Оба сервиса дают временную машин�
 может исчезнуть после сессии, поэтому чекпоинты и готовый адаптер
 сохраняйте на Drive/Kaggle Dataset или скачивайте сразу.
 
+**v0.2.0 (DeepSeek Teacher).** Для переобучения 7B используйте
+`data/gold_dataset_v2.jsonl` (его пишет `build_gold_dataset_v2.py`, §6.1)
+и параметры `--lr 1e-4 --epochs 1`. Датасет v1 `gold_dataset.jsonl`
+оставлен только для воспроизведения старых прогонов 3B/4B.
+
 ### 11.1. Как запустить обучение на Kaggle за 5 минут
 
 Готовый ноутбук — [`notebooks/kaggle_train_lora.ipynb`](../../notebooks/kaggle_train_lora.ipynb)
@@ -1055,17 +1060,19 @@ A5000/4090 (§10). Оба сервиса дают временную машин�
    (или скачайте файл и загрузите его в Kaggle).
 2. **Включите GPU:** Settings → Accelerator → **GPU T4 ×2**; Settings →
    Internet → **On**.
-3. **Загрузите датасет:** Datasets → New Dataset → `gold_dataset.jsonl`
-   (130 записей на 2026-11-01) → имя датасета `chess-gold`.
+3. **Загрузите датасет v2:** Datasets → New Dataset →
+   `data/gold_dataset_v2.jsonl` (результат `build_gold_dataset_v2.py`) →
+   имя датасета `chess-gold-v2`.
 4. **Run All.** Ноутбук сам выполнит установку, dry-run, обучение и
    упаковку; готовый архив появится в **Output**.
 
-Ноутбук по умолчанию повторяет параметры итерации 47:
-`Qwen/Qwen3-4B-Instruct-2507`, `batch_size=1`, `grad_accum=16`,
-`max_length=2048`, `--no-4bit`, `--force-fp16`. Режим без 4-bit требует
-модели до 4B на T4 16 GB; 7B (`Qwen/Qwen2.5-7B-Instruct`) запускается
-только с `--load-in-4bit`, а `MAX_LENGTH` — `1024` (консервативный ручной
-сценарий ниже).
+Ноутбук по умолчанию повторяет безопасные параметры T4 для 4B
+(`Qwen/Qwen3-4B-Instruct-2507`, `batch_size=1`, `grad_accum=16`,
+`max_length=2048`, `--no-4bit`, `--force-fp16`). Для **v0.2.0 7B** на
+Kaggle используйте ручной сценарий §11.2: `Qwen/Qwen2.5-7B-Instruct`,
+`--load-in-4bit`, `--max-length 1024`, `--lr 1e-4`, `--epochs 1`.
+Ноутбук можно использовать и для v2-датасета с 4B: задайте
+`DATASET_PATH` на `gold_dataset_v2.jsonl` и `EPOCHS = 1`, `LR = 1e-4`.
 
 ### 11.2. Kaggle Notebooks (ручной сценарий)
 
@@ -1090,41 +1097,50 @@ bitsandbytes-сборка капризнее.
    !pip install -q -U peft transformers datasets accelerate bitsandbytes tensorboard
    ```
 
-4. Загрузите `data/gold_dataset.jsonl` как **Kaggle Dataset** (например,
-   `chess-gold`). В ноутбуке он будет в
-   `/kaggle/input/chess-gold/gold_dataset.jsonl`. Старое имя
-   `lora_gold_v1.jsonl` тоже поддерживается — замените имя файла в
-   командах ниже.
-5. Запустите обучение (4B, T4, QLoRA; effective batch 16):
+4. Загрузите `data/gold_dataset_v2.jsonl` как **Kaggle Dataset** (например,
+   `chess-gold-v2`). В ноутбуке он будет в
+   `/kaggle/input/chess-gold-v2/gold_dataset_v2.jsonl`. Если датасет
+   назван иначе, замените путь в командах ниже; v1 `gold_dataset.jsonl`
+   оставлен только для старых прогонов 4B.
+5. Запустите обучение v0.2.0 (7B, T4, QLoRA, 1 эпоха, LR 1e-4;
+   effective batch 16):
 
    ```python
    !python scripts/train_lora.py \
-       --dataset /kaggle/input/chess-gold/gold_dataset.jsonl \
-       --model Qwen/Qwen3-4B-Instruct-2507 \
-       --output-dir /kaggle/working/models/lora-club-v1 \
-       --epochs 3 \
+       --dataset /kaggle/input/chess-gold-v2/gold_dataset_v2.jsonl \
+       --model Qwen/Qwen2.5-7B-Instruct \
+       --output-dir /kaggle/working/models/lora-club-v2 \
+       --epochs 1 \
+       --lr 1e-4 \
        --batch-size 1 \
        --grad-accum 16 \
        --max-length 1024 \
        --load-in-4bit \
        --gradient-checkpointing \
+       --force-fp16 \
        --report_to tensorboard \
        --seed 42
    ```
 
+   `--max-length 1024` — страховка для 7B на T4 16 GB; если хватает
+   памяти, можно вернуть 2048. `--lr 1e-4 --epochs 1` — обязательные
+   параметры v0.2.0: 3 эпохи и `2e-4` на v2-датасете не используются.
+   Для 4B замените `--model` на `Qwen/Qwen3-4B-Instruct-2507`,
+   `--output-dir` на `lora-club-v1` и оставьте `--load-in-4bit` (или
+   используйте ноутбук §11.1).
 6. TensorBoard в Kaggle: запустите `%tensorboard --logdir
-   /kaggle/working/models/lora-club-v1/runs` (если расширение доступно)
+   /kaggle/working/models/lora-club-v2/runs` (если расширение доступно)
    либо скачайте `runs/` и откройте локально.
 7. Упакуйте и скачайте адаптер из вкладки **Output**:
 
    ```python
-   !cd /kaggle/working && zip -r lora-club-v1.zip models/lora-club-v1
+   !cd /kaggle/working && zip -r lora-club-v2.zip models/lora-club-v2
    ```
 
 8. Продолжение после обрыва: Kaggle-сессия ограничена (~12 ч). Если
    `checkpoint-*` успели сохраниться в `/kaggle/working`, перезапустите
    ячейку с `--resume_from_checkpoint
-   /kaggle/working/models/lora-club-v1/checkpoint-N`. Если сессия
+   /kaggle/working/models/lora-club-v2/checkpoint-N`. Если сессия
    уничтожила каталог — загрузите прошлый zip как Dataset, распакуйте в
    `/kaggle/working` и только потом продолжайте.
 

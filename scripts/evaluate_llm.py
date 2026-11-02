@@ -5,8 +5,13 @@
 2. Разбираем каждую через `/v1/analyze` (Stockfish) — как пользователь.
 3. Генерируем комментарий для `club` и `gm` через `/v1/commentary`.
 4. Отдаём комментарий судье (DeepSeek) с рубрикой из трёх шкал.
-5. Пишем отчёт в `docs/development/reports/LLM_EVAL.md` и JSON с сырыми
+5. Считаем долю CJK-символов (KI-060) и долю объяснений.
+6. Пишем отчёт в `docs/development/reports/LLM_EVAL.md` и JSON с сырыми
    оценками.
+
+Модель генерации задаётся настройками (`VLLM_MODEL` или
+`LORA_ADAPTER_PATH`), а не кодом скрипта: `qwen-7b-tokenizer` (v2)
+оценивается теми же командами, что и прежние адаптеры.
 
 Запуск:
 
@@ -38,12 +43,13 @@ from sqlalchemy import func, select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 
+from app.commentary.semantic import cjk_share, count_cjk  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
 from app.db.models import AnnotatedGame, Level, LlmEvaluation  # noqa: E402
 from app.llm import get_llm_client  # noqa: E402
 from app.main import create_app  # noqa: E402
 
-__all__ = ["main"]
+__all__ = ["CjkSummary", "cjk_stats", "main"]
 
 DEFAULT_OUTPUT = PROJECT_ROOT / "docs" / "development" / "reports" / "LLM_EVAL.md"
 DEFAULT_JSON = PROJECT_ROOT / "docs" / "development" / "reports" / "llm_eval_results.json"
@@ -153,6 +159,23 @@ class CommentaryRow:
     judge_comment: str = ""
     judge_tokens: int = 0
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CjkSummary:
+    """Сводка CJK-дрейфа по комментариям (KI-060, итерация 50).
+
+    Attributes:
+        cjk_chars: суммарное число иероглифов U+4E00–U+9FFF.
+        comments_with_cjk: сколько комментариев содержат хотя бы один.
+        evaluated: сколько комментариев с непустым текстом (знаменатель).
+        share: доля иероглифов среди всех непустых символов.
+    """
+
+    cjk_chars: int
+    comments_with_cjk: int
+    evaluated: int
+    share: float
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -451,6 +474,52 @@ def _explanation_cell(rows: list[CommentaryRow]) -> str:
     return f"{100.0 * explained / evaluated:.0f}% ({explained}/{evaluated})"
 
 
+def cjk_stats(text: str) -> tuple[int, float]:
+    """Число CJK-иероглифов и их доля среди непустых символов текста.
+
+    Args:
+        text: комментарий LLM.
+
+    Returns:
+        ``(число_иероглифов, доля 0..1)``; для пустого текста — ``(0, 0.0)``.
+    """
+    if not text:
+        return 0, 0.0
+    return count_cjk(text), cjk_share(text)
+
+
+def _cjk_summary(rows: list[CommentaryRow]) -> CjkSummary:
+    """Сводная CJK-метрика (KI-060) по комментариям с непустым текстом.
+
+    Доля считается как сумма иероглифов / сумма **непустых** символов,
+    поэтому длинные комментарии не «разбавляют» короткие с дрейфом.
+    """
+    evaluated = [row for row in rows if row.text.strip()]
+    cjk_chars = sum(count_cjk(row.text) for row in evaluated)
+    total_chars = sum(
+        1 for row in evaluated for char in row.text if not char.isspace()
+    )
+    with_cjk = sum(1 for row in evaluated if count_cjk(row.text) > 0)
+    share = cjk_chars / total_chars if total_chars else 0.0
+    return CjkSummary(
+        cjk_chars=cjk_chars,
+        comments_with_cjk=with_cjk,
+        evaluated=len(evaluated),
+        share=share,
+    )
+
+
+def _cjk_cell(rows: list[CommentaryRow]) -> str:
+    """Ячейка таблицы «CJK»: доля символов и число комментариев с дрейфом."""
+    summary = _cjk_summary(rows)
+    if not summary.evaluated:
+        return "—"
+    return (
+        f"{100.0 * summary.share:.2f}% "
+        f"({summary.comments_with_cjk}/{summary.evaluated})"
+    )
+
+
 def _report(
     rows: list[CommentaryRow],
     games: list[GameRow],
@@ -462,6 +531,7 @@ def _report(
     errors = [row for row in rows if row.error]
     explained, evaluated = _explanation_counts(rows)
     explanation_share = 100.0 * explained / evaluated if evaluated else 0.0
+    cjk = _cjk_summary(rows)
     lines = [
         "# LLM-as-judge: оценка комментариев (T-023)",
         "",
@@ -486,6 +556,11 @@ def _report(
         "- Доля объяснений считается по маркерам «потому что» / «так как» / "
         "«поэтому» / «because» / «since» и их аналогам без учёта регистра; "
         "в знаменателе — комментарии с непустым текстом.",
+        "- Доля CJK-символов = иероглифы U+4E00–U+9FFF / все непустые символы "
+        "комментария (KI-060). Метрика не блокирует ответ; блокировка и "
+        "вырезание живут в `app/commentary/service.py`. Модель задаётся "
+        "`VLLM_MODEL`/`LORA_ADAPTER_PATH`, поэтому `qwen-7b-tokenizer` "
+        "оценивается тем же скриптом без правок.",
         "",
         "## Итоговые оценки",
         "",
@@ -506,42 +581,52 @@ def _report(
         f"**Доля объяснений (потому что/так как/because): "
         f"{explanation_share:.0f}% ({explained}/{evaluated})**",
         "",
+        f"**Доля CJK-символов (KI-060): {100.0 * cjk.share:.2f}%; "
+        f"комментариев с иероглифами: "
+        f"{cjk.comments_with_cjk}/{cjk.evaluated}**",
+        "",
         "## По уровням",
         "",
-        "| Уровень | Факт. точность | Полезность | Стиль | Объяснения |",
-        "| :--- | ---: | ---: | ---: | ---: |",
+        "| Уровень | Факт. точность | Полезность | Стиль | Объяснения | CJK |",
+        "| :--- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for level in levels:
+        level_rows = [row for row in rows if row.level == level]
         averages = _averages_by_level(rows, level)
-        explanations = _explanation_cell(
-            [row for row in rows if row.level == level]
-        )
+        explanations = _explanation_cell(level_rows)
+        cjk_cell = _cjk_cell(level_rows)
         lines.append(
             f"| `{level}` | {averages.get('factual_accuracy', 0):.2f} | "
             f"{averages.get('usefulness', 0):.2f} | {averages.get('style', 0):.2f} | "
-            f"{explanations} |"
+            f"{explanations} | {cjk_cell} |"
         )
 
     lines += [
         "",
         "## Комментарии по партиям",
         "",
-        "| Партия | Уровень | Факт | Польза | Стиль | Токены | Попытки | Комментарий судьи |",
-        "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | :--- |",
+        "| Партия | Уровень | Факт | Польза | Стиль | Токены | Попытки | CJK | Комментарий судьи |",
+        "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |",
     ]
     for row in rows:
         if row.error:
             lines.append(
-                f"| {row.game.white} — {row.game.black} | `{row.level}` | — | — | — | — | — | "
+                f"| {row.game.white} — {row.game.black} | `{row.level}` | — | — | — | — | — | — | "
                 f"ошибка: {_escape(row.error)} |"
             )
             continue
+        cjk_chars, row_cjk_share = cjk_stats(row.text)
+        cjk_cell = (
+            f"{cjk_chars} ({100.0 * row_cjk_share:.1f}%)"
+            if cjk_chars
+            else "0"
+        )
         lines.append(
             f"| {row.game.white} — {row.game.black} | `{row.level}` | "
             f"{row.scores.get('factual_accuracy', 0):.0f} | "
             f"{row.scores.get('usefulness', 0):.0f} | "
             f"{row.scores.get('style', 0):.0f} | {row.tokens_used} | "
-            f"{row.attempts or '—'} | "
+            f"{row.attempts or '—'} | {cjk_cell} | "
             f"{_escape(row.judge_comment)} |"
         )
 
@@ -563,6 +648,19 @@ def _report(
             "Сравнение с baseline и решение по модели — в "
             "`docs/development/reports/LLM_EVAL.md` и `docs/KNOWN_ISSUES.md`."
         )
+    if cjk.comments_with_cjk:
+        lines.append(
+            f"\n**CJK-дрейф (KI-060):** {cjk.comments_with_cjk} из "
+            f"{cjk.evaluated} комментариев содержат иероглифы "
+            f"({100.0 * cjk.share:.2f}% символов). Ответы с дрейфом нужно "
+            "переобучить/перепроверить до продакшена."
+        )
+    else:
+        lines.append(
+            "\n**CJK-дрейф (KI-060):** иероглифов не обнаружено "
+            f"({100.0 * cjk.share:.2f}% символов, "
+            f"0/{cjk.evaluated} комментариев)."
+        )
     if errors:
         lines.append(
             f"\nНе оценено из-за ошибок: **{len(errors)}** из {len(rows)}. "
@@ -576,7 +674,9 @@ def _report(
         "ловит тонкие фактические ошибки, чем человек.",
         "- Выборка — 5 коротких партий, не 30–50; слепой тест уровней (T-024) "
         "остаётся открытым.",
-        "- Валидатор проверяет легальность SAN, а не атрибуцию оценок (KI-023).",
+        "- Валидатор проверяет легальность SAN, а не атрибуцию оценок (KI-023). "
+        "CJK-метрика измеряет языковой дрейф, но не исправляет его: блокировка "
+        "и вырезание выполняются в сервисе (итерация 49).",
         "- Результаты зависят от версии модели и промпта судьи.",
         "",
         "_Сырые результаты: `docs/development/reports/llm_eval_results.json`_",
@@ -590,26 +690,30 @@ def _escape(text: str) -> str:
 
 
 def _dump_json(rows: list[CommentaryRow], path: Path) -> None:
-    payload = [
-        {
-            "game_id": row.game.game_id,
-            "white": row.game.white,
-            "black": row.game.black,
-            "event": row.game.event,
-            "level": row.level,
-            "commentary_id": row.commentary_id,
-            "model": row.model,
-            "tokens_used": row.tokens_used,
-            "attempts": row.attempts,
-            "validated": row.validated,
-            "has_explanation": row.has_explanation,
-            "scores": row.scores,
-            "judge_comment": row.judge_comment,
-            "judge_tokens": row.judge_tokens,
-            "error": row.error,
-        }
-        for row in rows
-    ]
+    payload: list[dict[str, Any]] = []
+    for row in rows:
+        cjk_chars, cjk_share_value = cjk_stats(row.text)
+        payload.append(
+            {
+                "game_id": row.game.game_id,
+                "white": row.game.white,
+                "black": row.game.black,
+                "event": row.game.event,
+                "level": row.level,
+                "commentary_id": row.commentary_id,
+                "model": row.model,
+                "tokens_used": row.tokens_used,
+                "attempts": row.attempts,
+                "validated": row.validated,
+                "has_explanation": row.has_explanation,
+                "cjk_chars": cjk_chars,
+                "cjk_share": round(cjk_share_value, 6),
+                "scores": row.scores,
+                "judge_comment": row.judge_comment,
+                "judge_tokens": row.judge_tokens,
+                "error": row.error,
+            }
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
@@ -698,6 +802,12 @@ def main(argv: list[str] | None = None) -> int:
     explained, evaluated = _explanation_counts(rows)
     share = 100.0 * explained / evaluated if evaluated else 0.0
     print(f"Объяснения: {share:.0f}% ({explained}/{evaluated})")
+    cjk = _cjk_summary(rows)
+    print(
+        f"CJK: {100.0 * cjk.share:.2f}% символов, "
+        f"комментариев с иероглифами: "
+        f"{cjk.comments_with_cjk}/{cjk.evaluated}"
+    )
     print(f"Отчёт: {args.output}")
     print(f"JSON: {args.json_output}")
     return 0
