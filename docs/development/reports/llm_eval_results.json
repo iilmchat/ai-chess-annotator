@@ -5,19 +5,21 @@
     "black": "Suetin, Alexei",
     "event": "Moscow zt",
     "level": "club",
-    "commentary_id": 302,
-    "model": "qwen-7b-tokenizer",
-    "tokens_used": 2615,
-    "attempts": 1,
+    "commentary_id": 683,
+    "model": "qwen-7b-tokenizer_gguf-v2",
+    "tokens_used": 2657,
+    "attempts": 2,
     "validated": true,
     "has_explanation": false,
+    "cjk_chars": 0,
+    "cjk_share": 0.0,
     "scores": {
-      "factual_accuracy": 3.0,
-      "usefulness": 3.0,
-      "style": 4.0
+      "factual_accuracy": 2.0,
+      "usefulness": 2.0,
+      "style": 3.0
     },
-    "judge_comment": "Комментарий путает стороны и знаки оценок (например, 21...Bb5 назван потерей для белых, 8.a3 — потерей -0.01 cp, 4...e6 — позитивом для белых), выдумывает рекомендацию a4 и мотивы, а объяснения идей и планов поверхностны.",
-    "judge_tokens": 1388,
+    "judge_comment": "Комментарий содержит грубые фактические ошибки: неверно назван дебют (B47 — сицилианская защита, а не ферзевый гамбит), перепутаны лучшие ходы и стороны (для 8.a3 лучший Be3, а не Ba4; для 21...Bb5 лучший Ba4, а не наоборот), выдуман результат партии и неверно указаны потери в сантипешках.",
+    "judge_tokens": 1429,
     "error": null
   },
   {
@@ -26,19 +28,21 @@
     "black": "Kholmov, Ratmir",
     "event": "Moscow zt",
     "level": "club",
-    "commentary_id": 304,
-    "model": "qwen-7b-tokenizer",
-    "tokens_used": 2782,
+    "commentary_id": 684,
+    "model": "qwen-7b-tokenizer_gguf-v2",
+    "tokens_used": 2780,
     "attempts": 1,
     "validated": true,
     "has_explanation": false,
+    "cjk_chars": 0,
+    "cjk_share": 0.0,
     "scores": {
-      "factual_accuracy": 3.0,
-      "usefulness": 3.0,
-      "style": 4.0
+      "factual_accuracy": 2.0,
+      "usefulness": 2.0,
+      "style": 3.0
     },
-    "judge_comment": "Комментарий содержит фактические ошибки: неверные лучшие ходы (Qe4 вместо Rae8, Rfc1 вместо Rbc1), выдуманные мотивы и повторяющиеся общие фразы о слабом поле h3 и диагонали h1–a8.",
-    "judge_tokens": 1381,
+    "judge_comment": "Комментарий содержит грубые фактические ошибки: Nb8 назван слоном, лучшие ходы Qe4 и Rfc1 не совпадают с указанными в анализе Rae8 и Rbc1, а объяснения мотивов и фразы о сохранении структуры бессмысленны и повторяются.",
+    "judge_tokens": 1384,
     "error": null
   },
   {
@@ -47,19 +51,21 @@
     "black": "Bronstein, David",
     "event": "Moscow zt",
     "level": "club",
-    "commentary_id": 305,
-    "model": "qwen-7b-tokenizer",
-    "tokens_used": 2884,
+    "commentary_id": 685,
+    "model": "qwen-7b-tokenizer_gguf-v2",
+    "tokens_used": 2799,
     "attempts": 1,
     "validated": true,
     "has_explanation": false,
+    "cjk_chars": 0,
+    "cjk_share": 0.0,
     "scores": {
-      "factual_accuracy": 3.0,
-      "usefulness": 4.0,
-      "style": 5.0
+      "factual_accuracy": 2.0,
+      "usefulness": 3.0,
+      "style": 4.0
     },
-    "judge_comment": "Комментарий путает потери оценки с абсолютными оценками, приписывает неверные мотивы и содержит выдуманные утверждения о ничьей и слабых полях.",
-    "judge_tokens": 1452,
+    "judge_comment": "Комментарий содержит выдуманные лучшие ходы (d5, Bxb6, Ra8) и неверные мотивы, противоречащие фактам анализа, хотя структура и терминология местами уместны.",
+    "judge_tokens": 1393,
     "error": null
   },
   {
@@ -68,19 +74,21 @@
     "black": "Lloyd, Geoff",
     "event": "SCCA Premiers",
     "level": "club",
-    "commentary_id": 315,
-    "model": "qwen-7b-tokenizer",
-    "tokens_used": 2957,
+    "commentary_id": 686,
+    "model": "qwen-7b-tokenizer_gguf-v2",
+    "tokens_used": 3020,
     "attempts": 1,
     "validated": true,
     "has_explanation": true,
+    "cjk_chars": 0,
+    "cjk_share": 0.0,
     "scores": {
-      "factual_accuracy": 3.0,
-      "usefulness": 4.0,
-      "style": 4.0
+      "factual_accuracy": 2.0,
+      "usefulness": 2.0,
+      "style": 3.0
     },
-    "judge_comment": "Комментарий содержит фактические ошибки: Kxg2 назван решающим шагом, хотя это был лучший ход в проигранной позиции, а угрозы матом на 13-м ходу и вилка e2/d2 не соответствуют фактам анализа.",
-    "judge_tokens": 1368,
+    "judge_comment": "Комментарий содержит грубые фактические ошибки: неверные оценки (например, +0 cp за чёрных при мате), выдуманные вилки и проходные пешки, а также путаницу в цветах и ходах.",
+    "judge_tokens": 1427,
     "error": null
   },
   {
@@ -89,19 +97,21 @@
     "black": "Lloyd, Geoff",
     "event": "SCCA Premiers",
     "level": "club",
-    "commentary_id": 317,
-    "model": "qwen-7b-tokenizer",
-    "tokens_used": 3297,
+    "commentary_id": 687,
+    "model": "qwen-7b-tokenizer_gguf-v2",
+    "tokens_used": 3049,
     "attempts": 1,
     "validated": true,
     "has_explanation": true,
+    "cjk_chars": 0,
+    "cjk_share": 0.0,
     "scores": {
-      "factual_accuracy": 2.0,
+      "factual_accuracy": 3.0,
       "usefulness": 3.0,
-      "style": 2.0
+      "style": 4.0
     },
-    "judge_comment": "Комментарий содержит грубые фактические ошибки (Kxg2 назван создающим мат для чёрных, fxe4 приписан ослаблению фланга чёрных, Qf3+ назван завершением игры), смешанный китайский текст и повторы, что делает его непригодным.",
-    "judge_tokens": 1691,
+    "judge_comment": "Комментарий путает оценки (мат в 13 ходах назван '+500 cp'), приписывает белым слабости на f6 и чёрным — ослабленный королевский фланг, а также повторяет шаблонные фразы о 'проходной пешке e4' и 'вилках' без опоры на факты.",
+    "judge_tokens": 1459,
     "error": null
   }
 ]
