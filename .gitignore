@@ -64,3 +64,4 @@ data/lora_gold_v1.jsonl
 # Lichess golden dataset (T-092): скачанные PGN и сгенерированный JSONL.
 data/gold_pgns/
 data/gold_dataset.jsonl
+data-chess/
