@@ -17,11 +17,13 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.errors import LLMNotConfiguredError
+from app.errors import LLMError, LLMNotConfiguredError
 from scripts.build_gold_dataset_v2 import (
     DEFAULT_OUTPUT,
+    DEFAULT_TIMEOUT_S,
     ONLY_COMMENTARY_INSTRUCTION,
     POSITION_INSTRUCTION,
+    TIMEOUT_RETRIES,
     GoldV2Config,
     build_client,
     build_parser,
@@ -468,20 +470,25 @@ async def _run_positions(
     limit: int = 10,
     dry_run: bool = False,
     settings: Settings | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    append: bool = False,
+    output: Path | None = None,
 ) -> Any:
     positions = tmp_path / "positions.jsonl"
     positions.write_text(content, encoding="utf-8")
-    output = tmp_path / "gold_v2.jsonl"
+    target = output or (tmp_path / "gold_v2.jsonl")
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler)
     ) as http:
         return await run_build(
             GoldV2Config(
                 positions=positions,
-                output=output,
+                output=target,
                 limit=limit,
                 max_retries=max_retries,
                 dry_run=dry_run,
+                timeout_s=timeout_s,
+                append=append,
             ),
             http_client=http,
             settings=settings or _settings(),
@@ -717,3 +724,115 @@ def test_main_positions_dry_run_end_to_end(
     assert "Позиций: 2" in captured.out
     assert "Пакетов фактов (dry-run): 2" in captured.out
     assert not output.exists()
+
+
+# --- итерация 54: таймауты, retry и инкрементальная запись ------------------
+
+TIMEOUT_ATTEMPTS = TIMEOUT_RETRIES + 1
+
+
+async def test_timeout_is_retried_and_item_is_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Таймаут DeepSeek: 3 retry, затем skipped_timeout, цикл продолжается."""
+    monkeypatch.setattr(
+        "scripts.build_gold_dataset_v2.TIMEOUT_BACKOFF_S", 0.0
+    )
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls <= TIMEOUT_ATTEMPTS:
+            raise httpx.ReadTimeout("deepseek timeout", request=request)
+        return httpx.Response(200, json=_completion(CLEAN_TEXT))
+
+    result = await _run_positions(tmp_path, handler, timeout_s=30)
+
+    # 4 попытки на первую позицию (1 + 3 retry), затем вторая — успешна.
+    assert calls == TIMEOUT_ATTEMPTS + 1
+    assert result.stats.converted == 1
+    assert result.stats.skipped["timeout"] == 1
+    assert result.stats.timeouts == 1
+    assert result.stats.timeout_retries == TIMEOUT_RETRIES
+    output = tmp_path / "gold_v2.jsonl"
+    records = [
+        json.loads(line)
+        for line in output.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["metadata"]["id"] == "p2"
+    assert "timeout" in capsys.readouterr().err
+
+
+async def test_incremental_write_survives_crash(tmp_path: Path) -> None:
+    """Падение на второй записи не теряет первую: она уже на диске."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(200, json=_completion(CLEAN_TEXT))
+        raise httpx.ConnectError("network down", request=request)
+
+    with pytest.raises(LLMError):
+        await _run_positions(tmp_path, handler, limit=10)
+
+    output = tmp_path / "gold_v2.jsonl"
+    lines = output.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["metadata"]["id"] == "p1"
+
+
+async def test_append_preserves_existing_lines_and_skips_done(
+    tmp_path: Path,
+) -> None:
+    """--append: старые строки не перезаписываются, готовые id пропускаются."""
+    first = _ScriptedDeepSeek([CLEAN_TEXT])
+    result1 = await _run_positions(tmp_path, first, limit=1)
+    output = tmp_path / "gold_v2.jsonl"
+    first_lines = output.read_text(encoding="utf-8").splitlines()
+    assert result1.stats.converted == 1
+    assert len(first_lines) == 1
+
+    second = _ScriptedDeepSeek([CLEAN_TEXT])
+    result2 = await _run_positions(tmp_path, second, append=True)
+
+    lines = output.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert lines[0] == first_lines[0]
+    assert json.loads(lines[1])["metadata"]["id"] == "p2"
+    assert len(second.requests) == 1  # первая позиция уже была готова
+    assert result2.stats.converted == 1
+    assert result2.stats.skipped["already_done"] == 1
+    assert validate_dataset(output) == (2, [])
+
+
+def test_parser_timeout_and_append_defaults() -> None:
+    args = build_parser().parse_args([])
+
+    assert args.timeout_s == DEFAULT_TIMEOUT_S == 300.0
+    assert args.append is False
+
+
+def test_parser_accepts_timeout_and_append() -> None:
+    args = build_parser().parse_args(["--timeout-s", "45", "--append"])
+
+    assert args.timeout_s == 45.0
+    assert args.append is True
+
+
+def test_parser_rejects_non_positive_timeout() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["--timeout-s", "0"])
+
+    assert exc_info.value.code == 2
+
+
+def test_build_client_timeout_override() -> None:
+    client = build_client(_settings(), timeout_s=45.0)
+
+    assert client.timeout_s == 45.0

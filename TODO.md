@@ -1216,6 +1216,12 @@
   символов, `has_cjk`/`strip_cjk_sentences`, ограниченный буфер,
   очистка cache-hit, `llm_empty` для CJK-only), тесты и документация;
   chat-SSE (`app/chat/streaming.py`) — остаток KI-060.
+- **T-121.** Устойчивость `build_gold_dataset_v2.py` к таймаутам и
+  инкрементальная запись датасета (T-104b). **[x]** — выполнено в
+  итерации 54: `--timeout-s` (300 с по умолчанию), до 3 retry с
+  экспоненциальной паузой, `skipped_timeout` без падения скрипта,
+  `DatasetWriter` (write+flush на каждую запись), `--append` с resume по
+  `metadata.id`; тесты и документация.
 
 ---
 

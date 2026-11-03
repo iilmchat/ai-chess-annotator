@@ -74,9 +74,10 @@ from app.errors import (  # noqa: E402
     InvalidPgnError,
     LLMError,
     LLMNotConfiguredError,
+    LLMTimeoutError,
 )
 from app.ingestion import ParsedGame, parse_fen, parse_pgn  # noqa: E402
-from app.llm.base import BaseLLMClient  # noqa: E402
+from app.llm.base import BaseLLMClient, LLMResult  # noqa: E402
 from app.llm.openai_client import OpenAICompatibleClient  # noqa: E402
 from app.llm.prompts import (  # noqa: E402
     MAX_FACT_PACKAGE_TOKENS,
@@ -89,16 +90,19 @@ from scripts.build_gold_dataset import (  # noqa: E402
     export_game_pgn,
     extract_eval_points,
     iter_games,
-    write_records,
 )
 
 __all__ = [
     "DEFAULT_LIMIT",
     "DEFAULT_MAX_RETRIES",
     "DEFAULT_OUTPUT",
+    "DEFAULT_TIMEOUT_S",
     "ONLY_COMMENTARY_INSTRUCTION",
     "POSITION_INSTRUCTION",
     "SKIP_REASON_LABELS",
+    "TIMEOUT_BACKOFF_S",
+    "TIMEOUT_RETRIES",
+    "DatasetWriter",
     "GenerationOutcome",
     "GoldV2Config",
     "GoldV2Result",
@@ -111,6 +115,7 @@ __all__ = [
     "build_retry_prompt",
     "build_system_prompt",
     "build_v2_record",
+    "complete_with_timeout_retries",
     "generate_for_game",
     "generate_with_validation",
     "main",
@@ -125,6 +130,12 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "gold_dataset_v2.jsonl"
 DEFAULT_LIMIT = 1000
 #: Сколько раз переспрашивать учителя при нелегальных ходах/иероглифах.
 DEFAULT_MAX_RETRIES = 2
+#: Таймаут одного запроса к DeepSeek по умолчанию (итерация 54: было 120 с).
+DEFAULT_TIMEOUT_S = 300.0
+#: Сколько раз повторять запрос при таймауте (сверх первой попытки).
+TIMEOUT_RETRIES = 3
+#: Базовая пауза перед повтором таймаута; растёт экспоненциально.
+TIMEOUT_BACKOFF_S = 2.0
 #: Модель-учитель по умолчанию (берётся из `Settings`, если не переопределена).
 DEFAULT_MODEL = "deepseek-chat"
 
@@ -150,6 +161,8 @@ SKIP_REASON_LABELS: dict[str, str] = {
     "invalid_llm": "учитель не прошёл валидатор",
     "cjk_rejected": "ответ с иероглифами отклонён (KI-060)",
     "invalid_position": "битая позиция (JSON/FEN)",
+    "timeout": "таймаут учителя (DeepSeek)",
+    "already_done": "уже сгенерировано (--append)",
 }
 
 #: Ключи JSONL позиций: FEN, оценка и лучший ход (сосед готовит датасет).
@@ -200,6 +213,10 @@ class GoldV2Config:
     model: str | None = None
     #: Режим 2: JSONL изолированных позиций (FEN, best_move, evaluation).
     positions: Path | None = None
+    #: Таймаут одного запроса к DeepSeek, с (итерация 54).
+    timeout_s: float = DEFAULT_TIMEOUT_S
+    #: Дописывать в существующий файл и пропускать уже готовые записи.
+    append: bool = False
 
 
 @dataclass
@@ -219,6 +236,10 @@ class V2Stats:
     retries: int = 0
     cjk_retries: int = 0
     cjk_stripped_sentences: int = 0
+    #: Сколько раз повторяли запрос после таймаута (итерация 54).
+    timeout_retries: int = 0
+    #: Сколько записей пропущено из-за таймаута после всех повторов.
+    timeouts: int = 0
 
     @property
     def skipped_total(self) -> int:
@@ -232,6 +253,8 @@ class V2Stats:
 
     def record_skipped(self, reason: str) -> None:
         self.skipped[reason] += 1
+        if reason == "timeout":
+            self.timeouts += 1
 
     def record_converted(self, chars: int, eval_points: int) -> None:
         self.converted += 1
@@ -244,6 +267,7 @@ class V2Stats:
         self.retries += max(0, outcome.attempts - 1)
         self.cjk_retries += outcome.cjk_retries
         self.cjk_stripped_sentences += outcome.cjk_stripped_sentences
+        self.timeout_retries += outcome.timeout_retries
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,10 +301,13 @@ class GoldV2Result:
         lines.append(f"API-вызовов: {stats.api_calls}")
         lines.append(f"  retry: {stats.retries}")
         lines.append(f"  CJK-retry: {stats.cjk_retries}")
+        lines.append(f"  timeout-retry: {stats.timeout_retries}")
         lines.append(
             f"  вырезано предложений с иероглифами: "
             f"{stats.cjk_stripped_sentences}"
         )
+        if stats.timeouts:
+            lines.append(f"  таймаутов (запись пропущена): {stats.timeouts}")
         lines.append(f"Пропущено: {stats.skipped_total}")
         for reason, count in sorted(stats.skipped.items()):
             lines.append(f"  {SKIP_REASON_LABELS.get(reason, reason)}: {count}")
@@ -314,6 +341,161 @@ class GenerationOutcome:
     skip_reason: str | None = None
     cjk_retries: int = 0
     cjk_stripped_sentences: int = 0
+    #: Сколько раз повторяли запрос после таймаута (итерация 54).
+    timeout_retries: int = 0
+
+
+def _record_source_id(record: Mapping[str, Any]) -> str | None:
+    """Вернуть стабильный id записи из ``metadata`` (PGN и positions)."""
+    metadata = record.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    value = metadata.get("id")
+    return str(value) if value else None
+
+
+def _read_done_ids(path: Path) -> set[str]:
+    """Прочитать id уже записанных строк; битые строки пропускаются."""
+    done: set[str] = set()
+    if not path.is_file():
+        return done
+    with path.open("r", encoding="utf-8") as stream:
+        for line in stream:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, Mapping):
+                source_id = _record_source_id(record)
+                if source_id:
+                    done.add(source_id)
+    return done
+
+
+class DatasetWriter:
+    """Инкрементальная запись JSONL: строка сразу попадает на диск.
+
+    Каждая запись пишется и сразу ``flush()``-ится, поэтому падение процесса
+    на N-й партии не теряет уже сгенерированные записи. В режиме
+    ``append=True`` файл открывается на дозапись, а id существующих строк
+    считаются готовыми — повторный запуск продолжает с места падения.
+
+    Args:
+        path: путь к JSONL.
+        append: дозаписывать в существующий файл и пропускать готовые id.
+    """
+
+    def __init__(self, path: Path, *, append: bool = False) -> None:
+        self.path = path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._append = append
+        self.done_ids = _read_done_ids(path) if append else set()
+        self._stream = path.open(
+            "a" if append else "w", encoding="utf-8", newline="\n"
+        )
+        self._written = 0
+        self._closed = False
+
+    @property
+    def written(self) -> int:
+        """Сколько записей записано этим writer'ом."""
+        return self._written
+
+    def is_done(self, source_id: str) -> bool:
+        """Запись с таким id уже есть в файле (режим ``--append``)."""
+        return source_id in self.done_ids
+
+    def write(self, record: Mapping[str, Any]) -> None:
+        """Записать одну JSON-строку и немедленно сбросить буфер на диск."""
+        if self._closed:  # pragma: no cover - защита от использования после close
+            raise ValueError("writer уже закрыт")
+        self._stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._stream.flush()
+        self._written += 1
+        source_id = _record_source_id(record)
+        if source_id:
+            self.done_ids.add(source_id)
+
+    def close(self) -> None:
+        if self._closed:  # pragma: no cover - повторный close
+            return
+        self._closed = True
+        self._stream.close()
+        # Совместимость с прежним поведением: если не записано ни одной
+        # записи и это не --append, пустой файл не оставляем. При реальном
+        # падении процесса файл с уже записанными строками остаётся.
+        if self._written == 0 and not self._append:
+            self.path.unlink(missing_ok=True)
+
+    def __enter__(self) -> DatasetWriter:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.close()
+
+
+def _timeout_delay(attempt: int) -> float:
+    """Пауза перед повтором таймаута: экспоненциальная (2, 4, 8 с)."""
+    return TIMEOUT_BACKOFF_S * (2.0**attempt)
+
+
+async def complete_with_timeout_retries(
+    client: BaseLLMClient,
+    prompt: str,
+    *,
+    system_prompt: str,
+    timeout_s: float,
+) -> tuple[LLMResult, int]:
+    """Вызвать учителя, повторяя таймауты с экспоненциальной паузой.
+
+    Делает до ``TIMEOUT_RETRIES`` повторов (итого до 4 вызовов), затем
+    поднимает :class:`LLMTimeoutError`; вызывающий пропускает запись и
+    продолжает цикл.
+
+    Args:
+        client: клиент учителя.
+        prompt: user-сообщение.
+        system_prompt: системный промпт.
+        timeout_s: таймаут в секундах (для сообщения; сам клиент уже
+            настроен при создании).
+
+    Returns:
+        ``(результат, число повторов после таймаута)``.
+
+    Raises:
+        LLMTimeoutError: таймаут не ушёл после всех повторов.
+    """
+    used = 0
+    for attempt in range(TIMEOUT_RETRIES + 1):
+        try:
+            result = await client.complete(
+                prompt, system_prompt=system_prompt
+            )
+            return result, used
+        except (LLMTimeoutError, httpx.TimeoutException) as exc:
+            if attempt >= TIMEOUT_RETRIES:
+                print(
+                    f"[timeout] {client.provider}: таймаут "
+                    f"{timeout_s:.0f} с после {attempt + 1} попыток — "
+                    "запись пропущена",
+                    file=sys.stderr,
+                )
+                raise LLMTimeoutError(
+                    f"{client.provider}: таймаут {timeout_s:.0f} с после "
+                    f"{attempt + 1} попыток"
+                ) from exc
+            used += 1
+            delay = _timeout_delay(attempt)
+            print(
+                f"[timeout] {client.provider}: таймаут {timeout_s:.0f} с; "
+                f"повтор {attempt + 1}/{TIMEOUT_RETRIES} через {delay:.1f} с",
+                file=sys.stderr,
+            )
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def build_system_prompt(level: str = "club", *, positions: bool = False) -> str:
@@ -591,6 +773,7 @@ def build_client(
     *,
     model: str | None = None,
     http_client: httpx.AsyncClient | None = None,
+    timeout_s: float | None = None,
 ) -> OpenAICompatibleClient:
     """Собрать OpenAI-совместимый клиент DeepSeek.
 
@@ -598,6 +781,7 @@ def build_client(
         settings: настройки приложения (ключ, URL, таймауты, цены).
         model: переопределить ``DEEPSEEK_MODEL``.
         http_client: готовый HTTP-клиент (тесты с ``MockTransport``).
+        timeout_s: таймаут одного запроса, с; ``None`` — из настроек.
 
     Returns:
         Клиент DeepSeek.
@@ -616,7 +800,9 @@ def build_client(
         model=model or settings.deepseek_model or DEFAULT_MODEL,
         api_key=api_key,
         provider_name="deepseek",
-        timeout_s=settings.llm_timeout_s,
+        timeout_s=(
+            timeout_s if timeout_s is not None else settings.llm_timeout_s
+        ),
         max_retries=settings.llm_max_retries,
         retry_backoff_s=settings.llm_retry_backoff_s,
         client=http_client,
@@ -670,6 +856,7 @@ async def generate_with_validation(
     package: str,
     system_prompt: str,
     max_retries: int,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> GenerationOutcome:
     """Сгенерировать комментарий и провалидировать ходы и алфавит.
 
@@ -678,6 +865,10 @@ async def generate_with_validation(
     вырезаются, а при слишком большой доле запись пропускается. На
     последней попытке нелегальные ходы тоже означают пропуск записи.
 
+    Таймаут DeepSeek повторяется до ``TIMEOUT_RETRIES`` раз с
+    экспоненциальной паузой; если все попытки упали — запись пропускается
+    (``skip_reason="timeout"``), цикл по партиям продолжается.
+
     Args:
         client: клиент учителя.
         initial_fen: стартовая позиция (партия или изолированная позиция).
@@ -685,6 +876,7 @@ async def generate_with_validation(
         package: пакет фактов (user-сообщение).
         system_prompt: системный промпт уровня.
         max_retries: число повторов (0 — одна попытка).
+        timeout_s: таймаут одного запроса, с (итерация 54).
 
     Returns:
         :class:`GenerationOutcome`.
@@ -695,8 +887,25 @@ async def generate_with_validation(
     attempts = 0
     cjk_retries = 0
     cjk_retry_used = False
+    timeout_retries = 0
     for attempt in range(1, max_retries + 2):
-        result = await client.complete(prompt, system_prompt=system_prompt)
+        try:
+            result, timeout_used = await complete_with_timeout_retries(
+                client,
+                prompt,
+                system_prompt=system_prompt,
+                timeout_s=timeout_s,
+            )
+        except (LLMTimeoutError, httpx.TimeoutException):
+            return GenerationOutcome(
+                text="",
+                ok=False,
+                attempts=TIMEOUT_RETRIES + 1,
+                skip_reason="timeout",
+                cjk_retries=cjk_retries,
+                timeout_retries=TIMEOUT_RETRIES,
+            )
+        timeout_retries += timeout_used
         attempts = attempt
         text = result.text.strip()
         legal, illegal = await validate_llm_response(
@@ -717,6 +926,7 @@ async def generate_with_validation(
                 attempts=attempts,
                 skip_reason="invalid_llm",
                 cjk_retries=cjk_retries,
+                timeout_retries=timeout_retries,
             )
         if cjk_present:
             if not cjk_retry_used and attempt <= max_retries:
@@ -732,6 +942,7 @@ async def generate_with_validation(
                     attempts=attempts,
                     skip_reason="cjk_rejected",
                     cjk_retries=cjk_retries,
+                    timeout_retries=timeout_retries,
                 )
             text = outcome.text
             return GenerationOutcome(
@@ -741,6 +952,7 @@ async def generate_with_validation(
                 skip_reason=None if text.strip() else "invalid_llm",
                 cjk_retries=cjk_retries,
                 cjk_stripped_sentences=outcome.removed_sentences,
+                timeout_retries=timeout_retries,
             )
         if not text:
             return GenerationOutcome(
@@ -749,12 +961,14 @@ async def generate_with_validation(
                 attempts=attempts,
                 skip_reason="invalid_llm",
                 cjk_retries=cjk_retries,
+                timeout_retries=timeout_retries,
             )
         return GenerationOutcome(
             text=text,
             ok=True,
             attempts=attempts,
             cjk_retries=cjk_retries,
+            timeout_retries=timeout_retries,
         )
     return GenerationOutcome(
         text="",
@@ -762,6 +976,7 @@ async def generate_with_validation(
         attempts=attempts,
         skip_reason="invalid_llm",
         cjk_retries=cjk_retries,
+        timeout_retries=timeout_retries,
     )
 
 
@@ -772,6 +987,7 @@ async def generate_for_game(
     package: str,
     system_prompt: str,
     max_retries: int,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> GenerationOutcome:
     """Обёртка :func:`generate_with_validation` для PGN-партии."""
     return await generate_with_validation(
@@ -781,6 +997,7 @@ async def generate_for_game(
         package=package,
         system_prompt=system_prompt,
         max_retries=max_retries,
+        timeout_s=timeout_s,
     )
 
 
@@ -831,21 +1048,30 @@ async def _run_positions_build(
 
     cfg = settings or get_settings()
     stats = V2Stats()
-    records: list[dict[str, Any]] = []
     system_prompt = build_system_prompt(config.level, positions=True)
     client = llm_client
     owns_client = False
     if not config.dry_run and client is None:
         client = build_client(
-            cfg, model=config.model, http_client=http_client
+            cfg,
+            model=config.model,
+            http_client=http_client,
+            timeout_s=config.timeout_s,
         )
         owns_client = True
     if client is not None:
         client.set_level(config.level)
 
+    # Итерация 54: файл открывается сразу, каждая запись пишется и
+    # flush()-ится — падение на N-й позиции не теряет первые N-1.
+    writer = (
+        DatasetWriter(config.output, append=config.append)
+        if not config.dry_run
+        else None
+    )
     try:
         for _index, item in read_positions(positions_path):
-            if not config.dry_run and len(records) >= config.limit:
+            if not config.dry_run and stats.converted >= config.limit:
                 break
             if config.dry_run and stats.prepared >= config.limit:
                 break
@@ -853,6 +1079,9 @@ async def _run_positions_build(
                 stats.record_skipped("invalid_position")
                 continue
             stats.positions += 1
+            if writer is not None and writer.is_done(item.source_id):
+                stats.record_skipped("already_done")
+                continue
             package = build_position_fact_package(item)
             stats.fact_sheet_chars += len(package)
             eval_points = 1 if item.evaluation else 0
@@ -867,28 +1096,30 @@ async def _run_positions_build(
                 package=package,
                 system_prompt=system_prompt,
                 max_retries=config.max_retries,
+                timeout_s=config.timeout_s,
             )
             stats.record_attempts(outcome)
             if not outcome.ok:
                 stats.record_skipped(outcome.skip_reason or "invalid_llm")
                 continue
-            records.append(
-                build_position_record(
-                    item=item,
-                    fact_sheet=package,
-                    text=outcome.text,
-                    system_prompt=system_prompt,
-                    level=config.level,
-                    model=client.model,
-                )
+            record = build_position_record(
+                item=item,
+                fact_sheet=package,
+                text=outcome.text,
+                system_prompt=system_prompt,
+                level=config.level,
+                model=client.model,
             )
+            if writer is None:  # pragma: no cover - защита от мисконфига
+                raise AssertionError("writer не создан")
+            writer.write(record)
             stats.record_converted(len(outcome.text), eval_points)
     finally:
+        if writer is not None:
+            writer.close()
         if owns_client and client is not None:
             await client.aclose()
 
-    if records:
-        write_records(config.output, records)
     return GoldV2Result(
         output=config.output, stats=stats, mode="positions"
     )
@@ -927,6 +1158,8 @@ async def run_build(
         raise ValueError("--max-retries не может быть отрицательным")
     if config.max_tokens < 1:
         raise ValueError("--max-tokens должен быть ≥ 1")
+    if config.timeout_s <= 0:
+        raise ValueError("--timeout-s должен быть > 0")
     if config.positions is not None:
         return await _run_positions_build(
             config,
@@ -942,18 +1175,27 @@ async def run_build(
 
     cfg = settings or get_settings()
     stats = V2Stats(files=len(files))
-    records: list[dict[str, Any]] = []
     system_prompt = build_system_prompt(config.level)
     client = llm_client
     owns_client = False
     if not config.dry_run and client is None:
         client = build_client(
-            cfg, model=config.model, http_client=http_client
+            cfg,
+            model=config.model,
+            http_client=http_client,
+            timeout_s=config.timeout_s,
         )
         owns_client = True
     if client is not None:
         client.set_level(config.level)
 
+    # Итерация 54: файл открывается сразу, каждая запись пишется и
+    # flush()-ится — падение на N-й партии не теряет первые N-1.
+    writer = (
+        DatasetWriter(config.output, append=config.append)
+        if not config.dry_run
+        else None
+    )
     try:
         for path in files:
             file_games = iter_games(path)
@@ -961,11 +1203,15 @@ async def run_build(
                 stats.record_skipped("invalid_pgn")
                 continue
             for game_index, game in enumerate(file_games, start=1):
-                if not config.dry_run and len(records) >= config.limit:
+                if not config.dry_run and stats.converted >= config.limit:
                     break
                 if config.dry_run and stats.prepared >= config.limit:
                     break
                 stats.games += 1
+                source_id = f"{path.name}:{game_index}"
+                if writer is not None and writer.is_done(source_id):
+                    stats.record_skipped("already_done")
+                    continue
                 pgn = export_game_pgn(game)
                 try:
                     parsed = parse_pgn(pgn)
@@ -1003,35 +1249,37 @@ async def run_build(
                     package=fact_sheet,
                     system_prompt=system_prompt,
                     max_retries=config.max_retries,
+                    timeout_s=config.timeout_s,
                 )
                 stats.record_attempts(outcome)
                 if not outcome.ok:
                     stats.record_skipped(outcome.skip_reason or "invalid_llm")
                     continue
-                records.append(
-                    build_v2_record(
-                        game=game,
-                        parsed=parsed,
-                        fact_sheet=fact_sheet,
-                        text=outcome.text,
-                        system_prompt=system_prompt,
-                        level=config.level,
-                        model=client.model,
-                        source_id=f"{path.name}:{game_index}",
-                        eval_points=eval_count,
-                    )
+                record = build_v2_record(
+                    game=game,
+                    parsed=parsed,
+                    fact_sheet=fact_sheet,
+                    text=outcome.text,
+                    system_prompt=system_prompt,
+                    level=config.level,
+                    model=client.model,
+                    source_id=source_id,
+                    eval_points=eval_count,
                 )
+                if writer is None:  # pragma: no cover - защита от мисконфига
+                    raise AssertionError("writer не создан")
+                writer.write(record)
                 stats.record_converted(len(outcome.text), eval_count)
-            if not config.dry_run and len(records) >= config.limit:
+            if not config.dry_run and stats.converted >= config.limit:
                 break
             if config.dry_run and stats.prepared >= config.limit:
                 break
     finally:
+        if writer is not None:
+            writer.close()
         if owns_client and client is not None:
             await client.aclose()
 
-    if records:
-        write_records(config.output, records)
     return GoldV2Result(output=config.output, stats=stats)
 
 
@@ -1044,6 +1292,18 @@ def _positive_int(value: str) -> int:
         ) from exc
     if number < 1:
         raise argparse.ArgumentTypeError("должно быть ≥ 1")
+    return number
+
+
+def _positive_float(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"ожидается число, получено {value!r}"
+        ) from exc
+    if number <= 0:
+        raise argparse.ArgumentTypeError("должно быть > 0")
     return number
 
 
@@ -1109,6 +1369,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="модель-учитель (по умолчанию DEEPSEEK_MODEL)",
     )
     parser.add_argument(
+        "--timeout-s",
+        type=_positive_float,
+        default=DEFAULT_TIMEOUT_S,
+        metavar="SECONDS",
+        help=(
+            "таймаут одного запроса к DeepSeek, с (по умолчанию "
+            f"{DEFAULT_TIMEOUT_S:.0f}); таймаут повторяется до "
+            f"{TIMEOUT_RETRIES} раз и пропускает запись"
+        ),
+    )
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help=(
+            "дописывать в существующий JSONL и пропускать уже "
+            "сгенерированные записи (продолжение после падения)"
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="собрать пакеты фактов и показать статистику без вызова API",
@@ -1129,6 +1408,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         dry_run=args.dry_run,
         model=args.model,
         positions=args.positions,
+        timeout_s=args.timeout_s,
+        append=args.append,
     )
     try:
         result = asyncio.run(run_build(config))
