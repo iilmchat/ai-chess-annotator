@@ -20,6 +20,7 @@ from app.config import Settings
 from app.errors import LLMError, LLMNotConfiguredError
 from scripts.build_gold_dataset_v2 import (
     DEFAULT_OUTPUT,
+    DEFAULT_RESPONSE_MAX_TOKENS,
     DEFAULT_TIMEOUT_S,
     ONLY_COMMENTARY_INSTRUCTION,
     POSITION_INSTRUCTION,
@@ -156,6 +157,7 @@ async def _run(
     limit: int = 10,
     dry_run: bool = False,
     settings: Settings | None = None,
+    response_max_tokens: int = DEFAULT_RESPONSE_MAX_TOKENS,
 ) -> Any:
     input_dir = tmp_path / "pgns"
     input_dir.mkdir(exist_ok=True)
@@ -171,6 +173,7 @@ async def _run(
                 limit=limit,
                 max_retries=max_retries,
                 dry_run=dry_run,
+                response_max_tokens=response_max_tokens,
             ),
             http_client=http,
             settings=settings or _settings(),
@@ -217,7 +220,9 @@ async def test_request_uses_club_prompt_fact_package_and_model(
     assert request.headers["authorization"] == "Bearer test-deepseek-key"
     payload = handler.payload(0)
     assert payload["model"] == "deepseek-chat"
-    assert payload["max_tokens"] == 1024
+    # Итерация 55: лимит ответа 2048, иначе русский текст 200–320 слов
+    # (~1500 токенов) обрезался на полуслове и валил SAN-валидатор.
+    assert payload["max_tokens"] == 2048
     assert payload["temperature"] == pytest.approx(0.2)
     messages = payload["messages"]
     assert [message["role"] for message in messages] == ["system", "user"]
@@ -397,6 +402,7 @@ def test_parser_defaults() -> None:
     assert args.limit == 1000
     assert args.level == "club"
     assert args.max_tokens == 2048
+    assert args.response_max_tokens == 2048
     assert args.max_retries == 2
     assert args.dry_run is False
     assert args.output == DEFAULT_OUTPUT
@@ -836,3 +842,50 @@ def test_build_client_timeout_override() -> None:
     client = build_client(_settings(), timeout_s=45.0)
 
     assert client.timeout_s == 45.0
+
+
+# --- итерация 55: лимит ответа учителя --------------------------------------
+
+
+async def test_response_max_tokens_default_is_2048(tmp_path: Path) -> None:
+    handler = _ScriptedDeepSeek([CLEAN_TEXT])
+
+    await _run(tmp_path, handler)
+
+    assert DEFAULT_RESPONSE_MAX_TOKENS == 2048
+    assert handler.payload(0)["max_tokens"] == 2048
+
+
+async def test_response_max_tokens_override(tmp_path: Path) -> None:
+    handler = _ScriptedDeepSeek([CLEAN_TEXT])
+
+    await _run(tmp_path, handler, response_max_tokens=4096)
+
+    assert handler.payload(0)["max_tokens"] == 4096
+
+
+async def test_run_build_rejects_non_positive_response_max_tokens(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="response-max-tokens"):
+        await run_build(
+            GoldV2Config(
+                input_dir=tmp_path / "pgns",
+                output=tmp_path / "out.jsonl",
+                dry_run=True,
+                response_max_tokens=0,
+            )
+        )
+
+
+def test_parser_accepts_response_max_tokens() -> None:
+    args = build_parser().parse_args(["--response-max-tokens", "4096"])
+
+    assert args.response_max_tokens == 4096
+
+
+def test_parser_rejects_non_positive_response_max_tokens() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        build_parser().parse_args(["--response-max-tokens", "0"])
+
+    assert exc_info.value.code == 2

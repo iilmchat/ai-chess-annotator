@@ -1222,6 +1222,12 @@
   экспоненциальной паузой, `skipped_timeout` без падения скрипта,
   `DatasetWriter` (write+flush на каждую запись), `--append` с resume по
   `metadata.id`; тесты и документация.
+- **T-122.** Лимит ответа учителя `max_tokens=2048` (T-104b). **[x]** —
+  выполнено в итерации 55: `DEFAULT_RESPONSE_MAX_TOKENS=2048` +
+  `GoldV2Config.response_max_tokens` + `--response-max-tokens`; значение
+  передаётся в `OpenAICompatibleClient` вместо `LLM_MAX_TOKENS=1024`,
+  который обрезал русский текст и давал 729 отказов валидатора из 824
+  партий; тесты и документация.
 
 ---
 

@@ -96,6 +96,7 @@ __all__ = [
     "DEFAULT_LIMIT",
     "DEFAULT_MAX_RETRIES",
     "DEFAULT_OUTPUT",
+    "DEFAULT_RESPONSE_MAX_TOKENS",
     "DEFAULT_TIMEOUT_S",
     "ONLY_COMMENTARY_INSTRUCTION",
     "POSITION_INSTRUCTION",
@@ -136,6 +137,10 @@ DEFAULT_TIMEOUT_S = 300.0
 TIMEOUT_RETRIES = 3
 #: Базовая пауза перед повтором таймаута; растёт экспоненциально.
 TIMEOUT_BACKOFF_S = 2.0
+#: Лимит ответа учителя, токенов (итерация 55: 1024 обрезал русский текст
+#: 200–320 слов ≈ 1500 токенов на полуслове, и SAN-валидатор отклонял
+#: 729 записей как «учитель не прошёл валидатор»).
+DEFAULT_RESPONSE_MAX_TOKENS = 2048
 #: Модель-учитель по умолчанию (берётся из `Settings`, если не переопределена).
 DEFAULT_MODEL = "deepseek-chat"
 
@@ -207,7 +212,10 @@ class GoldV2Config:
     output: Path = DEFAULT_OUTPUT
     limit: int = DEFAULT_LIMIT
     level: str = "club"
+    #: Лимит пакета фактов (user-сообщение), токенов.
     max_tokens: int = MAX_FACT_PACKAGE_TOKENS
+    #: Лимит ответа учителя (completion), токенов; 1024 обрезал текст.
+    response_max_tokens: int = DEFAULT_RESPONSE_MAX_TOKENS
     max_retries: int = DEFAULT_MAX_RETRIES
     dry_run: bool = False
     model: str | None = None
@@ -774,6 +782,7 @@ def build_client(
     model: str | None = None,
     http_client: httpx.AsyncClient | None = None,
     timeout_s: float | None = None,
+    max_tokens: int | None = None,
 ) -> OpenAICompatibleClient:
     """Собрать OpenAI-совместимый клиент DeepSeek.
 
@@ -782,6 +791,9 @@ def build_client(
         model: переопределить ``DEEPSEEK_MODEL``.
         http_client: готовый HTTP-клиент (тесты с ``MockTransport``).
         timeout_s: таймаут одного запроса, с; ``None`` — из настроек.
+        max_tokens: лимит ответа учителя; ``None`` — из настроек. Для
+            датасета v4 передаётся :data:`DEFAULT_RESPONSE_MAX_TOKENS`
+            (2048), иначе 1024 обрезает текст на полуслове — итерация 55.
 
     Returns:
         Клиент DeepSeek.
@@ -807,7 +819,9 @@ def build_client(
         retry_backoff_s=settings.llm_retry_backoff_s,
         client=http_client,
         temperature=settings.llm_temperature,
-        max_tokens=settings.llm_max_tokens,
+        max_tokens=(
+            max_tokens if max_tokens is not None else settings.llm_max_tokens
+        ),
         price_in_usd_per_1m=settings.llm_price_in_usd_per_1m,
         price_out_usd_per_1m=settings.llm_price_out_usd_per_1m,
     )
@@ -1057,6 +1071,7 @@ async def _run_positions_build(
             model=config.model,
             http_client=http_client,
             timeout_s=config.timeout_s,
+            max_tokens=config.response_max_tokens,
         )
         owns_client = True
     if client is not None:
@@ -1160,6 +1175,8 @@ async def run_build(
         raise ValueError("--max-tokens должен быть ≥ 1")
     if config.timeout_s <= 0:
         raise ValueError("--timeout-s должен быть > 0")
+    if config.response_max_tokens < 1:
+        raise ValueError("--response-max-tokens должен быть ≥ 1")
     if config.positions is not None:
         return await _run_positions_build(
             config,
@@ -1184,6 +1201,7 @@ async def run_build(
             model=config.model,
             http_client=http_client,
             timeout_s=config.timeout_s,
+            max_tokens=config.response_max_tokens,
         )
         owns_client = True
     if client is not None:
@@ -1358,6 +1376,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="лимит пакета фактов в токенах (по умолчанию 2048)",
     )
     parser.add_argument(
+        "--response-max-tokens",
+        type=_positive_int,
+        default=DEFAULT_RESPONSE_MAX_TOKENS,
+        metavar="N",
+        help=(
+            "лимит ответа учителя в токенах (по умолчанию "
+            f"{DEFAULT_RESPONSE_MAX_TOKENS}); 1024 обрезал русский текст "
+            "на полуслове и валил SAN-валидатор"
+        ),
+    )
+    parser.add_argument(
         "--max-retries",
         type=_non_negative_int,
         default=DEFAULT_MAX_RETRIES,
@@ -1404,6 +1433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         limit=args.limit,
         level=args.level,
         max_tokens=args.max_tokens,
+        response_max_tokens=args.response_max_tokens,
         max_retries=args.max_retries,
         dry_run=args.dry_run,
         model=args.model,
