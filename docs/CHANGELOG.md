@@ -8,6 +8,23 @@
 
 ### Added
 
+- **CJK-фильтр SSE-стриминга комментария (KI-060, итерация 53):**
+  в `app/commentary/streaming.py` добавлен буферизующий
+  `CjkStreamBuffer`: текст копится до конца предложения (CJK `。！？` —
+  всегда, латинские терминаторы — перед пробелом/концом) или 20–30
+  символов по границе слова; каждый кусок проверяется `has_cjk`.
+  Предложения с иероглифами вырезаются `strip_cjk_sentences` (как в
+  `service.py`), иероглифы не попадают ни в один `delta`; в
+  `commentaries.text` и semantic cache сохраняется очищенный текст,
+  `done` — после SAN-проверки. Legacy cache-hit очищается
+  `sanitize_cjk`, почти целиком CJK-ответ генерируется заново; CJK-only
+  ответ → `llm_empty` без записи; в лог пишутся только счётчики
+  (`commentary_cjk_stream_stripped`, `commentary_cache_cjk_dropped`).
+  Тесты: `tests/unit/test_streaming_cjk.py` (16) и
+  `tests/integration/test_streaming.py` (мок-LLM + SSE, грязный и
+  отклонённый cache-hit). Остаток — chat-SSE
+  (`app/chat/streaming.py`) и диапазон U+4E00–9FFF; KI-060 остаётся
+  Open до v4.
 - **Результаты v3-PGN и сравнение версий модели (итерация 52):**
   `qwen-7b-tokenizer_gguf-v3` (LoRA 7B на 50 PGN-партиях DeepSeek) —
   **3.67/10**, объяснения **67% (2/3)**, CJK **0.00% (0/3)**. В

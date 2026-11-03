@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,12 +26,28 @@ from app.i18n import ERROR_MESSAGES
 from app.llm.base import BaseLLMClient, LLMResult, LLMUsage
 from app.main import create_app
 
+#: Независимая от продакшен-детектора проверка: в тесте нельзя полагаться
+#: на ту же реализацию, которую защищаем (KI-060, итерация 53).
+_CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]")
+
 SHORT_PGN = (
     '[Event "Stream"]\n[White "White"]\n[Black "Black"]\n[Result "1/2-1/2"]\n\n'
     "1. e4 e5 2. Nf3 Nc6 1/2-1/2"
 )
 LEGAL_CHUNKS = ["Партия ", "началась ", "с d4 и Nf6."]
 ILLEGAL_CHUNKS = ["Белые ", "сыграли Qxf7."]
+#: KI-060 (итерация 53): CJK-предложение между чистыми — клиент не должен
+#: увидеть ни одного иероглифа, а сохранённый текст обязан быть очищенным.
+CJK_SENTENCE = "这是中文。"
+MIXED_CHUNKS = [
+    "Партия ",
+    "началась с d4. ",
+    CJK_SENTENCE,
+    "Затем ",
+    "последовало Nf6.",
+]
+ONLY_CJK_CHUNKS = ["这是", "中文。"]
+CLEAN_MIXED_TEXT = "Партия началась с d4. Затем последовало Nf6."
 
 
 class FakeStreamingLLM(BaseLLMClient):
@@ -163,6 +181,160 @@ def test_commentary_stream_returns_error_for_illegal_move(
             assert events[-1][1]["code"] == "llm_invalid_output"
             assert "Qxf7" in events[-1][1]["illegal"]
             assert asyncio.run(_read_commentaries(analysis_id)) == []
+        finally:
+            asyncio.run(_delete_game(analysis_id))
+
+
+def test_commentary_stream_filters_cjk_from_deltas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KI-060/итерация 53: иероглифы не попадают в SSE `delta` и в БД."""
+    fake = FakeStreamingLLM(MIXED_CHUNKS)
+    monkeypatch.setattr(
+        "app.commentary.streaming.get_llm_client", lambda level, cfg: fake
+    )
+    with _client() as client:
+        analyze = client.post("/v1/analyze", json={"pgn": SHORT_PGN, "level": "club"})
+        assert analyze.status_code == 200, analyze.text
+        analysis_id = int(analyze.json()["analysis_id"])
+        try:
+            response = client.post(
+                "/v1/commentary/stream",
+                json={"analysis_id": analysis_id, "level": "club"},
+            )
+            assert response.status_code == 200, response.text
+            events = _events(response.text)
+            names = [name for name, _ in events]
+            assert names[0] == "meta"
+            assert names[-1] == "done"
+            deltas = "".join(
+                str(payload["text"]) for name, payload in events if name == "delta"
+            )
+            assert deltas, "клиент не получил ни одного delta"
+            assert _CJK_PATTERN.search(deltas) is None
+            assert "马" not in deltas
+            assert deltas == CLEAN_MIXED_TEXT
+            rows = asyncio.run(_read_commentaries(analysis_id))
+            assert len(rows) == 1
+            assert rows[0].text == CLEAN_MIXED_TEXT
+            assert _CJK_PATTERN.search(rows[0].text) is None
+            assert rows[0].validated is True
+        finally:
+            asyncio.run(_delete_game(analysis_id))
+
+
+def test_commentary_stream_all_cjk_returns_error_without_saving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KI-060: если после фильтра текста не осталось — error, записи нет."""
+    fake = FakeStreamingLLM(ONLY_CJK_CHUNKS)
+    monkeypatch.setattr(
+        "app.commentary.streaming.get_llm_client", lambda level, cfg: fake
+    )
+    with _client() as client:
+        analyze = client.post("/v1/analyze", json={"pgn": SHORT_PGN, "level": "club"})
+        assert analyze.status_code == 200, analyze.text
+        analysis_id = int(analyze.json()["analysis_id"])
+        try:
+            response = client.post(
+                "/v1/commentary/stream",
+                json={"analysis_id": analysis_id, "level": "club"},
+            )
+            assert response.status_code == 200, response.text
+            events = _events(response.text)
+            names = [name for name, _ in events]
+            assert "delta" not in names
+            assert names[-1] == "error"
+            assert events[-1][1]["code"] == "llm_empty"
+            assert "китайские иероглифы" in str(events[-1][1]["detail"])
+            assert asyncio.run(_read_commentaries(analysis_id)) == []
+        finally:
+            asyncio.run(_delete_game(analysis_id))
+
+
+def test_commentary_stream_sanitizes_dirty_cache_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KI-060: legacy cache-запись с иероглифами не отдаётся как есть."""
+    dirty = (
+        "Кэш-ответ с d4 и Nf6, остальной русский текст без иероглифов. "
+        "这是中文。"
+    )
+    clean = "Кэш-ответ с d4 и Nf6, остальной русский текст без иероглифов."
+
+    async def _fake_lookup(*args: object, **kwargs: object) -> object:
+        return SimpleNamespace(text=dirty)
+
+    # Если очистка кэша не сработает, тест уйдёт в fake-LLM и упадёт на
+    # model != semantic-cache — реальная сеть/LM Studio не нужна.
+    fake = FakeStreamingLLM(LEGAL_CHUNKS)
+    monkeypatch.setattr("app.commentary.streaming.lookup", _fake_lookup)
+    monkeypatch.setattr(
+        "app.commentary.streaming.get_llm_client", lambda level, cfg: fake
+    )
+    with _client() as client:
+        analyze = client.post("/v1/analyze", json={"pgn": SHORT_PGN, "level": "club"})
+        assert analyze.status_code == 200, analyze.text
+        analysis_id = int(analyze.json()["analysis_id"])
+        try:
+            response = client.post(
+                "/v1/commentary/stream",
+                json={"analysis_id": analysis_id, "level": "club"},
+            )
+            assert response.status_code == 200, response.text
+            events = _events(response.text)
+            names = [name for name, _ in events]
+            assert events[0][0] == "meta"
+            assert events[0][1]["model"] == "semantic-cache"
+            assert names[-1] == "done"
+            deltas = "".join(
+                str(payload["text"]) for name, payload in events if name == "delta"
+            )
+            assert _CJK_PATTERN.search(deltas) is None
+            assert deltas == clean
+            rows = asyncio.run(_read_commentaries(analysis_id))
+            assert len(rows) == 1
+            assert rows[0].text == clean
+            assert _CJK_PATTERN.search(rows[0].text) is None
+        finally:
+            asyncio.run(_delete_game(analysis_id))
+
+
+def test_commentary_stream_rejected_cache_falls_back_to_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KI-060: cache-запись почти целиком из CJK → регенерация через LLM."""
+    only_cjk = "这是中文。"
+
+    async def _fake_lookup(*args: object, **kwargs: object) -> object:
+        return SimpleNamespace(text=only_cjk)
+
+    fake = FakeStreamingLLM(LEGAL_CHUNKS)
+    monkeypatch.setattr("app.commentary.streaming.lookup", _fake_lookup)
+    monkeypatch.setattr(
+        "app.commentary.streaming.get_llm_client", lambda level, cfg: fake
+    )
+    with _client() as client:
+        analyze = client.post("/v1/analyze", json={"pgn": SHORT_PGN, "level": "club"})
+        assert analyze.status_code == 200, analyze.text
+        analysis_id = int(analyze.json()["analysis_id"])
+        try:
+            response = client.post(
+                "/v1/commentary/stream",
+                json={"analysis_id": analysis_id, "level": "club"},
+            )
+            assert response.status_code == 200, response.text
+            events = _events(response.text)
+            assert events[0][1]["model"] == "fake-stream"
+            deltas = "".join(
+                str(payload["text"]) for name, payload in events if name == "delta"
+            )
+            assert deltas == "Партия началась с d4 и Nf6."
+            assert _CJK_PATTERN.search(deltas) is None
+            rows = asyncio.run(_read_commentaries(analysis_id))
+            assert len(rows) == 1
+            assert _CJK_PATTERN.search(rows[0].text) is None
+            assert rows[0].model == "fake-stream"
         finally:
             asyncio.run(_delete_game(analysis_id))
 
