@@ -8,6 +8,21 @@
 
 ### Added
 
+- **Замороженный eval-набор и `BackendRouter` (итерация 58, T-124/T-125):**
+  `tests/fixtures/eval_games.json` фиксирует **5 PGN-партий** Moscow zt 1964
+  (Stein–Geller, Stein–Suetin, Bronstein–Spassky, Bronstein–Kholmov,
+  Bronstein–Stein) с `game_id=-1..-5` и sha256 каждого PGN;
+  `scripts/evaluate_llm.py` по умолчанию берёт партии из файла
+  (`--frozen-set`/`--frozen-file`, режим БД — только явный
+  `--no-frozen-set --source ...`), что даёт **same-sample** сравнение версий
+  модели (T-024/KI-023). В `app/llm/router.py` появился `BackendRouter`:
+  для уровня `club` сначала LM Studio с таймаутом
+  `LLM_ROUTER_LOCAL_TIMEOUT_S=2` и без ретраев, при
+  `httpx.ConnectError`/таймауте — лог `local_gpu_unavailable` и fallback в
+  DeepSeek; circuit-breaker с `LLM_ROUTER_COOLDOWN_S=60`; `beginner`
+  остаётся строго локальным, `gm` — напрямую DeepSeek (SPEC §10, T-123).
+  Тесты: `tests/unit/test_llm_router.py`, `tests/unit/test_llm.py`,
+  `tests/unit/test_evaluate_llm_frozen.py`.
 - **CJK-фильтр chat-SSE (KI-060, итерация 57):** `CjkStreamBuffer` вынесен
   из `app/commentary/streaming.py` в общий `app/streaming.py` (комментарий
   ре-экспортирует его, поведение не изменилось), а `app/chat/streaming.py`

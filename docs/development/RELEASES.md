@@ -3497,3 +3497,70 @@ billing-ом аккаунта (внешний блокер, не код).
   дрейфа не устранена.
 - На v4-eval проверить, что `evaluate_llm.py` не падает на Stockfish-ошибках
   отдельных партий и пишет error-строки по уровням.
+
+## Итерация 58 — Eval Freeze & BackendRouter (T-124, T-125, T-123)
+
+**Дата:** 2026-11-06
+**Статус:** ✅ завершена — eval-набор заморожен (same-sample сравнение),
+`BackendRouter` local-first с fallback в DeepSeek; `pytest`/`ruff`/`mypy`
+зелёные. GitHub Actions разблокирован после устранения billing-проблемы
+аккаунта (внешний блокер итераций 56–57 снят).
+**Отчёт:** `docs/development/reports/v1.5.0/ITERATION-58.md`
+
+### Что сделано
+
+- [x] **T-124. Замороженный eval-набор.** `tests/fixtures/eval_games.json`
+  фиксирует **5 PGN-партий** Moscow zt 1964 (Stein–Geller, Stein–Suetin,
+  Bronstein–Spassky, Bronstein–Kholmov, Bronstein–Stein) с
+  `game_id=-1..-5` и sha256 каждого PGN. `scripts/evaluate_llm.py` по
+  умолчанию (`--frozen-set`) берёт партии только из файла; добавлены
+  `--frozen-file`, guard «`--source` несовместим с frozen», отдельный
+  `--no-frozen-set` для режима БД. Отчёт и JSON помечают frozen-партии.
+  Тесты — `tests/unit/test_evaluate_llm_frozen.py` (**19**).
+- [x] **T-125. `BackendRouter` для `club`.** `app/llm/router.py`:
+  local-first (`LM Studio` с таймаутом 2 с и без ретраев) → при
+  `httpx.ConnectError`/`httpx.TimeoutException`/`LLMTimeoutError` (включая
+  обёрнутые в `LLMError` причины) лог `local_gpu_unavailable` и fallback в
+  DeepSeek; circuit-breaker (`LLM_ROUTER_COOLDOWN_S=60`) не дёргает мёртвый
+  GPU каждый запрос; `stream_generate` переключается только до первого
+  чанка. `beginner` остаётся строго локальным, `gm` — напрямую DeepSeek.
+  Конфиг — `LLM_ROUTER_LOCAL_TIMEOUT_S`/`LLM_ROUTER_COOLDOWN_S`. Тесты —
+  `tests/unit/test_llm_router.py` (**24**) и 2 factory-теста в
+  `tests/unit/test_llm.py` (fallback в облако, local-only без ключа).
+- [x] **Прогрев переведён на `beginner`.** `app/llm/warmup.py` больше не
+  использует `club`-роутер: иначе при выключенном GPU прогрев уходил бы в
+  облако и тратил токены.
+- [x] **Документация.** `SPEC.md` §3/§10 (роль fallback и приватность),
+  `tests/fixtures/README.md`, `LLM_EVAL.md` (пометка о замороженном
+  наборе), `CHANGELOG.md`, этот раздел, `TODO.md` (T-124/T-125, статус
+  T-123), `README.md` (счётчик тестов, итерация).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Live-проверка fallback на реальном GPU/DeepSeek | В среде нет доступной LM Studio и GPU; поведение покрыто mock-httpx и фейковыми бэкендами, live-путь проверит T-123 после туннеля | T-123 |
+| Полный v4-eval на замороженном наборе | Ждёт GPU и обучение v4 на 556 записях (T-104b); сейчас проверена инфраструктура набора, а не качество модели | T-104b, KI-023 |
+| Reverse SSH GPU tunnel | `BackendRouter` — только первая половина T-123; сам туннель, облачный `VLLM_BASE_URL` и live-переключение остаются | T-123 |
+
+### Метрики
+
+- **Новые тесты:** **45** — 19 eval-frozen, 24 router, 2 factory-fallback.
+- **Backend-тесты:** **1356 passed, 15 skipped, 1 deselected, 1 xfailed**
+  (208.12 с, exit 0; CI-подобное окружение: PostgreSQL `5437`, Redis
+  `6385`, реальный Stockfish; deselected — live DeepSeek-тест, в CI он
+  скипается без ключа; 15 skip — 9 live LM Studio и 6 env-зависимых
+  `token_budget`).
+- **ruff:** `All checks passed!`; **mypy app:** `Success: no issues found in
+  91 source files`; **alembic check:** `No new upgrade operations detected`.
+- **GitHub Actions:** прогон после пуша — см. §3 отчёта
+  `ITERATION-58.md` (billing-блокер снят, запуск без ошибки оплаты).
+
+### Что дальше
+
+- Обучить v4 на 556 записях и прогнать `evaluate_llm.py` на замороженном
+  наборе — получить первые честные same-sample дельты к v1/v2/v3/baseline.
+- T-123: reverse SSH-туннель до локальной станции с RTX 3060 + cloud-конфиг;
+  live-тест fallback `local → DeepSeek`.
+- При необходимости расширить замороженный набор до 10–30 партий новой
+  версией `schema_version` (историю сравнений не переписывать).

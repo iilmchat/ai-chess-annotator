@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-1000_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-1356_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-129_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -390,8 +390,8 @@ docker compose -f docker-compose.observability.yml up -d
 | Показатель | Значение |
 |---|---|
 | Версия | **v1.2.0** (KI-030 **Closed** в итерации 48: LoRA 3B/7B — 2.87/3.33 против zero-shot 4B 4.40/10, возврат к 4B; пересборка golden dataset — T-104b; KI-060 — языковой дрейф 7B) |
-| Итерация | **40 — Stripe Checkout + webhook (T-083), billing UI (T-084), FinOps из `users.tier` (T-085)**; итерации 1–39 закрыты |
-| Backend-тесты | **1029 passed, 3 skipped, 1 xfailed** (85 файлов, прогон итерации 40, 132.22 с; skip — 2 cairo-кейса на Windows-dev и `DEEPSEEK_API_KEY`, `xfailed` — маркер KI-012) |
+| Итерация | **58 — Eval Freeze & BackendRouter (T-124/T-125)**: замороженный eval-набор из 5 PGN (same-sample сравнение), local-first fallback `club` → DeepSeek; итерации 1–57 закрыты |
+| Backend-тесты | **1356 passed, 15 skipped, 1 deselected, 1 xfailed** (91 файл, прогон итерации 58 против локальных PostgreSQL/Redis, 208.12 с; skip — 9 live LM Studio и 6 env-зависимых `token_budget`, `xfailed` — маркер KI-012) |
 | Frontend-тесты | **132 passed** (13 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, billing-API, auth-flow, PDF-API, eval, PGN-экспорт, варианты, загрузка PGN, стрелки; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **16** (15 ревизий, head `f2b3c4d5e6a7`; `llm_calls` — durable-история вызовов LLM, `usage_daily` — FinOps-агрегат, `engine_cache` — кэш MultiPV Stockfish, `export_jobs` — фоновые выгрузки, `users.is_verified` — email-верификация, `users.tier` + `stripe_customer_id` — подписка) |

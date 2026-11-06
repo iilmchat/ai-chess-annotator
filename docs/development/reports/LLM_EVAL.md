@@ -5,6 +5,17 @@
 > **Текущая модель:** `qwen-7b-tokenizer_gguf-v3` (LoRA 7B, 50 PGN-партий DeepSeek)
 > **Генерация:** `club` → LM Studio (`VLLM_MODEL`); `gm` → DeepSeek
 
+> **Итерация 58:** `scripts/evaluate_llm.py` теперь по умолчанию использует
+> **замороженный набор** `tests/fixtures/eval_games.json` — те же 5 партий
+> Moscow zt 1964 (Stein–Geller, Stein–Suetin, Bronstein–Spassky,
+> Bronstein–Kholmov, Bronstein–Stein), что и в прогонах итерации 16. Режим
+> случайных партий из RAG доступен только явным
+> `--no-frozen-set --source ...`. Исторические таблицы ниже (v1/v2/v3 и
+> baseline) сохранены как есть: их дельты межвыборочные, а следующий прогон
+> v4 на замороженном наборе даст первое честное same-sample сравнение.
+> `club` при недоступном LM Studio уходит в DeepSeek через `BackendRouter`
+> (T-125).
+
 ## Методика
 
 - Партий: **5** (самые короткие аннотированные партии из RAG).

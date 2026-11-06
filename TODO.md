@@ -1248,6 +1248,31 @@
   автоматический fallback на DeepSeek; метрики/логи выбора маршрута;
   конфиг через env (URL туннеля, таймауты, cooldown); unit-тесты
   роутера (reachable/unreachable/circuit-open/fallback).
+  **Статус итерации 58:** доставлена первая половина — `BackendRouter`
+  (T-125) с local-first fallback, circuit-breaker'ом и env-конфигом
+  `LLM_ROUTER_LOCAL_TIMEOUT_S`/`LLM_ROUTER_COOLDOWN_S`; остаётся сам
+  reverse SSH-туннель и переключение `VLLM_BASE_URL` на облачный адрес
+  туннеля (T-123).
+- **T-124.** Замороженный eval-набор для same-sample сравнения (T-024,
+  KI-023). **[x]** — выполнено в итерации 58: `tests/fixtures/eval_games.json`
+  фиксирует **5 PGN-партий** (Stein–Geller, Stein–Suetin,
+  Bronstein–Spassky, Bronstein–Kholmov, Bronstein–Stein, Moscow zt 1964) с
+  `game_id=-1..-5` и sha256 каждого PGN; `scripts/evaluate_llm.py` по
+  умолчанию берёт партии из файла (`--frozen-set`, `--frozen-file`), режим
+  БД доступен только явным `--no-frozen-set --source ...`; тесты
+  `tests/unit/test_evaluate_llm_frozen.py`. Это устраняет проблему
+  итерации 52: eval-набор больше не меняется от прогона к прогону.
+- **T-125.** `BackendRouter`: local-first fallback для уровня `club`
+  (T-123, SPEC §10). **[x]** — выполнено в итерации 58: `app/llm/router.py`
+  (`BackendRouter` поверх `BaseLLMClient`) пробует LM Studio с таймаутом
+  `LLM_ROUTER_LOCAL_TIMEOUT_S=2` и без ретраев; на
+  `httpx.ConnectError`/`TimeoutException`/`LLMTimeoutError` (включая
+  обёрнутые в `LLMError` причины) логирует `local_gpu_unavailable` и
+  переключается на DeepSeek; circuit-breaker с
+  `LLM_ROUTER_COOLDOWN_S=60` не дёргает мёртвый GPU каждый запрос;
+  `beginner` остаётся строго локальным, `gm` — напрямую DeepSeek. Тесты —
+  `tests/unit/test_llm_router.py` (18) + factory-тесты в
+  `tests/unit/test_llm.py` (fallback в облако, local-only без ключа).
 
 ---
 
