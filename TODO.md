@@ -1228,6 +1228,20 @@
   передаётся в `OpenAICompatibleClient` вместо `LLM_MAX_TOKENS=1024`,
   который обрезал русский текст и давал 729 отказов валидатора из 824
   партий; тесты и документация.
+- **T-123.** Cloud Deployment via Reverse SSH GPU Tunnel.
+  **Зависит от:** T-013 (LLM factory/router).
+  **Что:** по образцу соседнего проекта VetAssistant пробросить порт LM
+  Studio (локальная станция с RTX 3060) на облачный VPS через reverse
+  SSH-туннель, чтобы cloud-backend ходил в локальную модель.
+  **Детали:** `BackendRouter` в `app/llm/factory.py` с circuit-breaker:
+  если локальный GPU доступен через туннель (например,
+  `http://172.18.0.1:8035/v1`) — используем его; если ПК выключен или
+  недоступен — fallback на DeepSeek API.
+  **DoD:** local-first маршрутизация через туннель; circuit-breaker
+  открывается на ошибках соединения/таймаутах с cooldown;
+  автоматический fallback на DeepSeek; метрики/логи выбора маршрута;
+  конфиг через env (URL туннеля, таймауты, cooldown); unit-тесты
+  роутера (reachable/unreachable/circuit-open/fallback).
 
 ---
 
