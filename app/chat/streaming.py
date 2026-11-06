@@ -3,6 +3,11 @@
 События те же, что у комментария: `meta`, `delta`, `done`, `error`.
 Итоговый текст проверяется SAN-валидатором; при нелегальных ходах —
 `event: error` без сохранения.
+
+KI-060 (итерация 57): текст, уходящий в `delta`, проходит через
+:class:`app.streaming.CjkStreamBuffer` — так же, как в комментарии. Legacy
+cache-запись с иероглифами очищается :func:`app.commentary.semantic.sanitize_cjk`;
+если чистить нечего — генерируем ответ заново. В лог — только счётчики.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from app.chat.service import (
     format_selected_ply_context,
     load_chat_system_prompt,
 )
+from app.commentary.semantic import sanitize_cjk
 from app.commentary.service import load_analyses, load_game, pv_positions
 from app.config import Settings, get_settings
 from app.engine.validator import extract_moves_from_text, validate_moves
@@ -38,7 +44,7 @@ from app.llm.prompts import build_fact_package
 from app.llm.tokens import estimate_tokens
 from app.prompts import resolve_language
 from app.security.guardrails import sanitize_user_input
-from app.streaming import chunk_text, sse_event
+from app.streaming import CjkStreamBuffer, chunk_text, sse_event
 
 __all__ = ["stream_chat"]
 
@@ -133,23 +139,35 @@ async def stream_chat(
         )
         lookup_ms = int((time.perf_counter() - lookup_started) * 1000)
         if hit is not None:
-            # KI-046: cache-hit в чате — тоже строка llm_calls (operation=chat).
-            record_cache_hit(latency_ms=lookup_ms)
-            yield _meta_event(
-                model="semantic-cache",
-                level=level,
-                language=lang,
-                selected_ply=selected_ply,
+            # KI-060 (итерация 57): старые cache-записи могли сохраниться до
+            # CJK-фильтра. Клиенту иероглифы не отдаём: чистим текст; если
+            # чистить нечего — считаем кэш непригодным и генерируем заново.
+            cached = sanitize_cjk(hit.text)
+            if not cached.rejected and cached.text.strip():
+                # KI-046: cache-hit в чате — тоже строка llm_calls
+                # (operation=chat).
+                record_cache_hit(latency_ms=lookup_ms)
+                yield _meta_event(
+                    model="semantic-cache",
+                    level=level,
+                    language=lang,
+                    selected_ply=selected_ply,
+                )
+                for chunk in chunk_text(cached.text):
+                    yield sse_event("delta", text=chunk)
+                yield sse_event(
+                    "done",
+                    tokens_used=0,
+                    model="semantic-cache",
+                    validated=True,
+                )
+                return
+            logger.warning(
+                "chat_cache_cjk_dropped",
+                cjk_chars=cached.cjk_chars,
+                cjk_share=round(cached.share, 3),
+                removed_sentences=cached.removed_sentences,
             )
-            for chunk in chunk_text(hit.text):
-                yield sse_event("delta", text=chunk)
-            yield sse_event(
-                "done",
-                tokens_used=0,
-                model="semantic-cache",
-                validated=True,
-            )
-            return
 
         package = build_fact_package(parsed, analyses, level)
         prompt = build_chat_prompt(
@@ -169,22 +187,36 @@ async def stream_chat(
             selected_ply=selected_ply,
         )
 
-        chunks: list[str] = []
+        cjk_filter = CjkStreamBuffer()
+        emitted: list[str] = []
         async for chunk in llm.stream_generate(
             prompt, system_prompt=system_prompt
         ):
-            chunks.append(chunk)
-            yield sse_event("delta", text=chunk)
-
-        reply = "".join(chunks).strip()
-        if not reply:
-            yield sse_event(
-                "error",
-                code="llm_empty",
-                detail=localize_error_detail(
-                    "llm_empty", "Модель вернула пустой ответ", lang
-                ),
+            for safe_chunk in cjk_filter.feed(chunk):
+                emitted.append(safe_chunk)
+                yield sse_event("delta", text=safe_chunk)
+        for safe_chunk in cjk_filter.flush():
+            emitted.append(safe_chunk)
+            yield sse_event("delta", text=safe_chunk)
+        if cjk_filter.stripped_cjk_chars:
+            # В лог — только счётчики, без текста LLM (KI-060).
+            logger.warning(
+                "chat_cjk_stream_stripped",
+                cjk_chars=cjk_filter.stripped_cjk_chars,
+                stripped_units=cjk_filter.stripped_units,
             )
+
+        reply = "".join(emitted).strip()
+        if not reply:
+            detail = (
+                "Модель вернула только китайские иероглифы — ответ "
+                "отфильтрован"
+                if cjk_filter.stripped_cjk_chars
+                else localize_error_detail(
+                    "llm_empty", "Модель вернула пустой ответ", lang
+                )
+            )
+            yield sse_event("error", code="llm_empty", detail=detail)
             return
 
         moves = extract_moves_from_text(reply)
