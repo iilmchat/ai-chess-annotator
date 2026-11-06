@@ -4,7 +4,8 @@
 **Статус:** ✅ завершена — дефолт `LLM_LOCAL_TIMEOUT_S` поднят с 2 до
 **120 с** (иначе живой GPU считался недоступным и `club` всегда уходил в
 DeepSeek), в `evaluate_llm.py` добавлен `--model-name` для same-sample
-сравнения v3/v4; `pytest`/`ruff`/`mypy` зелёные.
+сравнения v3/v4; `pytest`/`ruff`/`mypy` зелёные, GitHub Actions —
+**success** (`42220308972`).
 **Формат:** RULES §2.18 (7 разделов).
 
 **Исходное состояние.** `main` = `5af96ef` (итерация 59: настройки
@@ -77,7 +78,7 @@ exit 0).
 | Линтер | `ruff check .` | `All checks passed!` |
 | Типы | `mypy app scripts/evaluate_llm.py` | `Success: no issues found in 92 source files` |
 | Миграции | `alembic check` | `No new upgrade operations detected.` |
-| CI | GitHub Actions после push | (заполняется после прогона) |
+| CI | GitHub Actions после push | ✅ **success** — run [`42220308972`](https://github.com/iilmchat/ai-chess-annotator/actions/runs/42220308972): backend — **1376 passed, 12 skipped, 1 xfailed** (81.79 с), frontend / e2e / docker — success |
 
 **Skips (15):** 9 — live LM Studio/эмбеддинги (нет GPU в среде); 6 —
 `test_token_budget_api` с env-зависимыми портами (в CI проходят).

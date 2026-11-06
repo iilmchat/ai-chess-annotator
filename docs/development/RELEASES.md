@@ -3685,8 +3685,10 @@ billing-ом аккаунта (внешний блокер, не код).
   `6385`, реальный Stockfish).
 - **ruff:** `All checks passed!`; **mypy:** `Success: no issues found in
   92 source files`; **alembic check:** без изменений.
-- **GitHub Actions:** прогон после пуша — см. §3 отчёта
-  `ITERATION-60.md`.
+- **GitHub Actions:** run
+  [`42220308972`](https://github.com/iilmchat/ai-chess-annotator/actions/runs/42220308972)
+  — **success**: backend `1376 passed, 12 skipped, 1 xfailed` (81.79 с),
+  frontend / e2e / docker — success.
 
 ### Что дальше
 
