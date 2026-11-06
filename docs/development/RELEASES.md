@@ -3627,8 +3627,10 @@ billing-ом аккаунта (внешний блокер, не код).
   91 source files`; **alembic check:** `No new upgrade operations detected`.
 - **Гайд:** 907 строк, 12 разделов + оглавление (28 пунктов), 15 таблиц,
   36 fenced-блоков (powershell/bash/dotenv/text).
-- **GitHub Actions:** прогон после пуша — см. §3 отчёта
-  `ITERATION-59.md`.
+- **GitHub Actions:** run
+  [`42201745114`](https://github.com/iilmchat/ai-chess-annotator/actions/runs/42201745114)
+  — **success**: backend `1366 passed, 12 skipped, 1 xfailed` (107.25 с),
+  frontend / e2e / docker — success.
 
 ### Что дальше
 

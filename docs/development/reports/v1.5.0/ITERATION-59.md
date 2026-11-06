@@ -4,7 +4,8 @@
 **Статус:** ✅ завершена — настройки GPU-туннеля вынесены в `Settings`
 (`LLM_LOCAL_BACKEND_URL`, `LLM_LOCAL_TIMEOUT_S`, `LLM_ROUTER_COOLDOWN_S`),
 написан пошаговый гайд `docs/development/DEPLOYMENT_GPU_TUNNEL.md`;
-`pytest`/`ruff`/`mypy` зелёные.
+`pytest`/`ruff`/`mypy` зелёные; GitHub Actions завершил прогон итерации
+**success** (`42201745114`).
 **Формат:** RULES §2.18 (7 разделов).
 
 **Исходное состояние.** `main` = `a79dede` (итерация 58: замороженный
@@ -75,7 +76,7 @@ exit 0).
 | Линтер | `ruff check .` | `All checks passed!` |
 | Типы | `mypy app` | `Success: no issues found in 91 source files` |
 | Миграции | `alembic check` | `No new upgrade operations detected.` |
-| CI | GitHub Actions после push | (заполняется после прогона; billing-блокер снят в итерации 58) |
+| CI | GitHub Actions после push | ✅ **success** — run [`42201745114`](https://github.com/iilmchat/ai-chess-annotator/actions/runs/42201745114): backend — **1366 passed, 12 skipped, 1 xfailed** (107.25 с), frontend / e2e / docker — success |
 
 **Skips (15):** 9 — live LM Studio/эмбеддинги (нет GPU в среде); 6 —
 `test_token_budget_api` с env-зависимыми портами (в CI проходят).
