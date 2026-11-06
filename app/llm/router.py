@@ -143,6 +143,11 @@ class BackendRouter(BaseLLMClient):
         """Резервный бэкенд (облако) или ``None``."""
         return self._backends[1] if len(self._backends) > 1 else None
 
+    @property
+    def cooldown_s(self) -> float:
+        """Сколько секунд primary пропускается после сбоя (T-123)."""
+        return self._cooldown_s
+
     def set_level(self, level: str | None) -> None:
         """Запомнить уровень и пробросить его во все бэкенды."""
         super().set_level(level)

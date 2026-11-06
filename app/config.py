@@ -258,10 +258,16 @@ class Settings(BaseSettings):
     llm_timeout_s: float = 120.0
     llm_max_retries: int = 2
     llm_retry_backoff_s: float = 0.5
-    #: T-123 / итерация 58: local-first роутер для уровня `club`.
-    #: Локальному бэкенду даём короткий таймаут, чтобы fallback в облако
-    #: срабатывал быстро, а не через 120 с production-таймаута.
-    llm_router_local_timeout_s: float = 2.0
+    #: T-123 / итерация 59: адрес локального LLM-бэкенда (LM Studio) глазами
+    #: приложения. На dev-машине — прямой адрес; на облачном VPS — адрес
+    #: обратного SSH-туннеля (например, ``http://172.17.0.1:8034/v1``).
+    #: Если пусто — используется исторический `VLLM_BASE_URL` (совместимость
+    #: с dev-окружениями); см. `local_llm_base_url`.
+    llm_local_backend_url: str | None = None
+    #: Fail-fast таймаут локального бэкенда: короткий, чтобы fallback в
+    #: облако срабатывал быстро, а не через 120 с `LLM_TIMEOUT_S`.
+    #: При медленном туннеле/длинных пакетах фактов значение можно поднять.
+    llm_local_timeout_s: float = 2.0
     #: Circuit-breaker роутера: сколько секунд не пробовать локальный GPU
     #: после ошибки соединения/таймаута (0 — пробовать каждый запрос).
     llm_router_cooldown_s: float = 60.0
@@ -357,6 +363,23 @@ class Settings(BaseSettings):
         if adapter is not None and self.lora_adapter_available:
             return adapter.name or self.vllm_model
         return self.vllm_model
+
+    @property
+    def local_llm_base_url(self) -> str:
+        """Адрес локального LLM-бэкенда с учётом туннеля (T-123).
+
+        Приоритет: ``LLM_LOCAL_BACKEND_URL`` → исторический ``VLLM_BASE_URL``.
+        На облачном VPS первая переменная указывает на вход обратного
+        SSH-туннеля (например, ``http://172.17.0.1:8034/v1``), через который
+        backend видит LM Studio на домашней Windows-машине. На dev-машине
+        обе настройки совпадают — ``http://127.0.0.1:8034/v1``.
+
+        Хвостовой ``/`` убирается, чтобы `endpoint` не получал двойной слэш.
+        """
+        configured = (self.llm_local_backend_url or "").strip().rstrip("/")
+        if configured:
+            return configured
+        return self.vllm_base_url.strip().rstrip("/")
 
     # Observability
     #: Retention `llm_calls` (KI-048): сколько последних дней хранить.

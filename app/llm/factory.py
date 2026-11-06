@@ -4,9 +4,13 @@
 
 | Уровень | Провайдер | Настройки |
 | :--- | :--- | :--- |
-| `beginner` | LM Studio (локально) | `vllm_base_url`, `vllm_model`, `vllm_api_key` |
-| `club` | LM Studio (локально) → DeepSeek (fallback) | локальные настройки + `BackendRouter` |
-| `gm` | DeepSeek (облако) | `deepseek_base_url`, `deepseek_model`, `deepseek_api_key` |
+| `beginner` | LM Studio (локально) | `LLM_LOCAL_BACKEND_URL`, `VLLM_*` |
+| `club` | LM Studio → DeepSeek (fallback) | `LLM_LOCAL_*`, `LLM_ROUTER_*` |
+| `gm` | DeepSeek (облако) | `DEEPSEEK_*` |
+
+`LLM_LOCAL_BACKEND_URL` — адрес LM Studio (на VPS — вход обратного
+SSH-туннеля, см. `docs/development/DEPLOYMENT_GPU_TUNNEL.md`); пусто —
+используется legacy `VLLM_BASE_URL`.
 
 Почему так: новичку нужна дешёвая локальная модель и приватность партии
 (она не уходит в облако) — уровень `beginner` остаётся строго локальным
@@ -61,11 +65,17 @@ def _local_client(
     cfg: Settings,
     level: str,
     *,
+    base_url: str | None = None,
     timeout_s: float | None = None,
     max_retries: int | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> OpenAICompatibleClient:
-    """Собрать клиент локальной LM Studio (с учётом LoRA-адаптера)."""
+    """Собрать клиент локальной LM Studio (с учётом LoRA-адаптера).
+
+    Args:
+        base_url: адрес LM Studio; по умолчанию — `cfg.local_llm_base_url`
+            (учитывает `LLM_LOCAL_BACKEND_URL`/`VLLM_BASE_URL` и туннель).
+    """
     # T-104: если LoRA-адаптер существует, vLLM принимает его basename
     # как имя модели (нужен запуск с --lora-modules). Если LORA_ADAPTER_PATH
     # задан, но пути нет — работаем базовой моделью и явно предупреждаем.
@@ -85,7 +95,7 @@ def _local_client(
             reason="path missing or adapter_config.json not found",
         )
     return OpenAICompatibleClient(
-        base_url=cfg.vllm_base_url,
+        base_url=base_url if base_url is not None else cfg.local_llm_base_url,
         model=cfg.lora_model,
         api_key=cfg.vllm_api_key,
         provider_name="lmstudio",
@@ -160,7 +170,7 @@ def get_llm_client(
             local = _local_client(
                 cfg,
                 level,
-                timeout_s=cfg.llm_router_local_timeout_s,
+                timeout_s=cfg.llm_local_timeout_s,
                 max_retries=0,
                 client=client,
             )

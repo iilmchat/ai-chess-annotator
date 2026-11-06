@@ -686,3 +686,107 @@ async def test_stream_reports_cancellation(
 
     await client.aclose()
 
+
+
+# --- T-123 / итерация 59: настройки GPU-туннеля ----------------------------
+
+
+def test_local_llm_base_url_defaults_to_lmstudio() -> None:
+    """Без env-настроек роутер смотрит на прямой LM Studio."""
+    cfg = Settings(_env_file=None)
+
+    assert cfg.local_llm_base_url == "http://127.0.0.1:8034/v1"
+    assert cfg.llm_local_timeout_s == pytest.approx(2.0)
+    assert cfg.llm_router_cooldown_s == pytest.approx(60.0)
+
+
+def test_tunnel_settings_are_read_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`LLM_LOCAL_*` / cooldown читаются из окружения (деплой на VPS)."""
+    monkeypatch.setenv("LLM_LOCAL_BACKEND_URL", "http://172.17.0.1:8034/v1/")
+    monkeypatch.setenv("LLM_LOCAL_TIMEOUT_S", "3.5")
+    monkeypatch.setenv("LLM_ROUTER_COOLDOWN_S", "45")
+
+    cfg = Settings(_env_file=None)
+
+    assert cfg.local_llm_base_url == "http://172.17.0.1:8034/v1"
+    assert cfg.llm_local_timeout_s == pytest.approx(3.5)
+    assert cfg.llm_router_cooldown_s == pytest.approx(45.0)
+
+
+def test_local_llm_base_url_prefers_tunnel_over_legacy_vllm() -> None:
+    cfg = Settings(
+        _env_file=None,
+        vllm_base_url="http://legacy:8035/v1",
+        llm_local_backend_url="http://172.17.0.1:8034/v1/",
+    )
+
+    assert cfg.local_llm_base_url == "http://172.17.0.1:8034/v1"
+
+
+def test_local_llm_base_url_falls_back_to_legacy_vllm() -> None:
+    """Пустой `LLM_LOCAL_BACKEND_URL` не ломает старые dev-окружения."""
+    cfg = Settings(_env_file=None, vllm_base_url="http://legacy:8035/v1")
+
+    assert cfg.local_llm_base_url == "http://legacy:8035/v1"
+
+
+async def test_factory_club_uses_tunnel_settings() -> None:
+    """Club-роутер берёт URL, таймаут и cooldown из Settings."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=_completion())
+
+    client = _mock_client(handler)
+    cfg = Settings(
+        _env_file=None,
+        vllm_base_url="http://127.0.0.1:8034/v1",
+        llm_local_backend_url="http://172.17.0.1:8034/v1",
+        llm_local_timeout_s=3.5,
+        llm_router_cooldown_s=45.0,
+        deepseek_base_url="https://api.deepseek.com",
+        deepseek_api_key="test-deepseek-key",
+    )
+    llm = get_llm_client("club", cfg, client=client)
+
+    assert isinstance(llm, BackendRouter)
+    assert llm.cooldown_s == pytest.approx(45.0)
+    assert llm.primary.timeout_s == pytest.approx(3.5)
+    assert llm.primary.endpoint == "http://172.17.0.1:8034/v1/chat/completions"
+    assert llm.fallback is not None
+    assert (
+        llm.fallback.endpoint
+        == "https://api.deepseek.com/chat/completions"
+    )
+
+    result = await llm.complete("привет")
+
+    assert result.usage.provider == "lmstudio"
+    assert str(captured[0].url) == "http://172.17.0.1:8034/v1/chat/completions"
+
+    await client.aclose()
+
+
+async def test_factory_beginner_uses_tunnel_settings() -> None:
+    """`beginner` тоже ходит через туннель: иначе на VPS локальной модели нет."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=_completion())
+
+    client = _mock_client(handler)
+    cfg = Settings(
+        _env_file=None,
+        llm_local_backend_url="http://172.17.0.1:8034/v1",
+    )
+    llm = get_llm_client("beginner", cfg, client=client)
+
+    await llm.generate("привет")
+
+    assert str(captured[0].url) == "http://172.17.0.1:8034/v1/chat/completions"
+
+    await client.aclose()
