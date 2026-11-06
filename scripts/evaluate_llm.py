@@ -11,11 +11,15 @@
 
 Модель генерации задаётся настройками (`VLLM_MODEL` или
 `LORA_ADAPTER_PATH`), а не кодом скрипта: `qwen-7b-tokenizer` (v2)
-оценивается теми же командами, что и прежние адаптеры.
+оценивается теми же командами, что и прежние адаптеры. Метка версии для
+отчёта/JSON задаётся флагом `--model-name` (итерация 60): v3 и v4 гоняются
+на одном замороженном наборе, поэтому версия должна быть явной — API может
+вернуть базовое имя модели вместо имени LoRA-адаптера.
 
 Запуск:
 
     python scripts/evaluate_llm.py --games 5
+    python scripts/evaluate_llm.py --games 5 --model-name qwen-7b-tokenizer_gguf-v3
 
 По умолчанию партии берутся из **замороженного набора**
 `tests/fixtures/eval_games.json` (5 партий Moscow zt 1964) — это обеспечивает
@@ -75,6 +79,10 @@ DEFAULT_JSON = PROJECT_ROOT / "docs" / "development" / "reports" / "llm_eval_res
 #: same-sample сравнения версий модели. Менять состав/PGN нельзя — иначе
 #: результаты прошлых прогонов перестают быть сопоставимыми.
 DEFAULT_FROZEN_SET = PROJECT_ROOT / "tests" / "fixtures" / "eval_games.json"
+
+#: Метка версии модели по умолчанию для отчёта/JSON (итерация 60).
+#: `--model-name` переопределяет её при прогоне v3/v4 на одном наборе.
+DEFAULT_MODEL_NAME = "qwen-7b-tokenizer_gguf-v4"
 
 JUDGE_SYSTEM = (
     "Ты — строгий шахматный редактор и методолог оценки. "
@@ -229,6 +237,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help=(
             "фильтр по annotated_games.source (например, new_samples); "
             "только вместе с --no-frozen-set"
+        ),
+    )
+    parser.add_argument(
+        "--model-name",
+        default=DEFAULT_MODEL_NAME,
+        help=(
+            "метка версии модели для отчёта/JSON (по умолчанию "
+            f"{DEFAULT_MODEL_NAME}); нужна, чтобы v3 и v4 на одном frozen "
+            "set не путались"
         ),
     )
     parser.add_argument(
@@ -683,6 +700,7 @@ def _report(
     timeout_s: float,
     *,
     frozen_path: Path | None = None,
+    model_name: str | None = None,
 ) -> str:
     overall = _averages(rows)
     scored = [row for row in rows if row.scores]
@@ -702,13 +720,22 @@ def _report(
             "(самые короткие аннотированные партии из RAG)."
         )
         generation_line = "> **Генерация:** `club` → LM Studio, `gm` → DeepSeek"
-    lines = [
+    header_lines = [
         "# LLM-as-judge: оценка комментариев (T-023)",
         "",
         f"> **Дата:** {date.today().isoformat()} · "
         "**Статус:** завершено (MVP v0.1.0)",
         "> **Скрипт:** `scripts/evaluate_llm.py` · **Судья:** DeepSeek",
         generation_line,
+    ]
+    if model_name:
+        # Итерация 60: явная метка версии — v3 и v4 оцениваются на одном
+        # frozen set, а API может вернуть базовое имя вместо имени адаптера.
+        header_lines.append(
+            f"> **Модель:** `{model_name}` (метка eval; API-имя — в таблице)"
+        )
+    lines = [
+        *header_lines,
         "",
         "## Методика",
         "",
@@ -862,7 +889,21 @@ def _escape(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")[:220]
 
 
-def _dump_json(rows: list[CommentaryRow], path: Path) -> None:
+def _dump_json(
+    rows: list[CommentaryRow],
+    path: Path,
+    *,
+    model_name: str | None = None,
+) -> None:
+    """Записать сырые оценки в JSON.
+
+    Args:
+        rows: строки комментариев с оценками.
+        path: куда писать.
+        model_name: метка версии модели (итерация 60) — попадает в каждую
+            запись как ``model_name``, чтобы прогоны v3/v4 на одном frozen
+            set различались даже если API вернул одинаковое имя модели.
+    """
     payload: list[dict[str, Any]] = []
     for row in rows:
         cjk_chars, cjk_share_value = cjk_stats(row.text)
@@ -877,7 +918,10 @@ def _dump_json(rows: list[CommentaryRow], path: Path) -> None:
                 "event": row.game.event,
                 "level": row.level,
                 "commentary_id": row.commentary_id,
+                # `model` — имя, которое вернул API; `model_name` — метка
+                # версии из `--model-name` (для same-sample сравнений).
                 "model": row.model,
+                "model_name": model_name,
                 "tokens_used": row.tokens_used,
                 "attempts": row.attempts,
                 "validated": row.validated,
@@ -936,6 +980,10 @@ def main(argv: list[str] | None = None) -> int:
     if not levels or any(level not in {"beginner", "club", "gm"} for level in levels):
         print("--levels: ожидается beginner, club или gm", file=sys.stderr)
         return 2
+    model_name = (args.model_name or "").strip()
+    if not model_name:
+        print("--model-name не может быть пустым", file=sys.stderr)
+        return 2
 
     source = (args.source or "").strip() or None
     if source is not None and args.frozen_set:
@@ -974,6 +1022,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Партий: {len(games)}, уровни: {', '.join(levels)}"
         + (f", источник: {source}" if source else "")
     )
+    print(f"Модель (метка eval): {model_name}")
     rows = _judge_cli(games, levels, settings, args.timeout_s)
     overall = _averages(rows)
     average = sum(overall.values()) / len(overall) if overall else 0.0
@@ -988,13 +1037,19 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     report = _report(
-        rows, games, levels, args.timeout_s, frozen_path=frozen_path
+        rows,
+        games,
+        levels,
+        args.timeout_s,
+        frozen_path=frozen_path,
+        model_name=model_name,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(report, encoding="utf-8")
-    _dump_json(rows, args.json_output)
+    _dump_json(rows, args.json_output, model_name=model_name)
 
     print("--- ИТОГ ---")
+    print(f"Модель: {model_name}")
     for scale, value in overall.items():
         print(f"{scale}: {value:.2f}/10")
     print(f"Средняя: {average:.2f}/10")
