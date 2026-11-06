@@ -1241,7 +1241,7 @@
   SSH-туннель, чтобы cloud-backend ходил в локальную модель.
   **Детали:** `BackendRouter` в `app/llm/factory.py` с circuit-breaker:
   если локальный GPU доступен через туннель (например,
-  `http://172.18.0.1:8035/v1`) — используем его; если ПК выключен или
+  `http://172.17.0.1:8034/v1`) — используем его; если ПК выключен или
   недоступен — fallback на DeepSeek API.
   **DoD:** local-first маршрутизация через туннель; circuit-breaker
   открывается на ошибках соединения/таймаутах с cooldown;
@@ -1253,6 +1253,22 @@
   `LLM_ROUTER_LOCAL_TIMEOUT_S`/`LLM_ROUTER_COOLDOWN_S`; остаётся сам
   reverse SSH-туннель и переключение `VLLM_BASE_URL` на облачный адрес
   туннеля (T-123).
+  **Статус итерации 59:** конфиг и документация готовы (T-126):
+  `LLM_LOCAL_BACKEND_URL`, `LLM_LOCAL_TIMEOUT_S`,
+  `LLM_ROUTER_COOLDOWN_S` в `Settings` + гайд
+  `docs/development/DEPLOYMENT_GPU_TUNNEL.md`; остаётся практический
+  деплой на Selectel и живая проверка туннеля.
+- **T-126.** Reverse SSH GPU tunnel: конфиг и документация (T-123).
+  **[x]** — выполнено в итерации 59: `Settings` получил
+  `LLM_LOCAL_BACKEND_URL` (адрес LM Studio глазами приложения; на VPS —
+  вход туннеля, пусто → legacy `VLLM_BASE_URL`), `LLM_LOCAL_TIMEOUT_S=2`
+  (fail-fast локального бэкенда) и `LLM_ROUTER_COOLDOWN_S=60`;
+  `BackendRouter`/factory берут их из `Settings`, `beginner` тоже ходит
+  через `LLM_LOCAL_BACKEND_URL`; `BackendRouter.cooldown_s` доступен
+  снаружи. Гайд `docs/development/DEPLOYMENT_GPU_TUNNEL.md`: Windows +
+  LM Studio → Selectel VPS, `ssh -N -R`, GatewayPorts, проверка из
+  контейнера, fallback при выключении ПК, troubleshooting, rollback.
+  Тесты: `tests/unit/test_llm.py` (+6).
 - **T-124.** Замороженный eval-набор для same-sample сравнения (T-024,
   KI-023). **[x]** — выполнено в итерации 58: `tests/fixtures/eval_games.json`
   фиксирует **5 PGN-партий** (Stein–Geller, Stein–Suetin,
@@ -1265,7 +1281,7 @@
 - **T-125.** `BackendRouter`: local-first fallback для уровня `club`
   (T-123, SPEC §10). **[x]** — выполнено в итерации 58: `app/llm/router.py`
   (`BackendRouter` поверх `BaseLLMClient`) пробует LM Studio с таймаутом
-  `LLM_ROUTER_LOCAL_TIMEOUT_S=2` и без ретраев; на
+  `LLM_LOCAL_TIMEOUT_S=2` и без ретраев; на
   `httpx.ConnectError`/`TimeoutException`/`LLMTimeoutError` (включая
   обёрнутые в `LLMError` причины) логирует `local_gpu_unavailable` и
   переключается на DeepSeek; circuit-breaker с

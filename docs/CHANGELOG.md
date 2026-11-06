@@ -8,6 +8,20 @@
 
 ### Added
 
+- **GPU-туннель: настройки в `Settings` и гайд (T-123/T-126, итерация 59):**
+  `LLM_LOCAL_BACKEND_URL` — адрес LM Studio глазами приложения (на dev —
+  `http://127.0.0.1:8034/v1`, на облачном VPS — вход обратного SSH-туннеля,
+  например `http://172.17.0.1:8034/v1`; пусто → legacy `VLLM_BASE_URL`);
+  `LLM_LOCAL_TIMEOUT_S=2` — fail-fast таймаут локального бэкенда
+  (переименован из `LLM_ROUTER_LOCAL_TIMEOUT_S`); `LLM_ROUTER_COOLDOWN_S=60`
+  — cooldown circuit-breaker'а. `BackendRouter`/factory берут значения из
+  `Settings`; `beginner` тоже ходит через `LLM_LOCAL_BACKEND_URL` (на VPS
+  локальная модель доступна только через туннель); добавлен публичный
+  `BackendRouter.cooldown_s`. Новый гайд
+  [`docs/development/DEPLOYMENT_GPU_TUNNEL.md`](development/DEPLOYMENT_GPU_TUNNEL.md):
+  Windows + LM Studio → Selectel VPS (Ubuntu), `ssh -N -R`, GatewayPorts,
+  проверка из контейнера, fallback при выключении ПК, troubleshooting,
+  rollback. Тесты: `tests/unit/test_llm.py` (+6).
 - **Замороженный eval-набор и `BackendRouter` (итерация 58, T-124/T-125):**
   `tests/fixtures/eval_games.json` фиксирует **5 PGN-партий** Moscow zt 1964
   (Stein–Geller, Stein–Suetin, Bronstein–Spassky, Bronstein–Kholmov,
@@ -22,7 +36,9 @@
   DeepSeek; circuit-breaker с `LLM_ROUTER_COOLDOWN_S=60`; `beginner`
   остаётся строго локальным, `gm` — напрямую DeepSeek (SPEC §10, T-123).
   Тесты: `tests/unit/test_llm_router.py`, `tests/unit/test_llm.py`,
-  `tests/unit/test_evaluate_llm_frozen.py`.
+  `tests/unit/test_evaluate_llm_frozen.py`. С итерации 59 таймаут
+  называется `LLM_LOCAL_TIMEOUT_S`, а адрес локального бэкенда —
+  `LLM_LOCAL_BACKEND_URL`.
 - **CJK-фильтр chat-SSE (KI-060, итерация 57):** `CjkStreamBuffer` вынесен
   из `app/commentary/streaming.py` в общий `app/streaming.py` (комментарий
   ре-экспортирует его, поведение не изменилось), а `app/chat/streaming.py`

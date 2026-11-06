@@ -40,7 +40,7 @@ Actions (итерации 56–57) устранён на стороне акка
 | `app/llm/factory.py` | `_local_client`/`_deepseek_client`; для `club` — `BackendRouter([local(2с, 0 ретраев), deepseek?])`; `beginner` — прямой локальный, `gm` — прямой DeepSeek; docstring-таблица маршрутизации |
 | `app/llm/router.py` → `app/llm/__init__.py` | Ре-экспорт `BackendRouter`, `is_unavailable_error` |
 | `app/llm/warmup.py` | Прогрев через `beginner` (прямой локальный), а не `club` — иначе при выключенном GPU он уходил бы в облако |
-| `app/config.py` | `LLM_ROUTER_LOCAL_TIMEOUT_S=2.0`, `LLM_ROUTER_COOLDOWN_S=60.0` |
+| `app/config.py` | `LLM_ROUTER_LOCAL_TIMEOUT_S=2.0`, `LLM_ROUTER_COOLDOWN_S=60.0` (в итерации 59 таймаут переименован в `LLM_LOCAL_TIMEOUT_S`, добавлен `LLM_LOCAL_BACKEND_URL`) |
 | `.env.example` | Те же две переменные с комментариями |
 | `tests/unit/test_llm.py` | Club-тест переписан на `BackendRouter`; +2 теста: fallback в DeepSeek при недоступном local, local-only без ключа |
 | `tests/fixtures/README.md` | Раздел про `eval_games.json`: инварианты, зачем, как менять |

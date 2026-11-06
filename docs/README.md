@@ -27,6 +27,7 @@
 | [ARCHITECTURE.md](development/ARCHITECTURE.md) | Фактическая архитектура v1.0.0: C4-диаграммы (Context/Container), модули, потоки данных, API, БД, локализация, frontend, Docker |
 | [DESIGN_ADMIN_AND_OPS.md](development/DESIGN_ADMIN_AND_OPS.md) | Production hardening: админ-панель, prompt registry, OTel-трейсинг, FinOps, semantic cache, guardrails, audit (T-028…T-035) |
 | [GETTING_STARTED.md](development/GETTING_STARTED.md) | Разворачивание за ~20 минут: Docker, venv, миграции, uvicorn, фронтенд, troubleshooting |
+| [DEPLOYMENT_GPU_TUNNEL.md](development/DEPLOYMENT_GPU_TUNNEL.md) | Деплой на облачный VPS (Selectel) + обратный SSH-туннель до домашней GPU (LM Studio): sshd `GatewayPorts`, проверка из контейнера, `LLM_LOCAL_*`, fallback в DeepSeek, troubleshooting, rollback (T-123/T-126, итерация 59) |
 | [../TODO.md](../TODO.md) | Последовательность задач T-001…T-119 с зависимостями, DoD и оценками |
 
 ### Пользователю и QA

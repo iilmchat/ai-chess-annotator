@@ -3524,7 +3524,9 @@ billing-ом аккаунта (внешний блокер, не код).
   DeepSeek; circuit-breaker (`LLM_ROUTER_COOLDOWN_S=60`) не дёргает мёртвый
   GPU каждый запрос; `stream_generate` переключается только до первого
   чанка. `beginner` остаётся строго локальным, `gm` — напрямую DeepSeek.
-  Конфиг — `LLM_ROUTER_LOCAL_TIMEOUT_S`/`LLM_ROUTER_COOLDOWN_S`. Тесты —
+  Конфиг — `LLM_ROUTER_LOCAL_TIMEOUT_S`/`LLM_ROUTER_COOLDOWN_S` (в итерации
+  59 таймаут переименован в `LLM_LOCAL_TIMEOUT_S`, добавлен
+  `LLM_LOCAL_BACKEND_URL`). Тесты —
   `tests/unit/test_llm_router.py` (**24**) и 2 factory-теста в
   `tests/unit/test_llm.py` (fallback в облако, local-only без ключа).
 - [x] **Прогрев переведён на `beginner`.** `app/llm/warmup.py` больше не
@@ -3567,3 +3569,72 @@ billing-ом аккаунта (внешний блокер, не код).
   live-тест fallback `local → DeepSeek`.
 - При необходимости расширить замороженный набор до 10–30 партий новой
   версией `schema_version` (историю сравнений не переписывать).
+
+## Итерация 59 — Reverse SSH GPU Tunnel Docs & Config (T-123, T-126)
+
+**Дата:** 2026-11-06
+**Статус:** ✅ завершена — настройки туннеля вынесены в `Settings`
+(`LLM_LOCAL_BACKEND_URL`, `LLM_LOCAL_TIMEOUT_S`, `LLM_ROUTER_COOLDOWN_S`),
+написан пошаговый гайд `docs/development/DEPLOYMENT_GPU_TUNNEL.md`;
+`pytest`/`ruff`/`mypy` зелёные.
+**Отчёт:** `docs/development/reports/v1.5.0/ITERATION-59.md`
+
+### Что сделано
+
+- [x] **T-126. Настройки туннеля в `Settings`.** `LLM_LOCAL_BACKEND_URL`
+  (адрес LM Studio глазами приложения: на dev — `127.0.0.1:8034`, на VPS —
+  вход SSH-туннеля; пусто → legacy `VLLM_BASE_URL`), `LLM_LOCAL_TIMEOUT_S=2`
+  (переименован из `LLM_ROUTER_LOCAL_TIMEOUT_S`), `LLM_ROUTER_COOLDOWN_S=60`.
+  Read-only свойство `Settings.local_llm_base_url` нормализует хвостовой `/`.
+  `BackendRouter`/factory берут значения из `Settings`; `beginner` теперь
+  тоже ходит через `LLM_LOCAL_BACKEND_URL` (на VPS локальная модель доступна
+  только через туннель); добавлен публичный `BackendRouter.cooldown_s`.
+  `.env.example` обновлён.
+- [x] **T-126. Гайд `DEPLOYMENT_GPU_TUNNEL.md` (907 строк, 12 разделов).**
+  Схема Windows+LM Studio → Selectel VPS; sshd `GatewayPorts clientspecified`
+  + `AllowTcpForwarding`; discovery docker-gateway (`172.17.0.1` vs
+  `172.18.0.1`); `ssh -N -R`; автозапуск (Task Scheduler, PowerShell
+  reconnect-loop, NSSM); проверка `ss`/`curl` на VPS и из контейнера;
+  `.env` с точными именами и `up -d` (не `restart`); поведение при
+  выключении ПК; честный раздел о таймаутах; безопасность; troubleshooting
+  (16 строк); rollback; ссылки.
+- [x] **Тесты (+6, `tests/unit/test_llm.py`).** Дефолт
+  `local_llm_base_url`; чтение из env; приоритет над legacy `VLLM_BASE_URL`;
+  fallback на legacy; factory `club` с туннельным URL/таймаутом/cooldown;
+  factory `beginner` с туннельным URL. `test_llm_router.py` не менялся —
+  зелёный.
+- [x] **Документация.** `docs/README.md` (индекс), `CHANGELOG.md`,
+  `README.md` (счётчик тестов/итерация), этот раздел, `TODO.md`
+  (T-126, статус T-123, актуальные имена настроек), отчёт итерации 59;
+  в отчётах/CHANGELOG итерации 58 помечено переименование таймаута.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Реальный деплой на Selectel и живой туннель | Нет доступа к VPS и домашней GPU из этой среды; гайд — пошаговая процедура, проверяемая на стенде | T-123 |
+| Live-проверка fallback `local → DeepSeek` через туннель | Требует работающего туннеля и LM Studio | T-123 |
+| Полный v4-eval | Ждёт GPU/обучения v4 (556 записей) | T-104b, KI-023 |
+
+### Метрики
+
+- **Новые тесты:** **6** (в `tests/unit/test_llm.py`, файл — 34 теста).
+- **Backend-тесты:** **1362 passed, 15 skipped, 1 deselected, 1 xfailed**
+  (155.03 с, exit 0; CI-подобное окружение: PostgreSQL `5437`, Redis
+  `6385`, реальный Stockfish; deselected — live DeepSeek-тест; 15 skip —
+  9 live LM Studio и 6 env-зависимых `token_budget`).
+- **ruff:** `All checks passed!`; **mypy app:** `Success: no issues found in
+  91 source files`; **alembic check:** `No new upgrade operations detected`.
+- **Гайд:** 907 строк, 12 разделов + оглавление (28 пунктов), 15 таблиц,
+  36 fenced-блоков (powershell/bash/dotenv/text).
+- **GitHub Actions:** прогон после пуша — см. §3 отчёта
+  `ITERATION-59.md`.
+
+### Что дальше
+
+- Развернуть VPS по гайду, поднять туннель, проверить
+  `ss -ltnp | grep 8034`, `curl` из контейнера и `provider=deepseek` в
+  `llm_calls` при выключенном ПК (закрытие T-123).
+- По замерам `latency_ms` клубной генерации подобрать `LLM_LOCAL_TIMEOUT_S`
+  (2 с fail-fast vs 30–90 с для туннеля).
+- Обучить v4 и прогнать frozen eval (T-104b).
