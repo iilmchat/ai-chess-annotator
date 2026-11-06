@@ -4,7 +4,8 @@
 1. Берём несколько аннотированных партий из `annotated_games` (RAG).
 2. Разбираем каждую через `/v1/analyze` (Stockfish) — как пользователь.
 3. Генерируем комментарий для `club` и `gm` через `/v1/commentary`.
-4. Отдаём комментарий судье (DeepSeek) с рубрикой из трёх шкал.
+4. Отдаём комментарий судье (DeepSeek) с рубрикой из трёх шкал; лимит
+   ответа судьи — `LLM_JUDGE_MAX_TOKENS` (2048), иначе JSON обрезается.
 5. Считаем долю CJK-символов (KI-060) и долю объяснений.
 6. Пишем отчёт в `docs/development/reports/LLM_EVAL.md` и JSON с сырыми
    оценками.
@@ -48,6 +49,7 @@ from pathlib import Path
 from typing import Any
 
 import chess.pgn
+import httpx
 
 # `python scripts/evaluate_llm.py` кладёт в sys.path только `scripts/`.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -62,7 +64,7 @@ from sqlalchemy.pool import NullPool  # noqa: E402
 from app.commentary.semantic import cjk_share, count_cjk  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
 from app.db.models import AnnotatedGame, Level, LlmEvaluation  # noqa: E402
-from app.llm import get_llm_client  # noqa: E402
+from app.llm import BaseLLMClient, get_llm_client  # noqa: E402
 from app.main import create_app  # noqa: E402
 
 __all__ = [
@@ -456,11 +458,37 @@ def _extract_json(text: str) -> dict[str, Any]:
     return payload
 
 
+def _judge_client(
+    settings: Settings, *, client: httpx.AsyncClient | None = None
+) -> BaseLLMClient:
+    """Клиент судьи (DeepSeek) с отдельным лимитом ответа (итерация 61).
+
+    Судья возвращает JSON с тремя оценками и коротким комментарием. При
+    общем лимите `LLM_MAX_TOKENS=1024` ответ обрезался, и `_extract_json`
+    падал с «в ответе судьи нет JSON-объекта» — в baseline v3 так потерялись
+    2 из 5 партий. Поэтому у судьи свой лимит
+    (`LLM_JUDGE_MAX_TOKENS`, по умолчанию 2048), а длина обычных
+    комментариев не меняется.
+
+    Args:
+        settings: настройки приложения.
+        client: готовый `httpx.AsyncClient` (тесты с `MockTransport`).
+
+    Returns:
+        Клиент DeepSeek для `gm` с `max_tokens=settings.llm_judge_max_tokens`.
+    """
+    judge_settings = settings.model_copy(
+        update={"llm_max_tokens": settings.llm_judge_max_tokens}
+    )
+    return get_llm_client("gm", judge_settings, client=client)
+
+
 async def _judge(
     rows: list[CommentaryRow], settings: Settings
 ) -> None:
     """Оценить все комментарии одним клиентом DeepSeek."""
-    client = get_llm_client("gm", settings)
+    client = _judge_client(settings)
+    print(f"Судья: deepseek, max_tokens={settings.llm_judge_max_tokens}")
     try:
         for index, row in enumerate(rows, start=1):
             if row.error:
@@ -701,6 +729,7 @@ def _report(
     *,
     frozen_path: Path | None = None,
     model_name: str | None = None,
+    judge_max_tokens: int | None = None,
 ) -> str:
     overall = _averages(rows)
     scored = [row for row in rows if row.scores]
@@ -720,6 +749,15 @@ def _report(
             "(самые короткие аннотированные партии из RAG)."
         )
         generation_line = "> **Генерация:** `club` → LM Studio, `gm` → DeepSeek"
+    # Итерация 61: лимит судьи — отдельная настройка; в отчёте фиксируем
+    # фактическое значение, чтобы прогоны с обрезкой JSON были видны сразу.
+    judge_line = (
+        f"- Лимит ответа судьи: **{judge_max_tokens} токенов** "
+        "(`LLM_JUDGE_MAX_TOKENS`); при общем лимите 1024 JSON обрезался и "
+        "партия терялась (итерация 61)."
+        if judge_max_tokens
+        else "- Лимит ответа судьи: `LLM_JUDGE_MAX_TOKENS` (по умолчанию 2048)."
+    )
     header_lines = [
         "# LLM-as-judge: оценка комментариев (T-023)",
         "",
@@ -748,6 +786,7 @@ def _report(
         "комментарий сгенерирован через `POST /v1/commentary`.",
         "- Судья получает метаданные, ходы, ключевые моменты и сам комментарий; "
         "оценивает по шкалам 1–10 и возвращает JSON.",
+        judge_line,
         "- Валидатор SAN уже отсекает нелегальные ходы до судьи; судья оценивает "
         "смысл и стиль.",
         "- Доля объяснений считается по маркерам «потому что» / «так как» / "
@@ -1043,6 +1082,7 @@ def main(argv: list[str] | None = None) -> int:
         args.timeout_s,
         frozen_path=frozen_path,
         model_name=model_name,
+        judge_max_tokens=settings.llm_judge_max_tokens,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(report, encoding="utf-8")
