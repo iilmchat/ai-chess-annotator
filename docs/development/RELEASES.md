@@ -3758,7 +3758,10 @@ DeepSeek; набор — `tests/fixtures/eval_games.json` (same-sample).
   15).
 - **ruff:** `All checks passed!`; **mypy:** `Success: no issues found in
   92 source files`; **alembic check:** без изменений.
-- **GitHub Actions:** прогон после пуша — см. §3 отчёта `ITERATION-61.md`.
+- **GitHub Actions:** run
+  [`42225849207`](https://github.com/iilmchat/ai-chess-annotator/actions/runs/42225849207)
+  — **success**: backend `1382 passed, 12 skipped, 1 xfailed` (105.13 с),
+  frontend / e2e / docker — success.
 
 ### Что дальше
 

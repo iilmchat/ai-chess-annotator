@@ -3,7 +3,8 @@
 **Дата:** 2026-11-06
 **Статус:** ✅ завершена — у судьи LLM-as-judge отдельный лимит ответа
 (`LLM_JUDGE_MAX_TOKENS=2048`), JSON больше не обрезается на 1024; baseline
-v3 (**3.89/10**) зафиксирован на замороженном наборе.
+v3 (**3.89/10**) зафиксирован на замороженном наборе; `pytest`/`ruff`/`mypy`
+зелёные, GitHub Actions — **success** (`42225849207`).
 **Формат:** RULES §2.18 (7 разделов).
 
 **Исходное состояние.** `main` = `a1f3270` (прогон v3 на замороженном
@@ -69,7 +70,7 @@ exit 0).
 | Линтер | `ruff check .` | `All checks passed!` |
 | Типы | `mypy app scripts/evaluate_llm.py` | `Success: no issues found in 92 source files` |
 | Миграции | `alembic check` | `No new upgrade operations detected.` |
-| CI | GitHub Actions после push | (заполняется после прогона) |
+| CI | GitHub Actions после push | ✅ **success** — run [`42225849207`](https://github.com/iilmchat/ai-chess-annotator/actions/runs/42225849207): backend — **1382 passed, 12 skipped, 1 xfailed** (105.13 с), frontend / e2e / docker — success |
 
 **Skip (7):** `test_token_budget_api` с env-зависимыми портами (в CI
 проходят). В отличие от итераций 58–60, **8 live-тестов LM Studio на этот
