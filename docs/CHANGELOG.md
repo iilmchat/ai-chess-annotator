@@ -81,6 +81,17 @@
 
 ### Fixed
 
+- **CI: Stockfish снова находится в backend-job (итерация 56):**
+  Ubuntu-пакет `stockfish` ставит бинарник в `/usr/games/stockfish`, а
+  приложение искало `/usr/bin/stockfish`, поэтому `POST /v1/analyze` в CI
+  отдавал 500 `engine_not_found` — 11 интеграционных тестов были красными.
+  В шаг `pytest` добавлен `STOCKFISH_PATH=/usr/games/stockfish`;
+  `tests/integration/test_api_games.py` и `tests/integration/test_streaming.py`
+  получили skip-guard по наличию движка (как в `test_engine.py`), чтобы
+  окружения без Stockfish не падали на 500. Побочный эффект: 28
+  engine-тестов, которые в CI молча скипались, теперь реально выполняются
+  (полный набор в Linux-контейнере — **1311 passed, 9 skipped,
+  1 xfailed**). T-123 (reverse SSH GPU tunnel) добавлена в backlog.
 - **`max_tokens` увеличен до 2048 для предотвращения обрезки (итерация 55):**
   в `scripts/build_gold_dataset_v2.py` лимит ответа учителя DeepSeek был
   `LLM_MAX_TOKENS=1024`; русский комментарий 200–320 слов (≈1500 токенов)

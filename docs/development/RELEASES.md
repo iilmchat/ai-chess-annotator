@@ -3358,3 +3358,60 @@ JSONL пишется инкрементально, `--append` продолжае
   токенов.
 - При следующем датасете проверить среднюю длину assistant и при
   необходимости поднять `--response-max-tokens` до 4096.
+
+---
+
+## Итерация 56 — Fix CI Pipeline & Backlog Update (CI, T-123)
+
+**Дата:** 2026-11-06
+**Статус:** ⚠️ частично — код и тесты проверены локально и в
+Linux-контейнере; GitHub Actions заблокирован billing-ом аккаунта,
+зелёный прогон не подтверждён.
+**Отчёт:** `docs/development/reports/v1.5.0/ITERATION-56.md`
+
+### Что сделано
+
+- [x] **Причина красного CI:** Ubuntu-пакет `stockfish` ставит бинарник в
+  `/usr/games/stockfish`, а `Settings.stockfish_path` по умолчанию —
+  `/usr/bin/stockfish`, поэтому `/v1/analyze` отдавал 500
+  `engine_not_found` (11 красных интеграционных тестов).
+- [x] **CI:** в env шага `pytest` добавлен
+  `STOCKFISH_PATH=/usr/games/stockfish`.
+- [x] **Тесты:** `requires_engine`-guard в `test_api_games.py` (2 теста) и
+  engine-guard в `pytestmark` `test_streaming.py` (9 тестов) — без движка
+  тесты скипаются, с движком выполняются. Побочный эффект: 28 ранее
+  скипавшихся engine-тестов теперь реально идут в CI.
+- [x] **Backlog:** добавлена **T-123** Cloud Deployment via Reverse SSH
+  GPU Tunnel (`BackendRouter` + circuit-breaker в `app/llm/factory.py`,
+  локальная GPU по `http://172.18.0.1:8035/v1`, fallback на DeepSeek).
+- [x] **Docs:** `CHANGELOG.md`, этот отчёт, `KNOWN_ISSUES.md` (KI-006 —
+  обход/путь).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Зелёный GitHub Actions | Все job-ы падают до первого шага: «recent account payments have failed or your spending limit needs to be increased» (run 42180395309, attempts 1–2) — блокировка billing на аккаунте, не код | GitHub Settings → Billing & plans |
+| CI-шаг «движок обязателен» | Skip-guard может снова скрыть неверный путь; отдельный шаг проверки (`/v1/health` → `stockfish: ok`) — hardening T-005 | T-005, рекомендация |
+| Реализация T-123 | Только backlog-постановка: DoD требует кода/конфига/тестов, в эту итерацию не входит | T-123 |
+
+### Метрики
+
+- Backend-тесты (Windows): **1305 passed, 15 skipped, 1 xfailed**
+  (125.40 с, exit 0).
+- Backend-тесты (Linux-контейнер, CI-подобно): **1311 passed, 9 skipped,
+  1 xfailed** (90.09 с, exit 0) — в т.ч. 28 ранее скипавшихся
+  engine-тестов.
+- Целевые файлы: **17 passed** (22.75 с).
+- ruff: `All checks passed!`; mypy app: 0 ошибок (90 файлов).
+- CI: ❌ заблокирован billing-ом (не код); в прошлом прогоне
+  (41651192791) — 11 failed / 1269 passed / 40 skipped.
+
+### Что дальше
+
+- Устранить billing-блокер в GitHub, затем `gh run rerun 42180395309`
+  (или новый push) — ожидаемый результат: backend зелёный, ~1311 passed.
+- На первом настоящем прогоне проследить за тайминг-чувствительными
+  engine-тестами (`club`-бенчмарк 1.15 с, SLA 30 с, cache-ratio).
+- Добавить в CI явную проверку движка, чтобы skip-guard не скрывал
+  отсутствие Stockfish (T-005).

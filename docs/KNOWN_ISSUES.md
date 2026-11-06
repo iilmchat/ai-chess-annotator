@@ -200,8 +200,11 @@ warning показывается в summary.
 **Причина.** Бинарник Stockfish (79 МБ) не коммитится и не ставится
 автоматически на Windows.
 
-**Обход / текущее поведение.** В CI — `apt-get install -y stockfish`.
-Локально (Windows, итерация 1): Stockfish 17.1 распакован в
+**Обход / текущее поведение.** В CI — `apt-get install -y stockfish`;
+пакет Debian/Ubuntu кладёт бинарник в `/usr/games/stockfish` (каталога
+`/usr/games` нет в `PATH` раннера), поэтому в шаге `pytest` задан
+`STOCKFISH_PATH=/usr/games/stockfish` (итерация 56). Локально (Windows,
+итерация 1): Stockfish 17.1 распакован в
 `D:\Tools\stockfish\stockfish.exe`, в `.env` —
 `STOCKFISH_PATH=D:\Tools\stockfish\stockfish.exe`. Healthcheck `ok`.
 
