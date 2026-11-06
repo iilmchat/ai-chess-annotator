@@ -258,6 +258,13 @@ class Settings(BaseSettings):
     llm_timeout_s: float = 120.0
     llm_max_retries: int = 2
     llm_retry_backoff_s: float = 0.5
+    #: T-123 / итерация 58: local-first роутер для уровня `club`.
+    #: Локальному бэкенду даём короткий таймаут, чтобы fallback в облако
+    #: срабатывал быстро, а не через 120 с production-таймаута.
+    llm_router_local_timeout_s: float = 2.0
+    #: Circuit-breaker роутера: сколько секунд не пробовать локальный GPU
+    #: после ошибки соединения/таймаута (0 — пробовать каждый запрос).
+    llm_router_cooldown_s: float = 60.0
 
     # Embeddings
     #: `lmstudio` — реальные эмбеддинги 768; `hash` — тесты/CI.

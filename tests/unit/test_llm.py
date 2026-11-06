@@ -21,7 +21,7 @@ import pytest
 from app.config import Settings
 from app.errors import InvalidLevelError, LLMError, LLMNotConfiguredError, LLMTimeoutError
 from app.llm import BaseLLMClient, OpenAICompatibleClient, get_llm_client
-from app.llm.openai_client import OpenAICompatibleClient as ClientClass
+from app.llm.router import BackendRouter
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -362,7 +362,7 @@ def test_client_validates_arguments() -> None:
 # --- фабрика --------------------------------------------------------------
 
 
-async def test_factory_routes_club_to_local_lmstudio() -> None:
+async def test_factory_routes_club_to_local_first_router() -> None:
     captured: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -372,10 +372,13 @@ async def test_factory_routes_club_to_local_lmstudio() -> None:
     client = _mock_client(handler)
     llm = get_llm_client("club", _settings(), client=client)
 
-    assert isinstance(llm, ClientClass)
+    assert isinstance(llm, BackendRouter)
     assert llm.provider == "lmstudio"
     assert llm.model == "qwen3-8b"
-    assert llm.endpoint == "http://127.0.0.1:8034/v1/chat/completions"
+    assert len(llm.backends) == 2
+    assert llm.primary.provider == "lmstudio"
+    assert llm.fallback is not None
+    assert llm.fallback.provider == "deepseek"
 
     await llm.generate("привет")
     assert str(captured[0].url) == "http://127.0.0.1:8034/v1/chat/completions"
@@ -412,6 +415,43 @@ async def test_factory_routes_gm_to_deepseek() -> None:
     await llm.generate("привет")
     assert str(captured[0].url) == "https://api.deepseek.com/chat/completions"
     assert captured[0].headers["authorization"] == "Bearer test-deepseek-key"
+
+    await client.aclose()
+
+
+async def test_factory_club_falls_back_to_deepseek_when_local_down() -> None:
+    """T-123: локальный GPU недоступен — запрос уходит в облако."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.host == "127.0.0.1":
+            raise httpx.ConnectError("local gpu down", request=request)
+        return httpx.Response(200, json=_completion(model="deepseek-chat"))
+
+    client = _mock_client(handler)
+    llm = get_llm_client("club", _settings(), client=client)
+
+    result = await llm.complete("привет")
+
+    assert result.usage.provider == "deepseek"
+    assert result.usage.model == "deepseek-chat"
+    assert [str(request.url) for request in requests] == [
+        "http://127.0.0.1:8034/v1/chat/completions",
+        "https://api.deepseek.com/chat/completions",
+    ]
+
+    await client.aclose()
+
+
+async def test_factory_club_without_deepseek_key_is_local_only() -> None:
+    """Без ключа облака роутер остаётся локальным (fallback выключен)."""
+    client = _mock_client(lambda request: httpx.Response(200, json=_completion()))
+    llm = get_llm_client("club", _settings(deepseek_api_key=""), client=client)
+
+    assert isinstance(llm, BackendRouter)
+    assert len(llm.backends) == 1
+    assert llm.fallback is None
 
     await client.aclose()
 

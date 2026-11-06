@@ -37,8 +37,9 @@ async def warmup_local_llm(
 
     Args:
         settings: настройки (по умолчанию — из окружения).
-        client: готовый клиент (тесты); если не передан — берётся `club`
-            (локальный провайдер).
+        client: готовый клиент (тесты); если не передан — берётся `beginner`
+            (строго локальный провайдер: прогрев не должен уходить в облако
+            через fallback `club`-роутера, итерация 58).
 
     Returns:
         ``True``, если модель ответила; ``False`` при любой ошибке.
@@ -50,7 +51,10 @@ async def warmup_local_llm(
     started = time.perf_counter()
     try:
         if llm is None:
-            llm = get_llm_client("club", cfg)
+            # Итерация 58: именно `beginner` (прямой локальный клиент), а не
+            # `club` — у club теперь есть fallback в DeepSeek, и при выключенном
+            # GPU прогрев тратил бы облачные токены.
+            llm = get_llm_client("beginner", cfg)
         # KI-046: прогрев — тоже вызов LLM и должен попадать в `llm_calls`
         # (operation="warmup"). HTTP-контекста здесь нет — recorder сам
         # сгенерирует trace_id (fallback).
