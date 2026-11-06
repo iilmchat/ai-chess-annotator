@@ -390,9 +390,27 @@ def _judge_cli(
     with TestClient(create_app(client_settings)) as client:
         for game in games:
             started = time.perf_counter()
-            response = client.post(
-                "/v1/analyze", json={"pgn": game.pgn, "level": "club"}
-            )
+            try:
+                response = client.post(
+                    "/v1/analyze", json={"pgn": game.pgn, "level": "club"}
+                )
+            except Exception as exc:  # Stockfish/ASGI упал на одной партии
+                # Итерация 57: одна упавшая партия не должна ронять весь
+                # eval-прогон. Логируем сбой, пишем по строке-ошибке на
+                # каждый запрошенный уровень и переходим к следующей партии.
+                print(
+                    f"ANALYZE {game.white} — {game.black}: ошибка "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                for level in levels:
+                    rows.append(
+                        CommentaryRow(
+                            game=game,
+                            level=level,
+                            error=f"analyze exception: {type(exc).__name__}: {exc}",
+                        )
+                    )
+                continue
             print(
                 f"ANALYZE {game.white} — {game.black}: "
                 f"{response.status_code} ({(time.perf_counter() - started):.1f} с)"
