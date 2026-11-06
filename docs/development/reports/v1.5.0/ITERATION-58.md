@@ -4,7 +4,8 @@
 **Статус:** ✅ завершена — eval-набор заморожен (same-sample сравнение
 версий модели), `BackendRouter` local-first с fallback в DeepSeek;
 `pytest`/`ruff`/`mypy` зелёные; GitHub Actions разблокирован после снятия
-billing-блокера аккаунта.
+billing-блокера аккаунта и завершил первый прогон итерации **success**
+(`42196291092`).
 **Формат:** RULES §2.18 (7 разделов).
 
 **Исходное состояние.** `main` = `51d695c` (итерация 57: chat-SSE CJK,
@@ -89,7 +90,7 @@ exit 0).
 | Линтер | `ruff check .` | `All checks passed!` |
 | Типы | `mypy app` | `Success: no issues found in 91 source files` |
 | Миграции | `alembic upgrade head` + `alembic check` | `No new upgrade operations detected.` |
-| CI | GitHub Actions после push | ✅ **success** — run [`<run-id>`](https://github.com/iilmchat/ai-chess-annotator/actions/runs/<run-id>) (billing-ошибка не воспроизводится) |
+| CI | GitHub Actions после push | ✅ **success** — run [`42196291092`](https://github.com/iilmchat/ai-chess-annotator/actions/runs/42196291092): backend — **1360 passed, 12 skipped, 1 xfailed** (90.88 с), frontend / e2e / docker — success; billing-ошибка итераций 56–57 не воспроизводится |
 
 **Skips (15):** 9 — live LM Studio/эмбеддинги (в среде нет GPU);
 6 — `test_token_budget_api` с env-зависимыми портами локального окружения

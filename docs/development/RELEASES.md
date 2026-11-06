@@ -3553,8 +3553,11 @@ billing-ом аккаунта (внешний блокер, не код).
   `token_budget`).
 - **ruff:** `All checks passed!`; **mypy app:** `Success: no issues found in
   91 source files`; **alembic check:** `No new upgrade operations detected`.
-- **GitHub Actions:** прогон после пуша — см. §3 отчёта
-  `ITERATION-58.md` (billing-блокер снят, запуск без ошибки оплаты).
+- **GitHub Actions:** run
+  [`42196291092`](https://github.com/iilmchat/ai-chess-annotator/actions/runs/42196291092)
+  — **success**: backend `1360 passed, 12 skipped, 1 xfailed` (90.88 с),
+  frontend / e2e / docker — success. Billing-блокер итераций 56–57 не
+  воспроизводится, бейдж CI зелёный.
 
 ### Что дальше
 
