@@ -1261,14 +1261,25 @@
 - **T-126.** Reverse SSH GPU tunnel: конфиг и документация (T-123).
   **[x]** — выполнено в итерации 59: `Settings` получил
   `LLM_LOCAL_BACKEND_URL` (адрес LM Studio глазами приложения; на VPS —
-  вход туннеля, пусто → legacy `VLLM_BASE_URL`), `LLM_LOCAL_TIMEOUT_S=2`
-  (fail-fast локального бэкенда) и `LLM_ROUTER_COOLDOWN_S=60`;
+  вход туннеля, пусто → legacy `VLLM_BASE_URL`), `LLM_LOCAL_TIMEOUT_S`
+  (таймаут локального бэкенда; в итерации 60 дефолт поднят до 120 с) и
+  `LLM_ROUTER_COOLDOWN_S=60`;
   `BackendRouter`/factory берут их из `Settings`, `beginner` тоже ходит
   через `LLM_LOCAL_BACKEND_URL`; `BackendRouter.cooldown_s` доступен
   снаружи. Гайд `docs/development/DEPLOYMENT_GPU_TUNNEL.md`: Windows +
   LM Studio → Selectel VPS, `ssh -N -R`, GatewayPorts, проверка из
   контейнера, fallback при выключении ПК, troubleshooting, rollback.
   Тесты: `tests/unit/test_llm.py` (+6).
+- **T-127.** Дефолт `LLM_LOCAL_TIMEOUT_S` и метка модели в eval (итерация
+  60). **[x]** — таймаут локального `club`-клиента поднят с 2 до **120 с**:
+  2 с короче генерации 7B (10–15 с), из-за чего живой GPU считался
+  недоступным и каждый клубный запрос уходил в DeepSeek. Отказ соединения
+  по-прежнему даёт мгновенный fallback; таймаут ждётся только при «чёрной
+  дыре», затем circuit-breaker. Обновлены `app/config.py`, `.env.example`,
+  тест дефолтов и гайд. В `scripts/evaluate_llm.py` добавлен
+  `--model-name` (по умолчанию `qwen-7b-tokenizer_gguf-v4`) — метка версии
+  в заголовке `LLM_EVAL.md` и в JSON (`model_name`) для same-sample
+  сравнения v3/v4; тесты `tests/unit/test_evaluate_llm_model_name.py` (10).
 - **T-124.** Замороженный eval-набор для same-sample сравнения (T-024,
   KI-023). **[x]** — выполнено в итерации 58: `tests/fixtures/eval_games.json`
   фиксирует **5 PGN-партий** (Stein–Geller, Stein–Suetin,
@@ -1281,7 +1292,7 @@
 - **T-125.** `BackendRouter`: local-first fallback для уровня `club`
   (T-123, SPEC §10). **[x]** — выполнено в итерации 58: `app/llm/router.py`
   (`BackendRouter` поверх `BaseLLMClient`) пробует LM Studio с таймаутом
-  `LLM_LOCAL_TIMEOUT_S=2` и без ретраев; на
+  `LLM_LOCAL_TIMEOUT_S` (дефолт 120 с с итерации 60) и без ретраев; на
   `httpx.ConnectError`/`TimeoutException`/`LLMTimeoutError` (включая
   обёрнутые в `LLMError` причины) логирует `local_gpu_unavailable` и
   переключается на DeepSeek; circuit-breaker с

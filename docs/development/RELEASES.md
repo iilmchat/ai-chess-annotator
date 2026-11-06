@@ -3640,3 +3640,58 @@ billing-ом аккаунта (внешний блокер, не код).
 - По замерам `latency_ms` клубной генерации подобрать `LLM_LOCAL_TIMEOUT_S`
   (2 с fail-fast vs 30–90 с для туннеля).
 - Обучить v4 и прогнать frozen eval (T-104b).
+
+## Итерация 60 — Fix Timeout Defaults & V4 Prep (T-127, T-104b)
+
+**Дата:** 2026-11-06
+**Статус:** ✅ завершена — дефолт `LLM_LOCAL_TIMEOUT_S` поднят до **120 с**
+(иначе живой GPU считался недоступным и `club` всегда уходил в DeepSeek),
+в eval-скрипт добавлен `--model-name` для same-sample сравнения v3/v4;
+`pytest`/`ruff`/`mypy` зелёные.
+**Отчёт:** `docs/development/reports/v1.5.0/ITERATION-60.md`
+
+### Что сделано
+
+- [x] **T-127. Дефолт таймаута локального бэкенда.** `app/config.py`:
+  `llm_local_timeout_s` 2.0 → **120.0** с пояснением, почему 2 с ломали
+  local-first (генерация 7B — 10–15 с; отказ соединения и так даёт
+  мгновенный `ConnectError`, а таймаут ждётся только при «чёрной дыре»).
+  `.env.example`: `LLM_LOCAL_TIMEOUT_S=120` с обновлённым комментарием.
+  `LLM_ROUTER_COOLDOWN_S=60` не менялся. Тест дефолтов в
+  `tests/unit/test_llm.py` обновлён.
+- [x] **T-104b. `--model-name` в `evaluate_llm.py`.** Флаг (по умолчанию
+  `qwen-7b-tokenizer_gguf-v4`) пишет метку версии в заголовок
+  `LLM_EVAL.md` и в каждую запись JSON (`model_name`) рядом с API-именем
+  `model`; пустая метка → exit 2. Тесты —
+  `tests/unit/test_evaluate_llm_model_name.py` (**10**).
+- [x] **Документация.** `DEPLOYMENT_GPU_TUNNEL.md` (§7, §8.2, чек-лист,
+  troubleshooting, rollback) переписан под дефолт 120 с и честную
+  семантику fallback; `CHANGELOG.md` (`Fixed`), этот раздел,
+  `TODO.md` (T-127), отчёт итерации 60, пометка в отчёте итерации 59,
+  `README.md` (счётчик тестов/итерация).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Прогон v4 на frozen set | Нужны GPU и обучение v4 на 556 записях; итерация готовит скрипт, а не результаты | T-104b |
+| Live-проверка таймаута на реальной 3060 | В среде нет LM Studio/GPU; дефолт обоснован измерениями из отчётов (10–15 с) и покрыт тестами | T-123 |
+
+### Метрики
+
+- **Новые тесты:** **10** (`tests/unit/test_evaluate_llm_model_name.py`).
+- **Backend-тесты:** **1372 passed, 15 skipped, 1 deselected, 1 xfailed**
+  (170.51 с, exit 0; CI-подобное окружение: PostgreSQL `5437`, Redis
+  `6385`, реальный Stockfish).
+- **ruff:** `All checks passed!`; **mypy:** `Success: no issues found in
+  92 source files`; **alembic check:** без изменений.
+- **GitHub Actions:** прогон после пуша — см. §3 отчёта
+  `ITERATION-60.md`.
+
+### Что дальше
+
+- Обучить v4 на 556 записях и прогнать `evaluate_llm.py --model-name
+  qwen-7b-tokenizer_gguf-v4` на frozen set; сравнить с v3 тем же скриптом
+  (`--model-name qwen-7b-tokenizer_gguf-v3`).
+- Развернуть VPS по `DEPLOYMENT_GPU_TUNNEL.md` и проверить live-fallback
+  (T-123).
