@@ -1280,6 +1280,14 @@
   `--model-name` (по умолчанию `qwen-7b-tokenizer_gguf-v4`) — метка версии
   в заголовке `LLM_EVAL.md` и в JSON (`model_name`) для same-sample
   сравнения v3/v4; тесты `tests/unit/test_evaluate_llm_model_name.py` (10).
+- **T-128.** Лимит ответа судьи LLM-as-judge (итерация 61). **[x]** —
+  `Settings.llm_judge_max_tokens` (env `LLM_JUDGE_MAX_TOKENS`, по умолчанию
+  **2048**); `_judge_client` в `scripts/evaluate_llm.py` подставляет его в
+  `llm_max_tokens`, поэтому JSON судьи больше не обрезается на общем
+  лимите 1024. В baseline v3 из-за обрезки терялись **2 из 5** партий
+  («в ответе судьи нет JSON-объекта»), средняя 3.89/10 считалась по 3/5.
+  Общий `LLM_MAX_TOKENS=1024` для комментариев не менялся. Тесты —
+  `tests/unit/test_evaluate_llm_judge_tokens.py` (6).
 - **T-124.** Замороженный eval-набор для same-sample сравнения (T-024,
   KI-023). **[x]** — выполнено в итерации 58: `tests/fixtures/eval_games.json`
   фиксирует **5 PGN-партий** (Stein–Geller, Stein–Suetin,

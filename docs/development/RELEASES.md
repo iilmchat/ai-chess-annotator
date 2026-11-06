@@ -3697,3 +3697,73 @@ billing-ом аккаунта (внешний блокер, не код).
   (`--model-name qwen-7b-tokenizer_gguf-v3`).
 - Развернуть VPS по `DEPLOYMENT_GPU_TUNNEL.md` и проверить live-fallback
   (T-123).
+
+## Итерация 61 — Fix Judge Token Truncation (T-128)
+
+**Дата:** 2026-11-06
+**Статус:** ✅ завершена — у судьи LLM-as-judge отдельный лимит ответа
+(`LLM_JUDGE_MAX_TOKENS=2048`), JSON больше не обрезается на 1024; baseline
+v3 (**3.89/10**) зафиксирован на замороженном наборе.
+**Отчёт:** `docs/development/reports/v1.5.0/ITERATION-61.md`
+
+### Baseline v3 на замороженном наборе (5 партий, `club`)
+
+Прогон через прокси `opencode.ai` (модель `deepseek-v4.1-flash`), судья —
+DeepSeek; набор — `tests/fixtures/eval_games.json` (same-sample).
+
+| Показатель | Значение |
+| :--- | :--- |
+| Фактическая точность | **3.33 / 10** (3 оценённых) |
+| Полезность | **4.00 / 10** (3 оценённых) |
+| Стиль | **4.33 / 10** (3 оценённых) |
+| **Средняя** | **3.89 / 10** |
+| Объяснения | **80% (4/5)** |
+| CJK-дрейф (KI-060) | **0.00% (0/5)** |
+| Оценено партий | **3/5** — 2 упали с «в ответе судьи нет JSON-объекта» (обрезка `max_tokens=1024`) |
+
+Результаты прогона сохранены в `docs/development/reports/LLM_EVAL.md` и
+`llm_eval_results.json` (коммит `a1f3270`); 3.89/10 — baseline для
+сравнения v4.
+
+### Что сделано
+
+- [x] **T-128. Лимит ответа судьи.** `app/config.py`:
+  `llm_judge_max_tokens: int = 2048` (env `LLM_JUDGE_MAX_TOKENS`);
+  `.env.example` обновлён. `scripts/evaluate_llm.py`: `_judge` собирает
+  клиента через новый `_judge_client(settings, *, client=None)`, который
+  подставляет `llm_max_tokens = llm_judge_max_tokens`; в отчёт добавлена
+  строка о фактическом лимите судьи, в консоль — `Судья: deepseek,
+  max_tokens=2048`. Общий `LLM_MAX_TOKENS=1024` для комментариев не менялся.
+- [x] **Тесты (+6).** `tests/unit/test_evaluate_llm_judge_tokens.py`:
+  дефолт 2048 при общем 1024, env-override, `max_tokens` в payload
+  `MockTransport`, кастомный лимит 4096, `_judge` использует настройки
+  судьи и разбирает JSON, обрезанный JSON остаётся ошибкой строки.
+- [x] **Документация.** `CHANGELOG.md` (`Fixed`), этот раздел, отчёт
+  итерации 61, `TODO.md` (T-128), `README.md` (счётчик тестов/итерация).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Перепрогон v3 с новым лимитом | Нужен живой судья (DeepSeek/proxy) и локальная модель; фикс проверен mock-тестами, повторный прогон даст 5/5 оценённых | T-104b |
+| v4-прогон | Обучение v4 на 556 записях ждёт GPU | T-104b |
+
+### Метрики
+
+- **Новые тесты:** **6** (`tests/unit/test_evaluate_llm_judge_tokens.py`).
+- **Backend-тесты:** **1386 passed, 7 skipped, 1 deselected, 1 xfailed**
+  (245.87 с, exit 0; CI-подобное окружение: PostgreSQL `5437`, Redis
+  `6385`, реальный Stockfish; в этом прогоне 8 live-тестов LM Studio
+  выполнились — локальная модель стала доступна, поэтому skipped 7, а не
+  15).
+- **ruff:** `All checks passed!`; **mypy:** `Success: no issues found in
+  92 source files`; **alembic check:** без изменений.
+- **GitHub Actions:** прогон после пуша — см. §3 отчёта `ITERATION-61.md`.
+
+### Что дальше
+
+- Перепрогнать v3 с `LLM_JUDGE_MAX_TOKENS=2048` — ожидается **5/5**
+  оценённых партий и уточнённая средняя (baseline 3.89/10 был занижен
+  выборкой 3/5).
+- Обучить v4 на 556 записях и прогнать `--model-name
+  qwen-7b-tokenizer_gguf-v4` на frozen set; сравнить с v3.

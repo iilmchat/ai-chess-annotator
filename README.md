@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-1372_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-1386_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-129_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -390,8 +390,8 @@ docker compose -f docker-compose.observability.yml up -d
 | Показатель | Значение |
 |---|---|
 | Версия | **v1.2.0** (KI-030 **Closed** в итерации 48: LoRA 3B/7B — 2.87/3.33 против zero-shot 4B 4.40/10, возврат к 4B; пересборка golden dataset — T-104b; KI-060 — языковой дрейф 7B) |
-| Итерация | **60 — Fix Timeout Defaults & V4 Prep (T-127/T-104b)**: `LLM_LOCAL_TIMEOUT_S` по умолчанию 120 с (было 2 с — живой GPU считался недоступным), `--model-name` в eval-скрипте; итерации 1–59 закрыты |
-| Backend-тесты | **1372 passed, 15 skipped, 1 deselected, 1 xfailed** (92 файла, прогон итерации 60 против локальных PostgreSQL/Redis, 170.51 с; skip — 9 live LM Studio и 6 env-зависимых `token_budget`, `xfailed` — маркер KI-012) |
+| Итерация | **61 — Fix Judge Token Truncation (T-128)**: у судьи LLM-eval отдельный лимит `LLM_JUDGE_MAX_TOKENS=2048` (JSON больше не обрезается на 1024); baseline v3 на frozen set — **3.89/10**; итерации 1–60 закрыты |
+| Backend-тесты | **1386 passed, 7 skipped, 1 deselected, 1 xfailed** (101 файл тестов, прогон итерации 61 против локальных PostgreSQL/Redis, 245.87 с; в этом прогоне 8 live-тестов LM Studio выполнились, skip — 7 env-зависимых `token_budget`, `xfailed` — маркер KI-012) |
 | Frontend-тесты | **132 passed** (13 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, billing-API, auth-flow, PDF-API, eval, PGN-экспорт, варианты, загрузка PGN, стрелки; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **16** (15 ревизий, head `f2b3c4d5e6a7`; `llm_calls` — durable-история вызовов LLM, `usage_daily` — FinOps-агрегат, `engine_cache` — кэш MultiPV Stockfish, `export_jobs` — фоновые выгрузки, `users.is_verified` — email-верификация, `users.tier` + `stripe_customer_id` — подписка) |
