@@ -696,7 +696,9 @@ def test_local_llm_base_url_defaults_to_lmstudio() -> None:
     cfg = Settings(_env_file=None)
 
     assert cfg.local_llm_base_url == "http://127.0.0.1:8034/v1"
-    assert cfg.llm_local_timeout_s == pytest.approx(2.0)
+    # Итерация 60: таймаут должен покрывать генерацию 7B (10–15 с), иначе
+    # живой GPU считается недоступным и club всегда уходит в DeepSeek.
+    assert cfg.llm_local_timeout_s == pytest.approx(120.0)
     assert cfg.llm_router_cooldown_s == pytest.approx(60.0)
 
 
