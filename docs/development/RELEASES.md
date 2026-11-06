@@ -3415,3 +3415,85 @@ Linux-контейнере; GitHub Actions заблокирован billing-ом
   engine-тестами (`club`-бенчмарк 1.15 с, SLA 30 с, cache-ratio).
 - Добавить в CI явную проверку движка, чтобы skip-guard не скрывал
   отсутствие Stockfish (T-005).
+
+---
+
+## Итерация 57 — Chat-SSE CJK & Documentation Update (KI-060, T-120, T-104b, T-122)
+
+**Дата:** 2026-11-06
+**Статус:** ✅ завершена — chat-SSE больше не пропускает иероглифы, v4-датасет
+собран без обрезки (**556 записей**); GitHub Actions остаётся заблокирован
+billing-ом аккаунта (внешний блокер, не код).
+**Отчёт:** `docs/development/reports/v1.5.0/ITERATION-57.md`
+
+### Что сделано
+
+- [x] **`CjkStreamBuffer` вынесен в общий `app/streaming.py`.** Класс,
+  константы `MIN_DELTA_CHARS`/`MAX_DELTA_CHARS` и `_SENTENCE_END` переехали
+  из `app/commentary/streaming.py` в общий модуль; `app/commentary/streaming.py`
+  ре-экспортирует их, поэтому поведение комментария и его тесты не изменились.
+- [x] **CJK-фильтр в chat-SSE (`app/chat/streaming.py`).** Чанки LLM проходят
+  через общий буфер: `delta` не содержит иероглифов U+4E00–U+9FFF, а `reply`
+  для SAN-валидации, подсчёта токенов и `store()` — очищенный текст. Legacy
+  semantic-cache очищается `sanitize_cjk`; отклонённый или пустой после
+  очистки кэш-ответ генерируется заново. Ответ только из иероглифов →
+  `event: error`, код `llm_empty` (detail про китайские иероглифы), запись не
+  создаётся; журналирование — только счётчики
+  (`chat_cjk_stream_stripped`, `chat_cache_cjk_dropped`).
+- [x] **Тесты (+4 integration).** `tests/integration/test_streaming.py`:
+  `test_chat_stream_filters_cjk_from_deltas`,
+  `test_chat_stream_all_cjk_returns_error_without_saving`,
+  `test_chat_stream_sanitizes_dirty_cache_hit`,
+  `test_chat_stream_rejected_cache_falls_back_to_llm` (мок-LLM + SSE, грязный
+  и отклонённый cache-hit).
+- [x] **v4-датасет (T-104b).** Сгенерировано **556 записей** через DeepSeek;
+  максимальный ответ — **1884 токена**, обрезки нет: `max_tokens=2048`
+  (T-122, итерация 55) закрыл проблему — до исправления **729 из 824**
+  записей падали на валидаторе (`invalid_llm`).
+- [x] **Устойчивость eval (Eval Prep).** `scripts/evaluate_llm.py` оборачивает
+  per-game `POST /v1/analyze` в `try/except`: сбой Stockfish на одной партии
+  логируется, записывается error-строкой для каждого запрошенного уровня, и
+  eval продолжается со следующей партией вместо падения всего прогона. Тесты —
+  `tests/unit/test_evaluate_llm_analyze_errors.py`.
+- [x] **Документация.** KI-060: chat-SSE-остаток отмечен как закрытый (KI-060
+  остаётся Open до переобучения 7B), `CHANGELOG.md`, этот раздел, `TODO.md`
+  (T-120, T-104b), отчёт `ITERATION-57.md`.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Зелёный GitHub Actions | Все job-ы падают до первого шага: «recent account payments have failed or your spending limit needs to be increased» (итерация 56) — billing-блокер аккаунта, не код | GitHub Settings → Billing & plans |
+| Переобучение 7B на v4 и закрытие KI-060 | Нужны GPU и время обучения; итерация закрыла только стриминговый остаток — корневую причину (языковой дрейф) устраняет лишь переобучение | KI-060, T-104b |
+| Полный v4-eval (30–50 партий) | Нужны GPU/vLLM с LoRA v4 и бюджет; на момент итерации собран датасет, обучение ещё не выполнено | T-104b, KI-023 |
+
+### Метрики
+
+- **Новые тесты:** **7** — 4 integration chat-SSE
+  (`tests/integration/test_streaming.py`) + 3 unit eval
+  (`tests/unit/test_evaluate_llm_analyze_errors.py`).
+- **Backend-тесты:** **1312 passed, 15 skipped, 1 xfailed** (166.70 с,
+  exit 0; 15 skip — 8 LM Studio/DeepSeek live и 7 `test_token_budget_api` с
+  дефолтными портами локального окружения; с CI-подобными env — 7 passed).
+  `tests/integration/test_streaming.py` — **13 passed** (включая 4 новых),
+  `tests/unit/test_streaming_cjk.py` — **16 passed** (файл не менялся).
+- **ruff:** `All checks passed!`; **mypy app:** 0 ошибок (90 файлов).
+  DoD итерации — локальный `pytest`/`ruff`, а не GitHub CI (Actions
+  заблокирован billing-ом аккаунта).
+- **v4-датасет:** **556 записей**, максимальный ответ — **1884 токена** при
+  лимите 2048; обрезки (`finish_reason=length`) нет.
+- **CJK в chat-SSE:** 0 иероглифов в `delta` на мок-стриме (4
+  integration-теста); независимый fuzz ревьюера (3000 разбиений,
+  4000 очисток cache) — 0 утечек.
+
+### Что дальше
+
+- Догенерировать v4-датасет до целевой выборки (при необходимости) и запустить
+  полный eval 30–50 партий на переобученном 7B — только это закроет KI-060.
+- После устранения billing-блокера в GitHub — `gh run rerun`/новый push:
+  локально зелёный набор должен подтвердиться в Actions.
+- KI-060 остаётся **Open**: стриминговый остаток (chat-SSE) закрыт, но
+  диапазон U+4E00–9FFF и TTFT — задокументированные ограничения, а причина
+  дрейфа не устранена.
+- На v4-eval проверить, что `evaluate_llm.py` не падает на Stockfish-ошибках
+  отдельных партий и пишет error-строки по уровням.

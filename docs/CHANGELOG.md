@@ -8,6 +8,23 @@
 
 ### Added
 
+- **CJK-фильтр chat-SSE (KI-060, итерация 57):** `CjkStreamBuffer` вынесен
+  из `app/commentary/streaming.py` в общий `app/streaming.py` (комментарий
+  ре-экспортирует его, поведение не изменилось), а `app/chat/streaming.py`
+  прогоняет чанки LLM через буфер — SSE `delta` больше не содержит
+  иероглифов U+4E00–U+9FFF, для SAN-валидации/`store()` используется
+  очищенный текст. Legacy semantic-cache очищается `sanitize_cjk`,
+  отклонённый или пустой после очистки ответ генерируется заново; ответ
+  только из иероглифов → `error` `llm_empty` без записи; в лог пишутся
+  только счётчики (`chat_cjk_stream_stripped`, `chat_cache_cjk_dropped`).
+  Тесты: 4 integration в `tests/integration/test_streaming.py`. С итерации 57
+  стриминговый остаток KI-060 закрыт; KI-060 остаётся Open до переобучения
+  7B.
+- **v4-датасет: 556 записей без обрезки (T-104b, T-122, итерация 57):**
+  через DeepSeek сгенерировано **556 записей** v4-датасета; максимальный
+  ответ — **1884 токена**, обрезки нет. `max_tokens=2048` (итерация 55)
+  решил проблему, из-за которой 729 из 824 записей падали на валидаторе
+  (`invalid_llm`). Переобучение 7B на v4 и полный eval — следующие шаги.
 - **CJK-фильтр SSE-стриминга комментария (KI-060, итерация 53):**
   в `app/commentary/streaming.py` добавлен буферизующий
   `CjkStreamBuffer`: текст копится до конца предложения (CJK `。！？` —
@@ -81,6 +98,11 @@
 
 ### Fixed
 
+- **`evaluate_llm.py` не падает на сбое Stockfish по одной партии
+  (итерация 57):** per-game `POST /v1/analyze` обёрнут в `try/except` —
+  ошибка логируется, для каждого запрошенного уровня пишется error-строка,
+  eval продолжается со следующей партией (раньше исключение прерывало весь
+  прогон). Тесты: `tests/unit/test_evaluate_llm_analyze_errors.py`.
 - **CI: Stockfish снова находится в backend-job (итерация 56):**
   Ubuntu-пакет `stockfish` ставит бинарник в `/usr/games/stockfish`, а
   приложение искало `/usr/bin/stockfish`, поэтому `POST /v1/analyze` в CI

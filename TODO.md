@@ -1112,7 +1112,10 @@
   партий разные. **Итерация 53:** SSE-комментария больше не пропускает
   CJK (`CjkStreamBuffer`, T-120); chat-SSE (`app/chat/streaming.py`) —
   остаток KI-060.
-  3B/7B-ветки закрыты в итерации 48 (2.87/3.33).
+  3B/7B-ветки закрыты в итерации 48 (2.87/3.33). **Итерация 57:**
+  сгенерировано **556 записей** v4-датасета через DeepSeek, максимальный
+  ответ — **1884 токена**, обрезки нет (лимит `max_tokens=2048`, T-122);
+  chat-SSE-остаток KI-060 закрыт.
 - **T-105.** On-prem профиль без облачных LLM (`LLM_PROVIDER=local`).
 - **T-106.** Английская локализация комментариев. **[x]** — выполнено в
   T-046 (итерация 34): `*_en.txt`, `DEFAULT_LANGUAGE`, `language`/
@@ -1215,7 +1218,10 @@
   `app/commentary/streaming.py` (буфер до конца предложения/20–30
   символов, `has_cjk`/`strip_cjk_sentences`, ограниченный буфер,
   очистка cache-hit, `llm_empty` для CJK-only), тесты и документация;
-  chat-SSE (`app/chat/streaming.py`) — остаток KI-060.
+  chat-SSE (`app/chat/streaming.py`) — остаток KI-060. **Итерация 57:**
+  остаток закрыт — `app/chat/streaming.py` фильтрует CJK через общий
+  `CjkStreamBuffer` (`app/streaming.py`), cache-hit очищается `sanitize_cjk`,
+  CJK-only → `llm_empty`; 4 integration-теста.
 - **T-121.** Устойчивость `build_gold_dataset_v2.py` к таймаутам и
   инкрементальная запись датасета (T-104b). **[x]** — выполнено в
   итерации 54: `--timeout-s` (300 с по умолчанию), до 3 retry с
