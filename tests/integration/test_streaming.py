@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 from collections.abc import AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -96,7 +98,18 @@ def _db_available() -> bool:
     return True
 
 
-pytestmark = pytest.mark.skipif(not _db_available(), reason="PostgreSQL недоступен")
+def _engine_available() -> bool:
+    settings = get_settings()
+    candidate = Path(settings.stockfish_path)
+    return candidate.is_file() or shutil.which(settings.stockfish_path) is not None
+
+
+#: Все тесты файла начинают с POST /v1/analyze: без Stockfish он отдаёт
+#: 500 engine_not_found (KI-006), поэтому движок обязателен наравне с БД.
+pytestmark = [
+    pytest.mark.skipif(not _db_available(), reason="PostgreSQL недоступен"),
+    pytest.mark.skipif(not _engine_available(), reason="Stockfish не найден (KI-006)"),
+]
 
 
 def _client() -> TestClient:

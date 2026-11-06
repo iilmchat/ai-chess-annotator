@@ -84,6 +84,12 @@ def _engine_available() -> bool:
     return candidate.is_file() or shutil.which(settings.stockfish_path) is not None
 
 
+#: POST /v1/analyze без Stockfish отдаёт 500 engine_not_found (KI-006):
+#: такие тесты пропускаем, если движок не сконфигурирован/не установлен.
+requires_engine = pytest.mark.skipif(
+    not _engine_available(), reason="Stockfish не найден (KI-006)"
+)
+
 
 def _client() -> TestClient:
     settings = get_settings().model_copy(
@@ -92,6 +98,7 @@ def _client() -> TestClient:
     return TestClient(create_app(settings))
 
 
+@requires_engine
 def test_get_game_returns_saved_analysis_and_commentaries() -> None:
     with _client() as client:
         analyze = client.post(
@@ -122,6 +129,7 @@ def test_get_game_returns_saved_analysis_and_commentaries() -> None:
             asyncio.run(_delete_game(analysis_id))
 
 
+@requires_engine
 def test_list_games_contains_saved_game() -> None:
     with _client() as client:
         analyze = client.post(
@@ -186,7 +194,7 @@ async def _delete_game(game_id: int) -> None:
 # --- parity с POST /v1/analyze -------------------------------------------
 
 
-@pytest.mark.skipif(not _engine_available(), reason="Stockfish не найден (KI-006)")
+@requires_engine
 def test_get_game_moves_match_analyze_deeply() -> None:
     """GET повторяет ответ analyze целиком (глубокое сравнение `moves`)."""
     with _client() as client:

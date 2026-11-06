@@ -76,6 +76,9 @@ jobs:
           POSTGRES_HOST: 127.0.0.1
           POSTGRES_PORT: 5434
           REDIS_URL: redis://127.0.0.1:6380/0
+          # Пакет Ubuntu `stockfish` кладёт бинарник в /usr/games, а дефолт
+          # приложения — /usr/bin/stockfish (иначе 500 engine_not_found).
+          STOCKFISH_PATH: /usr/games/stockfish
         run: pytest -q
 
   frontend:
