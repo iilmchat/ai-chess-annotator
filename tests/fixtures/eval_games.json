@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-11-06",
+  "description": "Замороженный eval-набор для same-sample сравнения версий модели: 5 партий турнира Moscow zt 1964 (Stein/Bronstein/Spassky). Не менять состав и PGN — иначе сравнение с прошлыми прогонами теряет смысл (T-024/KI-023, итерация 58).",
+  "source": "data/sample1.pgn (Moscow zt 1964), eval-набор итерации 16",
+  "games": [
+    {
+      "game_id": -1,
+      "white": "Stein, Leonid",
+      "black": "Geller, Efim",
+      "event": "Moscow zt",
+      "date": "1964.??.??",
+      "round": "14",
+      "eco": "C48",
+      "result": "1/2-1/2",
+      "pgn_sha256": "06569082920613f58250dd97c46caaba2b4414f9deaab2ec5ba871dd72c47c20",
+      "pgn": "[Event \"Moscow zt\"]\n[Site \"?\"]\n[Date \"1964.??.??\"]\n[Round \"14\"]\n[White \"Stein, Leonid\"]\n[Black \"Geller, Efim\"]\n[Result \"1/2-1/2\"]\n[ECO \"C48\"]\n[PlyCount \"60\"]\n[EventDate \"1964.??.??\"]\n\n1. e4 e5 2. Nf3 Nc6 3. Nc3 Nf6 4. Bb5 Nd4 5. Nxd4 exd4 6. e5 dxc3 7. exf6 Qxf6\n8. dxc3 Qe5+ 9. Qe2 Qxe2+ 10. Bxe2 d5 11. Be3 Bd6 12. O-O O-O 13. Rfe1 Bf5 14.\nBd3 Bxd3 15. cxd3 Rfe8 16. Bd2 f6 17. Kf1 Kf7 18. h3 h5 19. Rxe8 Rxe8 20. Re1\nRxe1+ 21. Kxe1 Ke6 22. Ke2 b5 23. b3 a6 24. Kf3 c6 25. g4 hxg4+ 26. hxg4 Be5\n27. Ke3 f5 28. f3 Bf6 29. Be1 Ke5 30. Bg3+ Ke6 1/2-1/2\n"
+    },
+    {
+      "game_id": -2,
+      "white": "Stein, Leonid",
+      "black": "Suetin, Alexei",
+      "event": "Moscow zt",
+      "date": "1964.??.??",
+      "round": "2",
+      "eco": "B47",
+      "result": "1/2-1/2",
+      "pgn_sha256": "cccb81af9fd9abbf1cad2d7b8bbabd9c7263b84089b8a1dea1aea1240e100c41",
+      "pgn": "[Event \"Moscow zt\"]\n[Site \"?\"]\n[Date \"1964.??.??\"]\n[Round \"2\"]\n[White \"Stein, Leonid\"]\n[Black \"Suetin, Alexei\"]\n[Result \"1/2-1/2\"]\n[ECO \"B47\"]\n[PlyCount \"60\"]\n[EventDate \"1964.??.??\"]\n\n1. e4 c5 2. Nf3 Nc6 3. d4 cxd4 4. Nxd4 e6 5. Nc3 Qc7 6. Be2 Nf6 7. O-O a6 8. a3\nBd6 9. Kh1 Nxd4 10. Qxd4 Be5 11. Qd3 O-O 12. f4 Bxc3 13. bxc3 d5 14. e5 Ne4 15.\nc4 Qxc4 16. Qxc4 dxc4 17. Bxc4 Bd7 18. Bd3 Bc6 19. Be3 Rac8 20. Rfe1 Nc3 21.\nBd4 Bb5 22. Bxc3 Rxc3 23. Bxb5 axb5 24. Reb1 Rxc2 25. Rxb5 Rfc8 26. h3 R8c7 27.\nRab1 Rc1+ 28. Rxc1 Rxc1+ 29. Kh2 Rc7 30. a4 Kf8 1/2-1/2\n"
+    },
+    {
+      "game_id": -3,
+      "white": "Bronstein, David",
+      "black": "Spassky, Boris",
+      "event": "Moscow zt",
+      "date": "1964.??.??",
+      "round": "8",
+      "eco": "D27",
+      "result": "1/2-1/2",
+      "pgn_sha256": "b1fc1354b3fd5c62c7121c773312f1161cfb45ca4015309eda12d82e7747997d",
+      "pgn": "[Event \"Moscow zt\"]\n[Site \"?\"]\n[Date \"1964.??.??\"]\n[Round \"8\"]\n[White \"Bronstein, David\"]\n[Black \"Spassky, Boris\"]\n[Result \"1/2-1/2\"]\n[ECO \"D27\"]\n[PlyCount \"60\"]\n[EventDate \"1964.??.??\"]\n\n1. Nf3 Nf6 2. d4 d5 3. c4 dxc4 4. e3 e6 5. Bxc4 c5 6. O-O a6 7. dxc5 Qxd1 8.\nRxd1 Bxc5 9. Nbd2 b5 10. Be2 Bb7 11. Nb3 Be7 12. Na5 Bd5 13. Bd2 Nc6 14. Nxc6\nBxc6 15. Nd4 Bd5 16. f3 Bc5 17. Nc2 Ke7 18. Kf1 Nd7 19. e4 Bb7 20. a4 bxa4 21.\nRxa4 Rhc8 22. Bc3 f6 23. h4 Nb6 24. Ra5 Bd6 25. Ne3 Bf4 26. Bd4 Nd7 27. Nc4 Bc6\n28. Na3 Bb7 29. Nc4 Bc6 30. Na3 Bb7 1/2-1/2\n"
+    },
+    {
+      "game_id": -4,
+      "white": "Bronstein, David",
+      "black": "Kholmov, Ratmir",
+      "event": "Moscow zt",
+      "date": "1964.??.??",
+      "round": "3",
+      "eco": "E19",
+      "result": "1/2-1/2",
+      "pgn_sha256": "aefafa90dcb8342606ea6ce84ac360f025bb21f3340dd3fb3688073815ebe906",
+      "pgn": "[Event \"Moscow zt\"]\n[Site \"?\"]\n[Date \"1964.??.??\"]\n[Round \"3\"]\n[White \"Bronstein, David\"]\n[Black \"Kholmov, Ratmir\"]\n[Result \"1/2-1/2\"]\n[ECO \"E19\"]\n[PlyCount \"53\"]\n[EventDate \"1964.??.??\"]\n\n1. d4 Nf6 2. c4 e6 3. Nf3 b6 4. g3 Bb7 5. Bg2 Be7 6. O-O O-O 7. Nc3 Ne4 8. Qc2\nNxc3 9. Qxc3 f5 10. d5 Bf6 11. Qc2 Na6 12. Be3 c6 13. dxe6 dxe6 14. a3 c5 15.\nNe1 Qe7 16. Bxb7 Qxb7 17. Rb1 Nb8 18. b4 cxb4 19. axb4 Nc6 20. Nd3 Rac8 21. Qa2\nQf7 22. c5 b5 23. Qa6 e5 24. Qxb5 f4 25. gxf4 Qg6+ 26. Kh1 Qe4+ 27. Kg1 1/2-1/2\n"
+    },
+    {
+      "game_id": -5,
+      "white": "Bronstein, David",
+      "black": "Stein, Leonid",
+      "event": "Moscow zt",
+      "date": "1964.??.??",
+      "round": "5",
+      "eco": "D79",
+      "result": "1/2-1/2",
+      "pgn_sha256": "4f87900a0295bf11086fcd249d9827356bee38de105b331b295bbb9d542efc7d",
+      "pgn": "[Event \"Moscow zt\"]\n[Site \"?\"]\n[Date \"1964.??.??\"]\n[Round \"5\"]\n[White \"Bronstein, David\"]\n[Black \"Stein, Leonid\"]\n[Result \"1/2-1/2\"]\n[ECO \"D79\"]\n[PlyCount \"61\"]\n[EventDate \"1964.??.??\"]\n\n1. d4 Nf6 2. Nf3 g6 3. g3 Bg7 4. Bg2 O-O 5. O-O d5 6. c4 c6 7. cxd5 cxd5 8. Ne5\ne6 9. Nc3 Nfd7 10. Nf3 Nc6 11. a3 Nb6 12. Bg5 f6 13. Be3 g5 14. h3 h6 15. Bc1\nf5 16. e3 Bd7 17. b3 Be8 18. Bb2 Rc8 19. Rc1 Bh5 20. Ne2 Nd7 21. Qd3 Bg6 22.\nQd1 Bh5 23. Qd3 Bg6 24. Qd1 Qe7 25. Ne1 Bh5 26. Nf3 Qd6 27. Qd3 a6 28. Rfe1 Ne7\n29. Qd2 Bf6 30. Rxc8 Rxc8 31. Rc1 1/2-1/2\n"
+    }
+  ]
+}

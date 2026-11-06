@@ -17,6 +17,14 @@
 
     python scripts/evaluate_llm.py --games 5
 
+По умолчанию партии берутся из **замороженного набора**
+`tests/fixtures/eval_games.json` (5 партий Moscow zt 1964) — это обеспечивает
+same-sample сравнение версий модели (T-024/KI-023, итерация 58). Режим БД
+(случайные «самые короткие» партии из `annotated_games`) остаётся доступен
+явно:
+
+    python scripts/evaluate_llm.py --no-frozen-set --source new_samples --games 5
+
 Скрипт использует TestClient, то есть тот же ASGI-стек, что и production, и
 не требует отдельно запущенного uvicorn.
 """
@@ -25,6 +33,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import io
 import json
 import sys
 import time
@@ -32,6 +42,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
+
+import chess.pgn
 
 # `python scripts/evaluate_llm.py` кладёт в sys.path только `scripts/`.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -49,10 +61,20 @@ from app.db.models import AnnotatedGame, Level, LlmEvaluation  # noqa: E402
 from app.llm import get_llm_client  # noqa: E402
 from app.main import create_app  # noqa: E402
 
-__all__ = ["CjkSummary", "cjk_stats", "main"]
+__all__ = [
+    "CjkSummary",
+    "FrozenEvalSetError",
+    "cjk_stats",
+    "main",
+]
 
 DEFAULT_OUTPUT = PROJECT_ROOT / "docs" / "development" / "reports" / "LLM_EVAL.md"
 DEFAULT_JSON = PROJECT_ROOT / "docs" / "development" / "reports" / "llm_eval_results.json"
+
+#: Замороженный eval-набор (итерация 58): фиксированные 5 партий для
+#: same-sample сравнения версий модели. Менять состав/PGN нельзя — иначе
+#: результаты прошлых прогонов перестают быть сопоставимыми.
+DEFAULT_FROZEN_SET = PROJECT_ROOT / "tests" / "fixtures" / "eval_games.json"
 
 JUDGE_SYSTEM = (
     "Ты — строгий шахматный редактор и методолог оценки. "
@@ -184,11 +206,29 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--games", type=int, default=5, help="сколько партий взять (5–10)")
     parser.add_argument(
+        "--frozen-set",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "брать партии из замороженного набора tests/fixtures/eval_games.json "
+            "(по умолчанию; --no-frozen-set — режим БД)"
+        ),
+    )
+    parser.add_argument(
+        "--frozen-file",
+        type=Path,
+        default=None,
+        help=(
+            "путь к замороженному набору (по умолчанию "
+            "tests/fixtures/eval_games.json)"
+        ),
+    )
+    parser.add_argument(
         "--source",
         default=None,
         help=(
-            "фильтр по annotated_games.source (например, new_samples) — "
-            "фиксирует eval-набор для сравнения версий"
+            "фильтр по annotated_games.source (например, new_samples); "
+            "только вместе с --no-frozen-set"
         ),
     )
     parser.add_argument(
@@ -205,6 +245,104 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="таймаут LLM для eval (production default 120 с; локальная модель медленная)",
     )
     return parser.parse_args(argv)
+
+
+class FrozenEvalSetError(ValueError):
+    """Замороженный eval-набор отсутствует или испорчен (итерация 58)."""
+
+
+def _load_frozen_games(
+    path: Path = DEFAULT_FROZEN_SET, limit: int | None = None
+) -> list[GameRow]:
+    """Прочитать замороженный eval-набор из JSON-фикстуры.
+
+    Набор фиксирует PGN-партии и sha256 каждой из них: если файл изменили,
+    загрузчик падает, а не «тихо» оценивает другую выборку. Это делает
+    сравнение версий модели честным (same-sample, T-024/KI-023).
+
+    Args:
+        path: путь к JSON (по умолчанию `tests/fixtures/eval_games.json`).
+        limit: сколько первых партий вернуть (None/``<=0`` — все).
+
+    Raises:
+        FrozenEvalSetError: файла нет, JSON/схема некорректны, sha256 не
+            совпал или PGN не разбирается.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FrozenEvalSetError(
+            f"Файл замороженного eval-набора не найден: {path}"
+        ) from exc
+    except OSError as exc:
+        raise FrozenEvalSetError(f"Не удалось прочитать {path}: {exc}") from exc
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise FrozenEvalSetError(f"{path}: некорректный JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise FrozenEvalSetError(f"{path}: ожидался JSON-объект")
+    schema_version = payload.get("schema_version")
+    if schema_version != 1:
+        raise FrozenEvalSetError(
+            f"{path}: неподдерживаемая schema_version={schema_version!r}; "
+            "ожидается 1"
+        )
+
+    items = payload.get("games")
+    if not isinstance(items, list) or not items:
+        raise FrozenEvalSetError(f"{path}: список games пуст или отсутствует")
+
+    games: list[GameRow] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise FrozenEvalSetError(f"{path}: games[{index}] — не JSON-объект")
+        pgn = item.get("pgn")
+        white = item.get("white")
+        black = item.get("black")
+        if not isinstance(pgn, str) or not pgn.strip():
+            raise FrozenEvalSetError(f"{path}: games[{index}].pgn пуст")
+        if not isinstance(white, str) or not white.strip():
+            raise FrozenEvalSetError(f"{path}: games[{index}].white пуст")
+        if not isinstance(black, str) or not black.strip():
+            raise FrozenEvalSetError(f"{path}: games[{index}].black пуст")
+
+        expected_sha = item.get("pgn_sha256")
+        if expected_sha is not None:
+            actual_sha = hashlib.sha256(pgn.encode("utf-8")).hexdigest()
+            if actual_sha != expected_sha:
+                raise FrozenEvalSetError(
+                    f"{path}: games[{index}] PGN изменён "
+                    f"(sha256 {actual_sha[:12]}… != {str(expected_sha)[:12]}…); "
+                    "замороженный набор нельзя редактировать"
+                )
+
+        parsed = chess.pgn.read_game(io.StringIO(pgn))
+        if parsed is None or not any(parsed.mainline_moves()):
+            raise FrozenEvalSetError(
+                f"{path}: games[{index}] — PGN не разбирается или не содержит ходов"
+            )
+
+        game_id = item.get("game_id", -index)
+        if not isinstance(game_id, int):
+            raise FrozenEvalSetError(
+                f"{path}: games[{index}].game_id должен быть целым числом"
+            )
+        event = item.get("event")
+        games.append(
+            GameRow(
+                game_id=game_id,
+                pgn=pgn,
+                white=white,
+                black=black,
+                event=str(event) if event else "без события",
+            )
+        )
+
+    if limit is not None and limit > 0:
+        return games[:limit]
+    return games
 
 
 async def _load_games(
@@ -543,6 +681,8 @@ def _report(
     games: list[GameRow],
     levels: list[str],
     timeout_s: float,
+    *,
+    frozen_path: Path | None = None,
 ) -> str:
     overall = _averages(rows)
     scored = [row for row in rows if row.scores]
@@ -550,17 +690,29 @@ def _report(
     explained, evaluated = _explanation_counts(rows)
     explanation_share = 100.0 * explained / evaluated if evaluated else 0.0
     cjk = _cjk_summary(rows)
+    if frozen_path is not None:
+        games_line = (
+            f"- Партий: **{len(games)}** из замороженного набора "
+            f"`{frozen_path.name}` (same-sample сравнение версий модели)."
+        )
+        generation_line = "> **Генерация:** `club` → LM Studio (fallback DeepSeek), `gm` → DeepSeek"
+    else:
+        games_line = (
+            f"- Партий: **{len(games)}** "
+            "(самые короткие аннотированные партии из RAG)."
+        )
+        generation_line = "> **Генерация:** `club` → LM Studio, `gm` → DeepSeek"
     lines = [
         "# LLM-as-judge: оценка комментариев (T-023)",
         "",
         f"> **Дата:** {date.today().isoformat()} · "
         "**Статус:** завершено (MVP v0.1.0)",
         "> **Скрипт:** `scripts/evaluate_llm.py` · **Судья:** DeepSeek",
-        "> **Генерация:** `club` → LM Studio, `gm` → DeepSeek",
+        generation_line,
         "",
         "## Методика",
         "",
-        f"- Партий: **{len(games)}** (самые короткие аннотированные партии из RAG).",
+        games_line,
         f"- Уровней: **{', '.join(levels)}**; всего комментариев: **{len(rows)}**.",
         f"- Таймаут генерации для eval: **{timeout_s:.0f} с** (production — "
         "120 с; локальная модель на длинных пакетах фактов может не "
@@ -690,8 +842,11 @@ def _report(
         "",
         "- LLM-as-judge подвержен bias: модель склонна завышать оценки и хуже "
         "ловит тонкие фактические ошибки, чем человек.",
-        "- Выборка — 5 коротких партий, не 30–50; слепой тест уровней (T-024) "
-        "остаётся открытым.",
+        "- Выборка — фиксированные 5 партий (замороженный набор), не 30–50; "
+        "слепой тест уровней (T-024) остаётся открытым.",
+        "- Сравнивать результаты между версиями модели корректно только внутри "
+        "замороженного набора: при изменении состава/PGN дельты становятся "
+        "межвыборочными (T-024/KI-023).",
         "- Валидатор проверяет легальность SAN, а не атрибуцию оценок (KI-023). "
         "CJK-метрика измеряет языковой дрейф, но не исправляет его: блокировка "
         "и вырезание выполняются в сервисе (итерация 49).",
@@ -714,6 +869,9 @@ def _dump_json(rows: list[CommentaryRow], path: Path) -> None:
         payload.append(
             {
                 "game_id": row.game.game_id,
+                # Отрицательный id — синтетический id замороженного набора,
+                # а не строка annotated_games.
+                "frozen": row.game.game_id < 0,
                 "white": row.game.white,
                 "black": row.game.black,
                 "event": row.game.event,
@@ -779,17 +937,38 @@ def main(argv: list[str] | None = None) -> int:
         print("--levels: ожидается beginner, club или gm", file=sys.stderr)
         return 2
 
-    settings = get_settings()
     source = (args.source or "").strip() or None
-    games = asyncio.run(_load_games(args.games, settings, source=source))
-    if not games:
-        filter_hint = f" (source={source})" if source else ""
+    if source is not None and args.frozen_set:
         print(
-            f"В annotated_games нет партий{filter_hint}. Сначала выполните "
-            "scripts/ingest_pgn.py.",
+            "--source задаёт источник в БД и несовместим с замороженным "
+            "набором; добавьте --no-frozen-set, чтобы выбрать партии из "
+            "annotated_games.",
             file=sys.stderr,
         )
-        return 1
+        return 2
+
+    settings = get_settings()
+    frozen_path: Path | None = None
+    if args.frozen_set:
+        frozen_path = args.frozen_file or DEFAULT_FROZEN_SET
+        try:
+            games = _load_frozen_games(frozen_path, limit=args.games)
+        except FrozenEvalSetError as exc:
+            print(f"Ошибка замороженного eval-набора: {exc}", file=sys.stderr)
+            return 1
+        print(
+            f"Замороженный eval-набор: {len(games)} партий из {frozen_path}"
+        )
+    else:
+        games = asyncio.run(_load_games(args.games, settings, source=source))
+        if not games:
+            filter_hint = f" (source={source})" if source else ""
+            print(
+                f"В annotated_games нет партий{filter_hint}. Сначала выполните "
+                "scripts/ingest_pgn.py.",
+                file=sys.stderr,
+            )
+            return 1
 
     print(
         f"Партий: {len(games)}, уровни: {', '.join(levels)}"
@@ -808,7 +987,9 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    report = _report(rows, games, levels, args.timeout_s)
+    report = _report(
+        rows, games, levels, args.timeout_s, frozen_path=frozen_path
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(report, encoding="utf-8")
     _dump_json(rows, args.json_output)
