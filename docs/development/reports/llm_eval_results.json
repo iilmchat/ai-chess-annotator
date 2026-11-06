@@ -6,19 +6,23 @@
     "black": "Geller, Efim",
     "event": "Moscow zt",
     "level": "club",
-    "commentary_id": 915,
+    "commentary_id": 991,
     "model": "qwen-7b-tokenizer_gguf-v3",
     "model_name": "qwen-7b-tokenizer_gguf-v3",
-    "tokens_used": 2430,
-    "attempts": 2,
+    "tokens_used": 2253,
+    "attempts": 1,
     "validated": true,
     "has_explanation": false,
     "cjk_chars": 0,
     "cjk_share": 0.0,
-    "scores": {},
-    "judge_comment": "",
-    "judge_tokens": 0,
-    "error": "judge: в ответе судьи нет JSON-объекта"
+    "scores": {
+      "factual_accuracy": 2.0,
+      "usefulness": 2.0,
+      "style": 3.0
+    },
+    "judge_comment": "Комментарий содержит грубые фактические ошибки: неверно назван дебют, перепутаны потеря cp и лучшие ходы, Kxe1 назван зевком, а слон с g3 на e1 выдуман.",
+    "judge_tokens": 3308,
+    "error": null
   },
   {
     "game_id": -2,
@@ -27,19 +31,23 @@
     "black": "Suetin, Alexei",
     "event": "Moscow zt",
     "level": "club",
-    "commentary_id": 916,
+    "commentary_id": 992,
     "model": "qwen-7b-tokenizer_gguf-v3",
     "model_name": "qwen-7b-tokenizer_gguf-v3",
-    "tokens_used": 2420,
-    "attempts": 2,
+    "tokens_used": 2394,
+    "attempts": 1,
     "validated": true,
     "has_explanation": true,
     "cjk_chars": 0,
     "cjk_share": 0.0,
-    "scores": {},
-    "judge_comment": "",
-    "judge_tokens": 0,
-    "error": "judge: в ответе судьи нет JSON-объекта"
+    "scores": {
+      "factual_accuracy": 2.0,
+      "usefulness": 3.0,
+      "style": 5.0
+    },
+    "judge_comment": "Ключевые оценки искажены: лучший ход 28.Rxc1 назван зевком с выдуманной рекомендацией Kh2, а мотивы при 21...Bb5 и 8.a3 (конь в центре, пешка c5, «солдат Bb5») не соответствуют фактам.",
+    "judge_tokens": 2484,
+    "error": null
   },
   {
     "game_id": -3,
@@ -48,22 +56,22 @@
     "black": "Spassky, Boris",
     "event": "Moscow zt",
     "level": "club",
-    "commentary_id": 917,
+    "commentary_id": 993,
     "model": "qwen-7b-tokenizer_gguf-v3",
     "model_name": "qwen-7b-tokenizer_gguf-v3",
-    "tokens_used": 2416,
+    "tokens_used": 2507,
     "attempts": 1,
     "validated": true,
-    "has_explanation": true,
+    "has_explanation": false,
     "cjk_chars": 0,
     "cjk_share": 0.0,
     "scores": {
       "factual_accuracy": 3.0,
-      "usefulness": 3.0,
-      "style": 4.0
+      "usefulness": 4.0,
+      "style": 5.0
     },
-    "judge_comment": "Комментарий верно называет оценки и лучшие ходы в трёх ключевых точках, но содержит выдуманную рекомендацию O-O, путаницу с разменом слона на c5 и надуманные мотивы (слабые поля g5, g3, c5), а также противоречие между оценкой +0.55 и утверждением о равенстве.",
-    "judge_tokens": 2128,
+    "judge_comment": "Оценки и лучшие ходы по движку в основном совпадают с фактами, но комментарий путает дебют (Каро-Канн вместо QGD), придумывает несыгранный d3, мотивы с полем g5 и «развитием пешки e4», а рекомендация Bc4 на 9-м ходу прямо противоречит фактам (там лучший Nc6).",
+    "judge_tokens": 3383,
     "error": null
   },
   {
@@ -73,22 +81,22 @@
     "black": "Kholmov, Ratmir",
     "event": "Moscow zt",
     "level": "club",
-    "commentary_id": 918,
+    "commentary_id": 994,
     "model": "qwen-7b-tokenizer_gguf-v3",
     "model_name": "qwen-7b-tokenizer_gguf-v3",
-    "tokens_used": 2486,
-    "attempts": 2,
+    "tokens_used": 2443,
+    "attempts": 1,
     "validated": true,
     "has_explanation": true,
     "cjk_chars": 0,
     "cjk_share": 0.0,
     "scores": {
       "factual_accuracy": 3.0,
-      "usefulness": 3.0,
-      "style": 3.0
+      "usefulness": 4.0,
+      "style": 6.0
     },
-    "judge_comment": "Комментарий путает лучший ход на 10-м ходу (назван Rad1 вместо Bf4 из фактов), приписывает оценку +0.13 ходу 25...Qg6+, называет Rad1 ходом слона и повторяет выдуманный мотив ослабления h3.",
-    "judge_tokens": 2080,
+    "judge_comment": "Комментарий путает рекомендованные движком ходы (Rd1 вместо Bf4 на 10-м, Rfd1 вместо Rad1 на 14-м), неверно называет 17...Nb8 неточностью при статусе good и упоминает несуществующего слона на d2, хотя идеи о слабости h3 и вскрытии линии d изложены связно.",
+    "judge_tokens": 1975,
     "error": null
   },
   {
@@ -98,22 +106,22 @@
     "black": "Stein, Leonid",
     "event": "Moscow zt",
     "level": "club",
-    "commentary_id": 919,
+    "commentary_id": 995,
     "model": "qwen-7b-tokenizer_gguf-v3",
     "model_name": "qwen-7b-tokenizer_gguf-v3",
-    "tokens_used": 2361,
+    "tokens_used": 2527,
     "attempts": 1,
     "validated": true,
     "has_explanation": true,
     "cjk_chars": 0,
     "cjk_share": 0.0,
     "scores": {
-      "factual_accuracy": 4.0,
-      "usefulness": 6.0,
-      "style": 6.0
+      "factual_accuracy": 3.0,
+      "usefulness": 4.0,
+      "style": 5.0
     },
-    "judge_comment": "Точные цифры потерь и оценка f5 верны, но рекомендация b3 вместо a4 на 15-м ходу белых прямо противоречит фактам, а мотивы вокруг слабости g6/f6 выглядят придуманными.",
-    "judge_tokens": 1803,
+    "judge_comment": "Комментарий верно называет ключевые моменты и оценки, но дважды искажает рекомендации движка (b3 вместо a4, Qb6 вместо Nf6), выдумывает результат партии и содержит сомнительные рассуждения о пешках f6 и g6, из-за чего ценность объяснений падает.",
+    "judge_tokens": 2326,
     "error": null
   }
 ]
