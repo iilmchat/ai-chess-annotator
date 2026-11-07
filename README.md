@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-1408_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-1429_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-129_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -414,8 +414,8 @@ docker compose -f docker-compose.observability.yml up -d
 | Показатель | Значение |
 |---|---|
 | Версия | **v1.2.0** (KI-030 **Closed** в итерации 48: LoRA 3B/7B — 2.87/3.33 против zero-shot 4B 4.40/10, возврат к 4B; пересборка golden dataset — T-104b; KI-060 — языковой дрейф 7B) |
-| Итерация | **63 — Housekeeping & Docs (T-130)**: кэш `load_analyses` по `game_id` закрывает KI-044 (3 правки одной партии → 1 запрос); раздел «Метрики качества» в README; итерации 1–62 закрыты |
-| Backend-тесты | **1408 passed, 17 skipped, 1 deselected, 1 xfailed** (103 файла тестов, прогон итерации 63 против локальных PostgreSQL/Redis, 133.56 с; skip — 8 live LM Studio + 7 env-зависимых `token_budget` + 2 теста без `libcairo2`; `deselected` — live DeepSeek, `xfailed` — маркер KI-012) |
+| Итерация | **64 (шаг 1) — Semantic Evaluation (T-131)**: валидатор сверяет оценки и маты в тексте с `MoveAnalysis` (±0.5 пешки); итерации 1–63 закрыты |
+| Backend-тесты | **1429 passed, 17 skipped, 1 deselected, 1 xfailed** (104 файла тестов, прогон шага 1 итерации 64 против локальных PostgreSQL/Redis, 112.31 с; skip — 8 live LM Studio + 7 env-зависимых `token_budget` + 2 теста без `libcairo2`; `deselected` — live DeepSeek, `xfailed` — маркер KI-012) |
 | Frontend-тесты | **132 passed** (13 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, billing-API, auth-flow, PDF-API, eval, PGN-экспорт, варианты, загрузка PGN, стрелки; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **16** (15 ревизий, head `f2b3c4d5e6a7`; `llm_calls` — durable-история вызовов LLM, `usage_daily` — FinOps-агрегат, `engine_cache` — кэш MultiPV Stockfish, `export_jobs` — фоновые выгрузки, `users.is_verified` — email-верификация, `users.tier` + `stripe_customer_id` — подписка) |

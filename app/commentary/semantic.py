@@ -13,12 +13,17 @@ SAN-валидатор (:mod:`app.engine.validator`) проверяет толь
    * ``pin`` — «связка пешки f7», «связка коня на d2»,
      «pin of the f7 pawn».
 
+   :func:`extract_evaluation_claims` извлекает числовые оценки
+   («оценка +5.0») и маты («мат в 3»); они сверяются с `MoveAnalysis`
+   с допуском :data:`EVAL_TOLERANCE_PAWNS` (KI-023, итерация 64).
+
 2. :func:`validate_semantic_claims` строит множество позиций партии
    (`mainline_san`) и PV-линий движка (`extra_fens`) — так же, как это делает
    SAN-валидатор, — и отбраковывает утверждение, если описанной в нём фигуры
    **нет на указанном поле ни в одной** известной позиции. Требовать
    совпадения во всех позициях нельзя: комментарий описывает конкретный
    момент партии, и такая проверка давала бы массовые ложные срабатывания.
+   Оценки/маты сверяются с `MoveAnalysis`, если они переданы.
 
 3. На последней попытке генерации (:mod:`app.commentary.service`) вместо
    ошибки offending-предложения вырезаются
@@ -33,12 +38,13 @@ SAN-валидатор (:mod:`app.engine.validator`) проверяет толь
    иероглифами или отклоняет ответ, если их слишком много.
 
 Границы проверки (важно для ревью): проверяется **существование** фигуры на
-поле, а не тактическая корректность. Геометрия связки (кто кого связывает и
-куда направлен удар), оценки, мотивы, «лучший ход» и атрибуция вариантов не
-сверяются с пакетом фактов — см. KI-023. Извлечение эвристическое: один
-паттерн на предложение даёт не более одного утверждения своего вида, а
-наивная сегментация на предложения по ``.!?…`` ошибается на сокращениях и
-числах вроде «+120.5».
+поле и **числовая близость** оценки к любой оценке из `MoveAnalysis`
+(±0.5 пешки) либо совпадение количества ходов до мата. Геометрия связки (кто
+кого связывает и куда направлен удар), мотивы, «лучший ход» и атрибуция
+вариантов по-прежнему не сверяются с пакетом фактов — см. KI-023.
+Извлечение эвристическое: один паттерн на предложение даёт не более одного
+утверждения своего вида. Десятичные точки («+0.20») не считаются концом
+предложения, но сокращения и инициалы по-прежнему могут разрезаться неверно.
 """
 
 from __future__ import annotations
@@ -47,7 +53,7 @@ import bisect
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import chess
 from opentelemetry.trace import Status, StatusCode
@@ -55,14 +61,20 @@ from opentelemetry.trace import Status, StatusCode
 from app.ingestion.parser import parse_fen
 from app.observability import get_tracer
 
+if TYPE_CHECKING:
+    from app.engine.models import MoveAnalysis
+
 __all__ = [
     "CJK_MAX_SHARE",
     "CJK_PATTERN",
+    "EVAL_TOLERANCE_PAWNS",
     "CjkSanitizeResult",
+    "EvaluationClaim",
     "SemanticClaim",
     "cjk_share",
     "cjk_warning",
     "count_cjk",
+    "extract_evaluation_claims",
     "extract_semantic_claims",
     "has_cjk",
     "sanitize_cjk",
@@ -75,6 +87,13 @@ __all__ = [
 
 #: Вид семантического утверждения: фигура на поле или связка.
 ClaimKind = Literal["piece_on_square", "pin"]
+
+#: Вид числового утверждения: оценка в пешках или мат в N ходов.
+EvaluationKind = Literal["evaluation", "mate"]
+
+#: Допуск при сверке оценки из текста с фактами — ±0.5 пешки (KI-023).
+EVAL_TOLERANCE_PAWNS = 0.5
+_EVAL_TOLERANCE_CP = 50
 
 #: Стемы названий фигур для RU-паттернов: «слона», «конём», «пешки» и т. п.
 _RU_PIECES: tuple[tuple[str, chess.PieceType], ...] = (
@@ -101,9 +120,12 @@ _EN_PIECE_ALT = "|".join(name for name, _ in _EN_PIECES)
 
 #: Границы предложения: тело до терминатора/перевода строки + сами
 #: терминаторы. Перевод строки — тоже граница, поэтому утверждение не
-#: «переползает» из одного предложения в другое. Китайские терминаторы
-#: (``。！？``) добавлены для вырезания CJK-предложений (KI-060).
-_SENTENCE_TOKEN = re.compile(r"[^.!?…。！？\n]+[.!?…。！？]*")
+#: «переползает» из одного предложения в другое. Точка между цифрами —
+#: десятичный разделитель («+0.20»), а не конец предложения. Китайские
+#: терминаторы (``。！？``) добавлены для вырезания CJK-предложений (KI-060).
+_SENTENCE_TOKEN = re.compile(
+    r"(?:[^.!?…。！？\n]|(?<=\d)\.(?=\d))+[.!?…。！？]*"
+)
 
 #: Разделитель абзацев: пустая строка (возможно, с пробелами).
 _PARAGRAPH_SPLIT = re.compile(r"(?:[ \t]*\r?\n){2,}")
@@ -196,6 +218,13 @@ _CLAIM_PATTERNS: tuple[tuple[re.Pattern[str], ClaimKind], ...] = (
     (_EN_PIN_PASSIVE_PIECE_FIRST, "pin"),
 )
 
+#: Оценка в тексте: «+0.50», «-1.2», «−0.3» (unicode minus из некоторых
+#: моделей). Знак обязателен: это отсекает номера ходов и версии.
+_EVAL_TEXT = re.compile(r"[+\-−]\d+\.\d+")
+
+#: Мат в тексте: «мат в 3», «mate in 3».
+_MATE_TEXT = re.compile(r"\b(?:мат\s+в|mate\s+in)\s+(\d+)\b", re.IGNORECASE)
+
 
 @dataclass(frozen=True, slots=True)
 class SemanticClaim:
@@ -217,6 +246,27 @@ class SemanticClaim:
     square: chess.Square
     kind: ClaimKind
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationClaim:
+    """Извлечённое из текста числовое утверждение (KI-023).
+
+    Ровно одно из полей ``pawns`` / ``mate_in`` заполнено.
+
+    Attributes:
+        sentence: предложение, из которого взято утверждение.
+        text: совпавший фрагмент («+5.0», «мат в 3»).
+        kind: ``evaluation`` (оценка в пешках) или ``mate`` (мат в N).
+        pawns: оценка в пешках (знак сохраняется), если ``kind=evaluation``.
+        mate_in: число ходов до мата, если ``kind=mate``.
+    """
+
+    sentence: str
+    text: str
+    kind: EvaluationKind
+    pawns: float | None = None
+    mate_in: int | None = None
 
 
 def extract_semantic_claims(text: str) -> list[SemanticClaim]:
@@ -282,41 +332,133 @@ def extract_semantic_claims(text: str) -> list[SemanticClaim]:
     return claims
 
 
+def extract_evaluation_claims(text: str) -> list[EvaluationClaim]:
+    """Извлечь из текста оценки («+0.50») и маты («мат в 3»).
+
+    Оценка должна быть записана как знаковое число с десятичной точкой —
+    это формат пакета фактов (`+0.20`, `-1.50`). «+5» без дробной части не
+    считается оценкой: так модель может писать номер хода/варианта.
+
+    Args:
+        text: текст ответа LLM.
+
+    Returns:
+        Утверждения в порядке появления; дубликаты в одном предложении
+        схлопываются.
+    """
+    if not text or not text.strip():
+        return []
+    spans = _sentence_spans(text)
+    if not spans:
+        return []
+    starts = [start for start, _ in spans]
+
+    candidates: list[tuple[int, EvaluationClaim]] = []
+    for match in _EVAL_TEXT.finditer(text):
+        sentence = _sentence_for_match(match.start(), text, spans, starts)
+        if sentence is None:
+            continue
+        raw = match.group(0).replace("−", "-")
+        try:
+            pawns = float(raw)
+        except ValueError:  # pragma: no cover - regex гарантирует число
+            continue
+        candidates.append(
+            (
+                match.start(),
+                EvaluationClaim(
+                    sentence=sentence,
+                    text=" ".join(match.group(0).split()),
+                    kind="evaluation",
+                    pawns=pawns,
+                ),
+            )
+        )
+
+    for match in _MATE_TEXT.finditer(text):
+        sentence = _sentence_for_match(match.start(), text, spans, starts)
+        if sentence is None:
+            continue
+        mate_in = int(match.group(1))
+        candidates.append(
+            (
+                match.start(),
+                EvaluationClaim(
+                    sentence=sentence,
+                    text=" ".join(match.group(0).split()),
+                    kind="mate",
+                    mate_in=mate_in,
+                ),
+            )
+        )
+
+    claims: list[EvaluationClaim] = []
+    seen: set[tuple[object, ...]] = set()
+    for _, claim in sorted(candidates, key=lambda item: item[0]):
+        key: tuple[object, ...] = (
+            claim.kind,
+            claim.pawns,
+            claim.mate_in,
+            _normalize_text(claim.sentence),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        claims.append(claim)
+    return claims
+
+
 def validate_semantic_claims(
     text: str,
     initial_fen: str,
     *,
     mainline_san: Sequence[str] | None = None,
     extra_fens: Sequence[str] | None = None,
+    analyses: Sequence[MoveAnalysis] | None = None,
 ) -> tuple[bool, list[str]]:
-    """Проверить, что утверждения текста согласуются с позициями партии.
+    """Проверить, что утверждения текста согласуются с позициями и фактами.
 
-    Утверждение считается корректным, если описанная в нём фигура стоит на
-    указанном поле **хотя бы в одной** известной позиции (стартовая, позиции
-    после ходов mainline, позиции PV-линий движка). Для связок проверяется
-    только наличие фигуры на поле — геометрия связки не проверяется.
+    Утверждение о фигуре считается корректным, если описанная в нём фигура
+    стоит на указанном поле **хотя бы в одной** известной позиции (стартовая,
+    позиции после ходов mainline, позиции PV-линий движка). Для связок
+    проверяется только наличие фигуры на поле — геометрия связки не
+    проверяется.
+
+    Оценка из текста корректна, если она отличается от любой оценки
+    `MoveAnalysis` не более чем на :data:`EVAL_TOLERANCE_PAWNS` (0.5 пешки);
+    «мат в N» — если в анализе есть мат в N ходов (сторона не важна).
+    Если ``analyses`` не переданы, числовые утверждения не проверяются
+    (обратная совместимость одиночных вызовов).
 
     Args:
         text: текст ответа LLM.
         initial_fen: стартовая позиция партии.
         mainline_san: ходы партии (SAN) — по ним строятся позиции.
         extra_fens: дополнительные позиции (PV-линии движка).
+        analyses: анализы ходов — источник оценок и матов; None — не
+            проверять числовые утверждения.
 
     Returns:
         ``(все_корректны, список_проблем)``: проблемы — короткие фрагменты
-        текста («слон на e6»), без повторов, в порядке появления.
+        текста («слон на e6», «+5.0»), без повторов, в порядке появления.
 
     Raises:
         InvalidFenError: `initial_fen` или один из `extra_fens` некорректен.
     """
     claims = extract_semantic_claims(text)
-    if not claims:
+    evaluation_claims = (
+        extract_evaluation_claims(text) if analyses else []
+    )
+    if not claims and not evaluation_claims:
         return (True, [])
 
     tracer = get_tracer()
     with tracer.start_as_current_span("semantic.validate") as span:
         # Атрибуты — только счётчики, без текста LLM и FEN (без PII).
         span.set_attribute("semantic.claims", len(claims))
+        span.set_attribute(
+            "semantic.evaluation_claims", len(evaluation_claims)
+        )
         if mainline_san is not None:
             span.set_attribute("semantic.mainline_moves", len(mainline_san))
         if extra_fens is not None:
@@ -325,12 +467,20 @@ def validate_semantic_claims(
             positions = _known_positions(
                 initial_fen, mainline_san, extra_fens
             )
+            known_cp, known_mates = _known_evaluations(analyses or ())
             problems: list[str] = []
             seen: set[str] = set()
             for claim in claims:
                 if _claim_holds(claim, positions):
                     continue
                 label = _problem_label(claim)
+                if label and label not in seen:
+                    seen.add(label)
+                    problems.append(label)
+            for evaluation in evaluation_claims:
+                if _evaluation_holds(evaluation, known_cp, known_mates):
+                    continue
+                label = _normalize_text(evaluation.text)
                 if label and label not in seen:
                     seen.add(label)
                     problems.append(label)
@@ -397,7 +547,7 @@ def semantic_warning(problems: Sequence[str], language: str = "ru") -> str:
     """Короткое предупреждение для повторной генерации (без пакета фактов).
 
     Args:
-        problems: фрагменты невалидных утверждений.
+        problems: фрагменты невалидных утверждений (фигуры, оценки, маты).
         language: ``ru`` или ``en`` — язык подсказки.
 
     Returns:
@@ -406,14 +556,14 @@ def semantic_warning(problems: Sequence[str], language: str = "ru") -> str:
     bad = ", ".join(problems)
     if language == "en":
         return (
-            "WARNING: the previous answer placed pieces on squares where they "
-            f"do not stand in this game: {bad}. Rewrite the commentary and do "
-            "not put pieces on squares where they are not."
+            "WARNING: the previous answer contained claims that do not match "
+            f"the game facts: {bad}. Rewrite the commentary using only moves, "
+            "pieces and evaluations from the fact package."
         )
     return (
-        "ВНИМАНИЕ: в предыдущем ответе были утверждения о фигурах, которых нет "
-        f"на доске: {bad}. Перепиши комментарий и не приписывай фигуры полям, "
-        "где их нет."
+        "ВНИМАНИЕ: в предыдущем ответе были утверждения, которые не "
+        f"согласуются с фактами партии: {bad}. Перепиши комментарий, "
+        "используя только ходы, фигуры и оценки из пакета фактов."
     )
 
 
@@ -678,6 +828,51 @@ def _claim_holds(claim: SemanticClaim, positions: Sequence[chess.Board]) -> bool
             continue
         return True
     return False
+
+
+def _known_evaluations(
+    analyses: Sequence[MoveAnalysis],
+) -> tuple[set[int], set[int]]:
+    """Оценки (сантипешки за белых) и маты из анализа партии.
+
+    `MoveAnalysis.eval_before`/`eval_after` хранятся с точки зрения
+    сделавшего ход, а пакет фактов печатает оценку за белых. Знак
+    восстанавливается по чётности полухода — так же, как в
+    `scripts/evaluate_llm._report` и `app.llm.prompts._format_eval`.
+
+    Returns:
+        ``(оценки_cp_за_белых, абсолютные_мат_в_N)``.
+    """
+    cp_values: set[int] = set()
+    mate_values: set[int] = set()
+    for analysis in analyses:
+        sign = 1 if analysis.ply % 2 == 1 else -1
+        cp_values.add(analysis.eval_before * sign)
+        cp_values.add(analysis.eval_after * sign)
+        if analysis.mate_after is not None:
+            mate_values.add(abs(analysis.mate_after))
+        for line in analysis.lines:
+            if line.score_cp is not None:
+                cp_values.add(line.score_cp * sign)
+            if line.mate is not None:
+                mate_values.add(abs(line.mate))
+    return cp_values, mate_values
+
+
+def _evaluation_holds(
+    claim: EvaluationClaim,
+    known_cp: set[int],
+    known_mates: set[int],
+) -> bool:
+    """Согласуется ли числовое утверждение с фактами анализа."""
+    if claim.kind == "mate":
+        return claim.mate_in is not None and claim.mate_in in known_mates
+    if claim.pawns is None:
+        return False
+    text_cp = round(claim.pawns * 100)
+    return any(
+        abs(text_cp - known) <= _EVAL_TOLERANCE_CP for known in known_cp
+    )
 
 
 def _problem_label(claim: SemanticClaim) -> str:

@@ -338,7 +338,8 @@ async def _generate_with_validation(
     """Сгенерировать текст; переспросить при нелегальных ходах или фактах.
 
     KI-023: после проверки легальности SAN выполняется семантическая
-    проверка утверждений о позиции («слон на e6», «связка пешки f7»).
+    проверка утверждений о позиции («слон на e6», «связка пешки f7»), а
+    также числовых оценок («+5.0») и матов («мат в 3») по `MoveAnalysis`.
     Невалидные утверждения — повод переспросить; если проблема осталась на
     последней попытке, а ходы легальны, невалидные предложения вырезаются
     (:func:`strip_invalid_claims`), а не поднимается 502: пользователь
@@ -355,7 +356,8 @@ async def _generate_with_validation(
         package: пакет фактов (исходный промпт).
         system_prompt: системная роль.
         parsed: разобранная партия (mainline + стартовая позиция).
-        analyses: анализы ходов (PV-линии для extra_fens).
+        analyses: анализы ходов (PV-линии для extra_fens; оценки и маты
+            для сверки числовых утверждений).
         max_retries: сколько раз переспрашивать (0 — одна попытка).
         language: язык retry-подсказок (``ru``/``en``).
         semantic_validation_enabled: флаг ``SEMANTIC_VALIDATION_ENABLED``.
@@ -432,6 +434,7 @@ async def _generate_with_validation(
             parsed.initial_fen,
             mainline_san=mainline,
             extra_fens=extra_fens,
+            analyses=analyses,
         )
         if all_ok:
             return text, result.usage, attempt

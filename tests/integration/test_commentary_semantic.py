@@ -35,6 +35,12 @@ ILLEGAL_TEXT = "Белые сыграли Qxf7 и выиграли партию.
 MIXED_TEXT = "Белые сыграли Qxf7, а слон на e6 был активен."
 #: Первое предложение невалидно, второе — корректно.
 STRIPPABLE_TEXT = "Слон на e6 был активен. Партия началась с хода d4."
+#: Оценка противоречит фактам (+0.20 за белых в seed): должна вызвать retry.
+WRONG_EVAL_TEXT = "Движок оценил позицию в +3.0."
+#: Оценка совпадает с фактом +0.20 — один проход.
+CORRECT_EVAL_TEXT = "Движок оценил позицию в +0.2."
+#: Неверная оценка в первом предложении, корректное второе.
+STRIPPABLE_EVAL_TEXT = "Оценка позиции +3.0. Партия началась с хода d4."
 
 
 class ScriptedLLM(BaseLLMClient):
@@ -160,6 +166,36 @@ async def test_clean_text_without_claims_needs_single_attempt(
     assert len(llm.prompts) == 1
 
 
+async def test_wrong_evaluation_triggers_retry(
+    session: AsyncSession,
+) -> None:
+    """KI-023: «+3.0» при факте «+0.20» — повод переписать."""
+    game = await _seed_game(session)
+    llm = ScriptedLLM([WRONG_EVAL_TEXT, LEGAL_TEXT])
+
+    result = await generate_commentary(session, game.id, "club", client=llm)
+
+    assert result.attempts == 2
+    assert result.text == LEGAL_TEXT
+    assert "+3.0" in llm.prompts[1]
+    assert "ВНИМАНИЕ" in llm.prompts[1]
+    assert "Перепиши" in llm.prompts[1]
+
+
+async def test_correct_evaluation_needs_single_attempt(
+    session: AsyncSession,
+) -> None:
+    """Совпадающая оценка (+0.2) не должна вызывать retry."""
+    game = await _seed_game(session)
+    llm = ScriptedLLM([CORRECT_EVAL_TEXT])
+
+    result = await generate_commentary(session, game.id, "club", client=llm)
+
+    assert result.attempts == 1
+    assert result.text == CORRECT_EVAL_TEXT
+    assert len(llm.prompts) == 1
+
+
 # --- последняя попытка: вырезание вместо 502 ------------------------------
 
 
@@ -178,6 +214,23 @@ async def test_last_attempt_strips_hallucinated_sentence(
     assert result.validated is True
     assert len(llm.prompts) == 1
     assert "слон на e6" not in result.text
+    assert result.text == "Партия началась с хода d4."
+
+
+async def test_last_attempt_strips_wrong_evaluation(
+    session: AsyncSession,
+) -> None:
+    game = await _seed_game(session)
+    llm = ScriptedLLM([STRIPPABLE_EVAL_TEXT])
+    settings = get_settings().model_copy(update={"commentary_max_retries": 0})
+
+    result = await generate_commentary(
+        session, game.id, "club", settings=settings, client=llm
+    )
+
+    assert result.attempts == 1
+    assert result.validated is True
+    assert "+3.0" not in result.text
     assert result.text == "Партия началась с хода d4."
 
 

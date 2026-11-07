@@ -1323,6 +1323,15 @@
   `scripts/export_dataset.py::_export_v2`. Три правки одной партии дают
   один `load_analyses` вместо трёх; пустой результат тоже кэшируется.
   Тесты — `tests/unit/test_dataset_export_cache.py` (4).
+- **T-131.** Валидация оценок и матов в тексте (KI-023, итерация 64, шаг
+  1). **[x]** — `app/commentary/semantic.py`: `extract_evaluation_claims`
+  находит `[+-]\d+\.\d+` и «мат в N»; `validate_semantic_claims(...,
+  analyses=...)` сверяет их с `MoveAnalysis` с допуском **±0.5 пешки** и
+  совпадением мата (оценки нормализуются к точке зрения белых). Ошибка
+  попадает в `semantic_problems` → retry, на последней попытке предложение
+  вырезается. `generate_commentary` передаёт `analyses`. Тесты —
+  `tests/unit/test_semantic_evaluations.py` (18) +
+  `tests/integration/test_commentary_semantic.py` (+3).
 
 ---
 
