@@ -3837,3 +3837,55 @@ eval и 28 unit-тестов; baseline v3 (**3.60/10**) зафиксирован
 - Обучить v4 на 556 записях и поднять её в LM Studio/vLLM.
 - Прогнать `V4_EVAL_GUIDE.md` шаги 1–5, сравнить с baseline **3.60/10**;
   проверить, что в JSON `model` — v4, а не `deepseek-chat` (fallback).
+
+## Итерация 63 — Housekeeping & Docs (T-130/KI-044)
+
+**Дата:** 2026-11-08
+**Статус:** ✅ завершена — N+1 `load_analyses` при экспорте датасета
+закрыт кэшем по `game_id` (KI-044), README получил раздел «Метрики
+качества»; `pytest`/`ruff`/`mypy` зелёные.
+**Отчёт:** `docs/development/reports/v1.5.0/ITERATION-63.md`
+
+### Что сделано
+
+- [x] **KI-044 / T-130. Кэш анализов при экспорте.** `AnalysesCache` в
+  `app/dataset/records.py` хранит `MoveAnalysis` по `game_id` на время
+  одной выгрузки; используется в `iter_export_records` (streaming и
+  фоновые `export_jobs` админки) и в
+  `scripts/export_dataset.py::_export_v2`. Три правки одной партии дают
+  **1** `load_analyses` вместо 3; пустой анализ тоже кэшируется.
+- [x] **Тесты (+4).** `tests/unit/test_dataset_export_cache.py`:
+  3 правки одной партии → 1 вызов (оба пути), 2 партии → 2 вызова,
+  партия без анализа → 1 вызов и 0 записей.
+- [x] **README: раздел «Метрики качества».** Baseline v3 — **3.60/10**
+  (2.60/3.40/4.80, объяснения 60%, CJK 0.00%), v4-датасет — **556
+  записей**, порог 7/10 и команда сравнения v3↔v4.
+- [x] **Документация.** `TODO.md` (T-130), `KNOWN_ISSUES.md` (KI-044
+  **Closed**), `CHANGELOG.md`, этот раздел, отчёт итерации 63,
+  `README.md` (метрики/счётчики), `docs/README.md` (индекс отчётов).
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Бенчмарк экспорта на 1000 правок | Отдельный wall-clock тест нестабилен на Windows; кэш проверен счётчиком вызовов, а не временем | KI-044 (Closed), §5 отчёта |
+| v4-eval | Модель ещё обучается на AMD GPU; гайд и сравнение готовы | T-104b, `V4_EVAL_GUIDE.md` |
+
+### Метрики
+
+- **Новые тесты:** **4** (`tests/unit/test_dataset_export_cache.py`).
+- **Backend-тесты:** **1408 passed, 17 skipped, 1 deselected, 1 xfailed**
+  (133.56 с, exit 0; PostgreSQL `5437`, Redis `6385`; skip — 8 live
+  LM Studio + 7 env-зависимых `token_budget` + 2 теста без `libcairo2`).
+- **Целевые экспортные тесты:** **33 passed** (кэш + `admin_exports` +
+  `export_jobs` + `dataset_export_v2`, реальная БД).
+- **ruff:** `All checks passed!`; **mypy:** `Success: no issues found in
+  92 source files`.
+- **GitHub Actions:** не запускался до push (коммит и push — после
+  зелёного локального прогона).
+
+### Что дальше
+
+- Дождаться v4 (3B, обучение на AMD) и прогнать `V4_EVAL_GUIDE.md`
+  шаги 1–5; сравнить с baseline **3.60/10**.
+- Вернуться к KI-060 (CJK/объём данных) после v4-eval.

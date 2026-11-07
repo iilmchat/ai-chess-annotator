@@ -7,6 +7,9 @@
 фильтрации.
 
 Никакого HTTP здесь нет: только SQLAlchemy-сессия и модели.
+
+Несколько правок одной партии не должны повторно читать `moves`/`motifs`:
+на время выгрузки работает `AnalysesCache` по `game_id` (KI-044).
 """
 
 from __future__ import annotations
@@ -29,10 +32,12 @@ from app.dataset.export import (
     record_from_edit,
 )
 from app.db.models import Commentary, Edit, Game, Level
+from app.engine.models import MoveAnalysis
 from app.errors import InvalidLevelError, InvalidPgnError
-from app.ingestion import parse_pgn
+from app.ingestion import ParsedGame, parse_pgn
 
 __all__ = [
+    "AnalysesCache",
     "ExportFilters",
     "apply_export_filters",
     "build_export_record",
@@ -44,6 +49,42 @@ __all__ = [
 ExportLevel = Literal["beginner", "club", "gm"]
 
 _LEVEL_VALUES: frozenset[str] = frozenset({"beginner", "club", "gm"})
+
+
+class AnalysesCache:
+    """Кэш `load_analyses` по `game_id` на одну выгрузку (KI-044).
+
+    Экспорт идёт keyset-батчами по `edits`, и несколько правок одной партии
+    раньше означали повторный `load_analyses` (два SQL-запроса на каждую
+    правку). Кэш живёт ровно один вызов `iter_export_records`/`_export_v2`;
+    данные в рамках процесса не меняются, поэтому инвалидация не нужна.
+
+    Пустой результат тоже кэшируется: у партии без анализа повторно в БД
+    не ходим — запись всё равно будет пропущена.
+    """
+
+    __slots__ = ("_items", "hits", "misses")
+
+    def __init__(self) -> None:
+        self._items: dict[int, list[MoveAnalysis]] = {}
+        self.hits = 0
+        self.misses = 0
+
+    async def get(
+        self,
+        session: AsyncSession,
+        game: Game,
+        parsed: ParsedGame,
+    ) -> list[MoveAnalysis]:
+        """Вернуть анализ партии, загрузив его только при первом обращении."""
+        cached = self._items.get(game.id)
+        if cached is not None:
+            self.hits += 1
+            return cached
+        self.misses += 1
+        analyses = await load_analyses(session, game, parsed)
+        self._items[game.id] = analyses
+        return analyses
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,8 +185,19 @@ async def build_export_record(
     game: Game | None,
     *,
     schema_version: int,
+    analyses_cache: AnalysesCache | None = None,
 ) -> dict[str, Any] | None:
-    """Собрать JSONL-запись или вернуть ``None`` (пропуск проблемной записи)."""
+    """Собрать JSONL-запись или вернуть ``None`` (пропуск проблемной записи).
+
+    Args:
+        session: сессия БД.
+        edit: правка редактора.
+        commentary: комментарий, к которому относится правка.
+        game: партия комментария (None — запись пропускается).
+        schema_version: 1 — legacy, 2 — пакет фактов.
+        analyses_cache: кэш анализов на время выгрузки (KI-044); None —
+            загружать каждый раз (совместимость с одиночными вызовами).
+    """
     if schema_version == LEGACY_SCHEMA_VERSION:
         return record_from_edit(
             edit, commentary, schema_version=LEGACY_SCHEMA_VERSION
@@ -156,7 +208,10 @@ async def build_export_record(
         parsed = parse_pgn(game.pgn)
     except InvalidPgnError:
         return None
-    analyses = await load_analyses(session, game, parsed)
+    if analyses_cache is None:
+        analyses = await load_analyses(session, game, parsed)
+    else:
+        analyses = await analyses_cache.get(session, game, parsed)
     if not analyses:
         return None
     try:
@@ -183,9 +238,11 @@ async def iter_export_records(
 
     Проблемные записи (нет партии/PGN не разобран/нет анализа) молча
     пропускаются — как в streaming-экспорте: одна битая строка не должна
-    ронять всю выгрузку.
+    ронять всю выгрузку. Анализы кэшируются по `game_id` на весь экспорт
+    (KI-044): несколько правок одной партии дают один `load_analyses`.
     """
     last_id = 0
+    analyses_cache = AnalysesCache()
     while True:
         statement = (
             select(Edit, Commentary, Game)
@@ -210,6 +267,7 @@ async def iter_export_records(
                 commentary,
                 game,
                 schema_version=filters.schema_version,
+                analyses_cache=analyses_cache,
             )
             if record is not None:
                 yield record

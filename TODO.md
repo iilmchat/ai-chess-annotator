@@ -1316,6 +1316,13 @@
   `.env` на v4 (LoRA/GGUF), прогон `evaluate_llm.py`, проверка fallback в
   DeepSeek, сравнение и интерпретация. Тесты —
   `tests/unit/test_compare_evals.py` (28).
+- **T-130.** Кэш `load_analyses` при экспорте датасета (KI-044, итерация
+  63). **[x]** — `AnalysesCache` в `app/dataset/records.py` кэширует
+  `MoveAnalysis` по `game_id` на время одной выгрузки; используется и в
+  `iter_export_records` (админка/фоновые джобы), и в
+  `scripts/export_dataset.py::_export_v2`. Три правки одной партии дают
+  один `load_analyses` вместо трёх; пустой результат тоже кэшируется.
+  Тесты — `tests/unit/test_dataset_export_cache.py` (4).
 
 ---
 

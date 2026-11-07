@@ -140,6 +140,14 @@
 
 ### Fixed
 
+- **N+1 `load_analyses` при экспорте датасета (KI-044, T-130, итерация 63):**
+  несколько правок одной партии больше не читают `moves`/`motifs` повторно.
+  `AnalysesCache` в `app/dataset/records.py` кэширует анализ по `game_id`
+  на время одной выгрузки; кэш используют и `iter_export_records`
+  (стриминг/фоновые джобы админки), и `scripts/export_dataset.py`
+  (`--schema-version 2`). Пустой анализ тоже кэшируется — партия без
+  `/v1/analyze` не ходит в БД на каждую правку. Тесты:
+  `tests/unit/test_dataset_export_cache.py` (4).
 - **Судья LLM-eval больше не обрезает JSON на 1024 токенах (итерация 61):**
   `_judge` в `scripts/evaluate_llm.py` собирает клиента DeepSeek через
   `_judge_client`, который подставляет `llm_max_tokens =

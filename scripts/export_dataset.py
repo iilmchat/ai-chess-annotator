@@ -31,7 +31,8 @@
 v2 экспортирует пакет фактов пакетами (keyset-пагинация по `edits.id`), а не
 через один стриминговый курсор: внутри обработки записи нужны запросы
 `load_analyses`, а asyncpg не допускает параллельные операции на одном
-соединении.
+соединении. Чтобы правки одной партии не читали `moves`/`motifs` повторно,
+анализы кэшируются по `game_id` на время выгрузки (KI-044, `AnalysesCache`).
 """
 
 from __future__ import annotations
@@ -50,7 +51,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
-from app.commentary.service import load_analyses  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.db.models import Commentary, Edit, Game, Level  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
@@ -90,6 +90,7 @@ from app.dataset.export import (  # noqa: E402
 from app.dataset.export import (  # noqa: E402
     level_value as _level_value,
 )
+from app.dataset.records import AnalysesCache  # noqa: E402
 
 
 def _warn(message: str) -> None:
@@ -151,11 +152,14 @@ async def _export_v2(
     Читает `edits` keyset-пагинацией (без загрузки всей таблицы в память),
     для каждой записи восстанавливает партию/анализ и пакет фактов.
     Проблемные записи (нет партии, битый PGN, нет анализа) пропускаются —
-    скрипт продолжает работу и печатает статистику.
+    скрипт продолжает работу и печатает статистику. Анализы кэшируются по
+    `game_id` на весь экспорт (KI-044): правки одной партии не перечитывают
+    `moves`/`motifs` заново.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     last_id = min_id - 1
     remaining = limit
+    analyses_cache = AnalysesCache()
     with output.open("w", encoding="utf-8") as stream:
         while remaining is None or remaining > 0:
             current_batch = (
@@ -181,7 +185,7 @@ async def _export_v2(
                 if remaining is not None:
                     remaining -= 1
                 record = await _record_v2_or_skip(
-                    session, edit, commentary, game, stats
+                    session, edit, commentary, game, stats, analyses_cache
                 )
                 if record is not None:
                     _write_record(stream, record)
@@ -193,6 +197,7 @@ async def _record_v2_or_skip(
     commentary: Commentary,
     game: Game | None,
     stats: ExportStats,
+    analyses_cache: AnalysesCache,
 ) -> dict[str, Any] | None:
     """Собрать v2-запись или учесть пропуск; вернуть `None` при пропуске."""
     level = _level_value(commentary.level)
@@ -212,7 +217,7 @@ async def _record_v2_or_skip(
         )
         stats.record_skipped("invalid_pgn")
         return None
-    analyses = await load_analyses(session, game, parsed)
+    analyses = await analyses_cache.get(session, game, parsed)
     if not analyses:
         _warn(
             f"edit {edit.id} пропущен: у партии {game.id} нет анализа ходов "
