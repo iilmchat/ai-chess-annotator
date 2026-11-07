@@ -28,6 +28,7 @@
 | [DESIGN_ADMIN_AND_OPS.md](development/DESIGN_ADMIN_AND_OPS.md) | Production hardening: админ-панель, prompt registry, OTel-трейсинг, FinOps, semantic cache, guardrails, audit (T-028…T-035) |
 | [GETTING_STARTED.md](development/GETTING_STARTED.md) | Разворачивание за ~20 минут: Docker, venv, миграции, uvicorn, фронтенд, troubleshooting |
 | [DEPLOYMENT_GPU_TUNNEL.md](development/DEPLOYMENT_GPU_TUNNEL.md) | Деплой на облачный VPS (Selectel) + обратный SSH-туннель до домашней GPU (LM Studio): sshd `GatewayPorts`, проверка из контейнера, `LLM_LOCAL_*`, fallback в DeepSeek, troubleshooting, rollback (T-123/T-126, итерация 59) |
+| [V4_EVAL_GUIDE.md](development/V4_EVAL_GUIDE.md) | Финальный eval v4: сохранение baseline v3, переключение `.env` (LoRA/GGUF), прогон `evaluate_llm.py`, проверка fallback, сравнение `compare_evals.py` (T-129, итерация 62) |
 | [../TODO.md](../TODO.md) | Последовательность задач T-001…T-119 с зависимостями, DoD и оценками |
 
 ### Пользователю и QA
@@ -64,6 +65,7 @@
 | [reports/v0.10.0/](development/reports/v0.10.0/) | Отчёт итерации 33 — frontend auth-UX (KI-055) и retention экспортов (KI-054) |
 | [reports/v0.11.0/](development/reports/v0.11.0/) | Отчёт итерации 34 — security review (T-110), GHCR (T-027), English prompts (T-106), Grafana alerts (T-113) |
 | [reports/v1.0.0/](development/reports/v1.0.0/) | Отчёт итерации 35 — финализация v1.0.0: английские PDF/чат/ошибки API (KI-058), `/history` плейсхолдер, admin `export_jobs`, blind-test script, финальные docs (`ITERATION-35.md`) |
+| [reports/v1.5.0/](development/reports/v1.5.0/) | Отчёты итераций 46–62: LoRA/данные, eval v3, судья, подготовка v4 (`ITERATION-62.md` — сравнение v3↔v4 и гайд) |
 | [reports/LLM_EVAL.md](development/reports/LLM_EVAL.md) | LLM-as-judge: средние оценки по трём шкалам (T-023) |
 
 ### Состояние проекта

@@ -1308,6 +1308,14 @@
   `beginner` остаётся строго локальным, `gm` — напрямую DeepSeek. Тесты —
   `tests/unit/test_llm_router.py` (18) + factory-тесты в
   `tests/unit/test_llm.py` (fallback в облако, local-only без ключа).
+- **T-129.** Сравнение прогонов LLM-eval и гайд v4 (итерация 62). **[x]** —
+  `scripts/compare_evals.py`: Markdown-таблица с дельтами по трём шкалам,
+  доле объяснений и CJK, предупреждения о разных наборах/метках модели,
+  `--output` и `--strict-samples`, UTF-8-вывод на Windows-консоли. Гайд
+  `docs/development/V4_EVAL_GUIDE.md`: сохранение baseline, переключение
+  `.env` на v4 (LoRA/GGUF), прогон `evaluate_llm.py`, проверка fallback в
+  DeepSeek, сравнение и интерпретация. Тесты —
+  `tests/unit/test_compare_evals.py` (28).
 
 ---
 

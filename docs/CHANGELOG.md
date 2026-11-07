@@ -8,6 +8,17 @@
 
 ### Added
 
+- **Сравнение v3/v4 и гайд финального eval (T-129, итерация 62):**
+  `scripts/compare_evals.py` читает два JSON-прогона `evaluate_llm.py` и
+  печатает Markdown-таблицу с дельтами по трём шкалам, доле объяснений и
+  CJK-дрейфу; проверяет same-sample (`game_id`/`level`), предупреждает о
+  совпавших метках модели, умеет `--output`, `--baseline-label`,
+  `--new-label`, `--strict-samples` и переводит Windows-консоль в UTF-8.
+  Гайд [`docs/development/V4_EVAL_GUIDE.md`](development/V4_EVAL_GUIDE.md):
+  сохранение baseline v3, переключение `.env` на v4 (LoRA-адаптер или
+  смердженный GGUF), команда прогона, обязательная проверка fallback в
+  DeepSeek, команда сравнения и интерпретация результата. Тесты:
+  `tests/unit/test_compare_evals.py` (+28).
 - **GPU-туннель: настройки в `Settings` и гайд (T-123/T-126, итерация 59):**
   `LLM_LOCAL_BACKEND_URL` — адрес LM Studio глазами приложения (на dev —
   `http://127.0.0.1:8034/v1`, на облачном VPS — вход обратного SSH-туннеля,

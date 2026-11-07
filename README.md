@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-1386_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-1412_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-129_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -375,6 +375,7 @@ docker compose -f docker-compose.observability.yml up -d
 | [ARCHITECTURE.md](docs/development/ARCHITECTURE.md) | разработчики | Архитектура v1.0.0: C4-диаграммы, потоки, API, локализация, фоновые выгрузки, Docker |
 | [DESIGN_ADMIN_AND_OPS.md](docs/development/DESIGN_ADMIN_AND_OPS.md) | разработчики | Phase 7: админка, LLMOps, FinOps, guardrails |
 | [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md) | QA / продукт | LLM-as-judge: оценки и ограничения качества |
+| [V4_EVAL_GUIDE.md](docs/development/V4_EVAL_GUIDE.md) | QA / ML | Финальный eval v4 и сравнение с baseline v3 |
 | [RULES.md](docs/development/RULES.md) | разработчики | Правила кода, docs, workflow и безопасности |
 | [PROMPT_CURRENT.md](docs/development/PROMPT_CURRENT.md) | ассистент / DSH | Актуальные системные инструкции и метрики |
 | [RELEASES.md](docs/development/RELEASES.md) | релиз-менеджер | Журнал итераций, метрики и итоговые отчёты |
@@ -390,8 +391,8 @@ docker compose -f docker-compose.observability.yml up -d
 | Показатель | Значение |
 |---|---|
 | Версия | **v1.2.0** (KI-030 **Closed** в итерации 48: LoRA 3B/7B — 2.87/3.33 против zero-shot 4B 4.40/10, возврат к 4B; пересборка golden dataset — T-104b; KI-060 — языковой дрейф 7B) |
-| Итерация | **61 — Fix Judge Token Truncation (T-128)**: у судьи LLM-eval отдельный лимит `LLM_JUDGE_MAX_TOKENS=2048` (JSON больше не обрезается на 1024); baseline v3 на frozen set — **3.89/10**; итерации 1–60 закрыты |
-| Backend-тесты | **1386 passed, 7 skipped, 1 deselected, 1 xfailed** (101 файл тестов, прогон итерации 61 против локальных PostgreSQL/Redis, 245.87 с; в этом прогоне 8 live-тестов LM Studio выполнились, skip — 7 env-зависимых `token_budget`, `xfailed` — маркер KI-012) |
+| Итерация | **62 — V4 Final Eval Prep (T-129)**: `scripts/compare_evals.py` печатает Markdown-таблицу дельт v3↔v4 (шкалы, объяснения, CJK) и проверяет same-sample; гайд `V4_EVAL_GUIDE.md`; baseline v3 на frozen set — **3.60/10**; итерации 1–61 закрыты |
+| Backend-тесты | **1412 passed, 9 skipped, 1 deselected, 1 xfailed** (102 файла тестов, прогон итерации 62 против локальных PostgreSQL/Redis, 188.68 с; skip — 7 env-зависимых `token_budget` + 2 теста без `libcairo2`; `deselected` — live DeepSeek, `xfailed` — маркер KI-012) |
 | Frontend-тесты | **132 passed** (13 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, billing-API, auth-flow, PDF-API, eval, PGN-экспорт, варианты, загрузка PGN, стрелки; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **16** (15 ревизий, head `f2b3c4d5e6a7`; `llm_calls` — durable-история вызовов LLM, `usage_daily` — FinOps-агрегат, `engine_cache` — кэш MultiPV Stockfish, `export_jobs` — фоновые выгрузки, `users.is_verified` — email-верификация, `users.tier` + `stripe_customer_id` — подписка) |
