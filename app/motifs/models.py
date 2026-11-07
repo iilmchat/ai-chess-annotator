@@ -27,6 +27,7 @@ MotifType = Literal[
     "pin",
     "mate_threat",
     "winning_capture",
+    "hanging_piece",
 ]
 
 _FROZEN = ConfigDict(frozen=True, extra="forbid")

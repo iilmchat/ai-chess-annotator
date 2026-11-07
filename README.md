@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/iilmchat/ai-chess-annotator/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](docs/CHANGELOG.md)
-[![Backend tests](https://img.shields.io/badge/backend_tests-1429_passed-brightgreen.svg)](docs/development/RELEASES.md)
+[![Backend tests](https://img.shields.io/badge/backend_tests-1439_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![Frontend tests](https://img.shields.io/badge/frontend_tests-129_passed-brightgreen.svg)](docs/development/RELEASES.md)
 [![License](https://img.shields.io/badge/license-proprietary-lightgrey.svg)](#лицензия)
 
@@ -414,8 +414,8 @@ docker compose -f docker-compose.observability.yml up -d
 | Показатель | Значение |
 |---|---|
 | Версия | **v1.2.0** (KI-030 **Closed** в итерации 48: LoRA 3B/7B — 2.87/3.33 против zero-shot 4B 4.40/10, возврат к 4B; пересборка golden dataset — T-104b; KI-060 — языковой дрейф 7B) |
-| Итерация | **64 (шаг 1) — Semantic Evaluation (T-131)**: валидатор сверяет оценки и маты в тексте с `MoveAnalysis` (±0.5 пешки); итерации 1–63 закрыты |
-| Backend-тесты | **1429 passed, 17 skipped, 1 deselected, 1 xfailed** (104 файла тестов, прогон шага 1 итерации 64 против локальных PostgreSQL/Redis, 112.31 с; skip — 8 live LM Studio + 7 env-зависимых `token_budget` + 2 теста без `libcairo2`; `deselected` — live DeepSeek, `xfailed` — маркер KI-012) |
+| Итерация | **64 — Semantic Evaluation & Motif SEE (T-131/T-132)**: валидатор сверяет оценки/маты в тексте с `MoveAnalysis` (±0.5 пешки); SEE-фильтр для `hanging_piece`/`fork`; итерации 1–63 закрыты |
+| Backend-тесты | **1439 passed, 17 skipped, 1 deselected, 1 xfailed** (105 файлов тестов, прогон итерации 64 против локальных PostgreSQL/Redis, 99.69 с; skip — 8 live LM Studio + 7 env-зависимых `token_budget` + 2 теста без `libcairo2`; `deselected` — live DeepSeek, `xfailed` — маркер KI-012) |
 | Frontend-тесты | **132 passed** (13 файлов: chess.js FEN, board, форматирование, SSE-парсер, auth-store, auth-API, billing-API, auth-flow, PDF-API, eval, PGN-экспорт, варианты, загрузка PGN, стрелки; Vitest) |
 | Уровней ассистента | **3** (beginner / club / gm) |
 | Таблиц в БД | **16** (15 ревизий, head `f2b3c4d5e6a7`; `llm_calls` — durable-история вызовов LLM, `usage_daily` — FinOps-агрегат, `engine_cache` — кэш MultiPV Stockfish, `export_jobs` — фоновые выгрузки, `users.is_verified` — email-верификация, `users.tier` + `stripe_customer_id` — подписка) |
@@ -446,7 +446,7 @@ docker compose -f docker-compose.observability.yml up -d
 | LLM-eval | 5 партий × club/gm, 3 шкалы; **актуальный baseline v3 на frozen set — 3.60/10** (2.60/3.40/4.80, объяснения 60%, CJK 0.00%), **v4-датасет — 556 записей**; история: база 5.19/10 (9/10), baseline 4B 4.40, LoRA 3B/7B — 2.87/3.33; отчёт [LLM_EVAL.md](docs/development/reports/LLM_EVAL.md), сводка — [«Метрики качества»](#метрики-качества); KI-030 **Closed**, KI-060 Open |
 | Streaming | SSE `/v1/commentary/stream` и `/v1/chat/stream`: `meta`/`delta`/`done`/`error`, финальная SAN-валидация; UI печатает постепенно |
 | Observability | **LLMOps (T-030):** durable `llm_calls` (provider/model/level, tokens/cost/latency/cache_hit/status, prompt_slug/version, actor/game/commentary) — запись best-effort после `complete`/`stream_generate` + warmup, `cache_hit=true` для semantic cache; W3C `traceparent` → `trace_id` в `request.state`, contextvars, structlog, заголовок **`X-Trace-Id`** и OTel-спанах (`http_request` + вложенные `llm_*`); спаны `validator.validate` и `rag.retrieve`; OTel-экспорт `console`/`otlp`, admin-view `llm_calls`; **LLMOps-дашборд `/admin/llmops`** (T-109): p50/p95/p99, error rate, токены/стоимость, cache-hit rate, топ-5; **Grafana/Tempo/Prometheus-стек** (T-109b): `docker-compose.observability.yml`, spanmetrics по `http.route`, дашборд p95/p99 + 5xx + tokens/cost, провижининг datasource'ов; **alert rules (T-113)** — HighErrorRate/HighLatency/LLMBudgetExceeded; **retention** — `scripts/prune_llm_calls.py` (KI-048) и `scripts/prune_export_jobs.py` (KI-054); ограничения — KI-052, KI-057 |
-| KI-реестр | **61** запись: 25 Open, 36 Closed (KI-044 **Closed** в итерации 63: кэш `load_analyses`; KI-030 Closed; KI-060 — языковой дрейф 7B) |
+| KI-реестр | **61** запись: 25 Open, 36 Closed (KI-044 **Closed** в итерации 63; KI-023/KI-019 частично исправлены в итерации 64 — оценки/SEE; KI-030 Closed; KI-060 — языковой дрейф 7B) |
 | CI | GitHub Actions: ruff, mypy, alembic (upgrade + check + roundtrip), pytest, typecheck, build, test, Playwright E2E, docker build + smoke `import app.main` (KI-051); **`publish-docker` по тегу `v*` → GHCR (`:vX.Y.Z`, `:X.Y.Z`, `:latest`)**; pip + pnpm store cache |
 | Docker | multi-stage образ (Node → Python + SPA), `docker-compose.prod.yml` (app + worker + postgres + redis, общий volume экспортов), loopback-порты БД/Redis; **сервис `worker`** (`arq worker.WorkerSettings`) в dev/prod compose; публикация в GHCR готово к тегу `v1.0.0` (T-027) |
 | Слепой тест | `scripts/generate_blind_test.py` — 3 партии × 3 уровня, слоты A/B/C (seed), `answer_form.md` + `answers_key.json` (итерация 35); сам тест с 10 шахматистами не проведён (T-024, вручную) |

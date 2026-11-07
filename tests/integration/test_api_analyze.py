@@ -46,6 +46,7 @@ MOTIF_TYPES = {
     "pin",
     "mate_threat",
     "winning_capture",
+    "hanging_piece",
 }
 
 

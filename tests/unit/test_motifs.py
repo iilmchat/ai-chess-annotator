@@ -25,6 +25,7 @@ KNOWN_TYPES: set[str] = {
     "pin",
     "mate_threat",
     "winning_capture",
+    "hanging_piece",
 }
 
 

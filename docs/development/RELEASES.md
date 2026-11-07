@@ -3889,3 +3889,59 @@ eval и 28 unit-тестов; baseline v3 (**3.60/10**) зафиксирован
 - Дождаться v4 (3B, обучение на AMD) и прогнать `V4_EVAL_GUIDE.md`
   шаги 1–5; сравнить с baseline **3.60/10**.
 - Вернуться к KI-060 (CJK/объём данных) после v4-eval.
+
+## Итерация 64 — Semantic Evaluation & Motif SEE (T-131/T-132)
+
+**Дата:** 2026-11-08
+**Статус:** ✅ завершена — два независимых шага: валидация оценок/матов в
+тексте (KI-023) и SEE для `hanging_piece`/`fork` (KI-019); `pytest`,
+`ruff`, `mypy` зелёные.
+**Отчёты:** `docs/development/reports/v1.5.0/ITERATION-64-STEP-01_SEMANTIC_EVALS.md`,
+`.../ITERATION-64-STEP-02_MOTIF_SEE.md`
+
+### Шаг 1 — Semantic Evaluation (KI-023)
+
+- `app/commentary/semantic.py`: `extract_evaluation_claims` (знаковые
+  оценки `[+-]\d+\.\d+`, «мат в N»), `EvaluationClaim`,
+  `EVAL_TOLERANCE_PAWNS=0.5`; `validate_semantic_claims(..., analyses=...)`
+  сверяет числа с `MoveAnalysis` (белые POV, ±0.5 пешки, мат по модулю).
+- `app/commentary/service.py` передаёт `analyses`: расхождение → retry, на
+  последней попытке предложение вырезается.
+- Decimal-aware сегментация предложений: `+0.20` больше не режется на
+  `+0.` и `20`.
+- Тесты: `tests/unit/test_semantic_evaluations.py` (18) +
+  `tests/integration/test_commentary_semantic.py` (+3).
+- Коммит: `fix(semantic): add evaluation attribution validation (KI-023)`.
+
+### Шаг 2 — SEE для мотивов (KI-019)
+
+- `app/motifs/detector.py`: `is_piece_hanging(board, square)` —
+  упрощённый SEE (прямые атакующие/защитники + ценность, без очереди
+  взятий); новый тип `hanging_piece` (ценные фигуры соперника, до двух);
+  `fork` фильтруется: нужна хотя бы одна реально выигрываемая цель.
+- `app/motifs/models.py`: `hanging_piece` в `MotifType`;
+  `app/motifs/__init__.py` реэкспортирует `is_piece_hanging`; i18n RU/EN.
+- Тесты: `tests/unit/test_motif_see.py` (10); обновлены
+  `tests/unit/test_motifs.py` и `tests/integration/test_api_analyze.py`.
+- Коммит: `feat(motifs): add static exchange evaluation for hanging pieces and forks (KI-019)`.
+
+### Что не сделано и почему
+
+| Не сделано | Причина | Где |
+| :--- | :--- | :--- |
+| Полное закрытие KI-023 | Атрибуция мотивов/«лучшего хода» к полуходу и метрика 30–50 партий не входят в шаг | KI-023 (Open, частично) |
+| Полное закрытие KI-019 | Recall/precision на размеченных 20 позициях не измерены; SEE упрощённый | KI-019 (Open, частично) |
+
+### Метрики
+
+- **Новые тесты:** **21** шаг 1 (18 unit + 3 integration) + **10** шаг 2.
+- **Backend-тесты:** **1439 passed, 17 skipped, 1 deselected, 1 xfailed**
+  (99.69 с, exit 0; PostgreSQL `5437`, Redis `6385`).
+- **ruff:** `All checks passed!`; **mypy:** `Success: no issues found in
+  91 source files`; **frontend:** `pnpm --dir web typecheck` — 0 ошибок.
+- **GitHub Actions:** проверит оба коммита после push.
+
+### Что дальше
+
+- Дождаться v4 (3B, AMD) и прогнать `V4_EVAL_GUIDE.md`.
+- Для KI-019 — разметить 20 позиций и снять recall/precision.

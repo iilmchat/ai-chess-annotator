@@ -1332,6 +1332,13 @@
   вырезается. `generate_commentary` передаёт `analyses`. Тесты —
   `tests/unit/test_semantic_evaluations.py` (18) +
   `tests/integration/test_commentary_semantic.py` (+3).
+- **T-132.** SEE для мотивов и вилок (KI-019, итерация 64, шаг 2). **[x]** —
+  `app/motifs/detector.py::is_piece_hanging` (упрощённый static exchange
+  evaluation: атакующие/защищающие фигуры + ценность, без очереди взятий);
+  новый тип `hanging_piece` (ценные фигуры соперника, до двух) и фильтр
+  `fork` — вилка только если хотя бы одну цель можно выиграть по SEE.
+  UI-подписи `hanging_piece` в i18n RU/EN. Тесты —
+  `tests/unit/test_motif_see.py` (10).
 
 ---
 

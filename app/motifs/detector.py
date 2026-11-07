@@ -10,14 +10,15 @@ Stockfish:
 | `open_file` | файл без пешек, на котором стоит ладья/ферзь | доска |
 | `open_diagonal` | большая диагональ без пешек с слоном/ферзём | доска |
 | `king_safety` | король в центре при ферзях / отсутствует пешка f у рокированного короля | доска |
-| `fork` | фигура стороны, которая ходит, атакует ≥ 2 ценные цели | доска |
+| `fork` | ≥ 2 ценные цели, хотя бы одну можно выиграть по SEE | доска |
 | `pin` | у соперника есть связанная фигура | доска |
+| `hanging_piece` | ценная фигура соперника атакована и не защищена (SEE) | доска |
 | `mate_threat` | лучшая линия движка ведёт к мату | `multipv` |
 | `winning_capture` | лучший ход — взятие с выигрышем материала | `multipv` |
 
-Ограничения (KI-019): это эвристики, а не полный анализ. Нет SEE, нет
-учёта тактических защит, «вилка» ищется только по прямым атакам фигуры.
-Мотив — подсказка для текста, а не истина в последней инстанции.
+Ограничения (KI-019): SEE упрощённый, одноходовый: учитываются прямые
+атакующие/защищающие фигуры и их ценность, но не очередь взятий, связки,
+рентгены и защиты королём. Мотив — подсказка для текста, а не истина.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from app.motifs.models import Motif
 if TYPE_CHECKING:  # разрываем цикл импорта: engine.models импортирует Motif
     from app.engine.models import EngineLine
 
-__all__ = ["MAX_MOTIFS", "detect_motifs"]
+__all__ = ["MAX_MOTIFS", "detect_motifs", "is_piece_hanging"]
 
 #: Сколько мотивов максимум отдаём на позицию (иначе текст и БД тонут в шуме).
 MAX_MOTIFS = 6
@@ -53,7 +54,58 @@ _VALUE: dict[int, int] = {
     chess.KING: 0,
 }
 
+#: Русские названия фигур для описаний мотивов.
+_PIECE_NAMES: dict[int, str] = {
+    chess.PAWN: "пешка",
+    chess.KNIGHT: "конь",
+    chess.BISHOP: "слон",
+    chess.ROOK: "ладья",
+    chess.QUEEN: "ферзь",
+    chess.KING: "король",
+}
+
 _CENTER_FILES = {3, 4}
+
+
+def is_piece_hanging(board: chess.Board, square: chess.Square) -> bool:
+    """Можно ли выиграть фигуру на `square` простым разменом (SEE).
+
+    Учитываются только прямые атакующие/защищающие фигуры (без очереди
+    взятий и рентгенов):
+
+    * на поле нет фигуры или это король — ``False`` (короля не выигрывают);
+    * фигуру никто не атакует — ``False``;
+    * защитников нет — ``True``;
+    * есть защитники — ``True``, если самая дешёвая атакующая фигура
+      дешевле цели: тогда даже размен с потерей атакующего выгоден
+      (например, пешка против защищённого ферзя). Равный размен «висит» не
+      считается.
+
+    Args:
+        board: позиция.
+        square: поле с фигурой.
+
+    Returns:
+        ``True``, если фигура может быть выиграна по упрощённому SEE.
+    """
+    piece = board.piece_at(square)
+    if piece is None or piece.piece_type == chess.KING:
+        return False
+
+    enemy = not piece.color
+    cheapest_attacker: int | None = None
+    for attacker in board.attackers(enemy, square):
+        attacker_piece = board.piece_at(attacker)
+        if attacker_piece is None or attacker_piece.piece_type == chess.KING:
+            continue
+        value = _VALUE[attacker_piece.piece_type]
+        if cheapest_attacker is None or value < cheapest_attacker:
+            cheapest_attacker = value
+    if cheapest_attacker is None:
+        return False
+    if not board.attackers(piece.color, square):
+        return True
+    return cheapest_attacker < _VALUE[piece.piece_type]
 
 
 def detect_motifs(
@@ -80,6 +132,7 @@ def detect_motifs(
         *_open_diagonals(board),
         *_king_safety(board),
         *_tactical(board),
+        *_hanging_pieces(board),
         *_engine_motifs(board, multipv or []),
     ]
 
@@ -327,19 +380,33 @@ def _king_safety(board: chess.Board) -> list[Motif]:
 # --- тактика по доске -----------------------------------------------------
 
 def _find_fork(board: chess.Board) -> Motif | None:
+    """Найти вилку, которая реально выигрывает материал.
+
+    Двух атакованных фигур недостаточно: если обе защищены равной или
+    большей силой, размен невыгоден. Вилка считается мотивом, только если
+    хотя бы одну не-королевскую цель можно выиграть по
+    :func:`is_piece_hanging` (нет защиты или атакующий дешевле цели).
+    """
     color = board.turn
     side = "белых" if color == chess.WHITE else "чёрных"
     for square, piece in board.piece_map().items():
         if piece.color != color or piece.piece_type in (chess.PAWN, chess.KING):
             continue
-        targets = []
+        targets: list[str] = []
+        wins_material = False
         for attacked in board.attacks(square):
             target = board.piece_at(attacked)
             if target is None or target.color == color:
                 continue
-            if target.piece_type == chess.KING or _VALUE[target.piece_type] >= VALUABLE_TARGET:
+            if target.piece_type == chess.KING:
                 targets.append(chess.square_name(attacked))
-        if len(targets) >= 2:
+                continue
+            if _VALUE[target.piece_type] < VALUABLE_TARGET:
+                continue
+            targets.append(chess.square_name(attacked))
+            if is_piece_hanging(board, attacked):
+                wins_material = True
+        if len(targets) >= 2 and wins_material:
             names = ", ".join(sorted(targets))
             return Motif(
                 type="fork",
@@ -378,6 +445,49 @@ def _tactical(board: chess.Board) -> list[Motif]:
     if pin is not None:
         motifs.append(pin)
     return motifs
+
+
+def _hanging_pieces(board: chess.Board) -> list[Motif]:
+    """Ценные фигуры соперника, которые можно выиграть (SEE).
+
+    Пешки не считаются мотивом: их «висячесть» — обычная тактика, а не
+    тема для комментария. Возвращаем не больше двух самых ценных фигур,
+    чтобы не забивать `MAX_MOTIFS`.
+    """
+    enemy = not board.turn
+    found: list[tuple[int, Motif]] = []
+    for square, piece in board.piece_map().items():
+        if piece.color != enemy or piece.piece_type == chess.KING:
+            continue
+        value = _VALUE[piece.piece_type]
+        if value < VALUABLE_TARGET:
+            continue
+        if not is_piece_hanging(board, square):
+            continue
+        owner = "белых" if piece.color == chess.WHITE else "чёрных"
+        importance = (
+            5
+            if piece.piece_type == chess.QUEEN
+            else 4
+            if piece.piece_type == chess.ROOK
+            else 3
+        )
+        found.append(
+            (
+                value,
+                Motif(
+                    type="hanging_piece",
+                    description=(
+                        f"Висит {_PIECE_NAMES[piece.piece_type]} "
+                        f"{chess.square_name(square)} у {owner} "
+                        "(можно выиграть материал)"
+                    ),
+                    importance=importance,
+                ),
+            )
+        )
+    found.sort(key=lambda item: item[0], reverse=True)
+    return [motif for _, motif in found[:2]]
 
 
 # --- тактика по линиям движка --------------------------------------------
