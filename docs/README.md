@@ -65,7 +65,7 @@
 | [reports/v0.10.0/](development/reports/v0.10.0/) | Отчёт итерации 33 — frontend auth-UX (KI-055) и retention экспортов (KI-054) |
 | [reports/v0.11.0/](development/reports/v0.11.0/) | Отчёт итерации 34 — security review (T-110), GHCR (T-027), English prompts (T-106), Grafana alerts (T-113) |
 | [reports/v1.0.0/](development/reports/v1.0.0/) | Отчёт итерации 35 — финализация v1.0.0: английские PDF/чат/ошибки API (KI-058), `/history` плейсхолдер, admin `export_jobs`, blind-test script, финальные docs (`ITERATION-35.md`) |
-| [reports/v1.5.0/](development/reports/v1.5.0/) | Отчёты итераций 46–64: LoRA/данные, eval v3, судья, подготовка v4, кэш экспорта, семантика оценок и SEE (`ITERATION-64-STEP-*.md`) |
+| [reports/v1.5.0/](development/reports/v1.5.0/) | Отчёты итераций 46–64: LoRA/данные, eval v3, судья, подготовка v4, кэш экспорта, семантика оценок, SEE и тесты Policy (`ITERATION-64-STEP-*.md`) |
 | [reports/LLM_EVAL.md](development/reports/LLM_EVAL.md) | LLM-as-judge: средние оценки по трём шкалам (T-023) |
 
 ### Состояние проекта
