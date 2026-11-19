@@ -102,7 +102,13 @@
   LM Studio `text-embedding-nomic-embed-text-v1.5` (768, L2); задел на
   `bge-m3` / `text-embedding-3-large`.
 - **Retrieval**: top-k похожих позиций + их аннотации → передаются в LLM
-  как «контекст гроссмейстера».
+  как «контекст гроссмейстера» (уровень `gm`, `RAG_TOP_K`). Для `club`
+  retrieval опционален (`RAG_CLUB_ENABLED=false` по умолчанию) и использует
+  уменьшенный `RAG_CLUB_TOP_K` (1–2) — SPEC §3, T-018.
+- **Retrieval-кэш (T-018)**: `retrieval_cache` по SHA256 канонического FEN
+  без номера хода; при попадании аннотации загружаются из `annotated_games`
+  по сохранённым `top_k_ids` без вызова embedding-модели. TTL
+  `RETRIEVAL_CACHE_TTL_DAYS=30`, ошибки кэша логируются и не ломают RAG.
 
 ### 2.4. Motif Detector
 
@@ -158,6 +164,17 @@
 | **Policy** | «Не зевок + принцип» | Top-3 + мотивы | Top-line + стратегия |
 | **Стоимость/ход** | ~$0.0001 | ~$0.001 | ~$0.01–0.05 |
 
+**Распределённый локальный инференс (LM Link).** Поддерживается связка
+«локальный хост (AMD RX 9060 XT) → удалённый GPU-узел (NVIDIA RTX 3060 12 GB,
+CUDA)» через **LM Studio / LM Link**: приложение обращается к LM Studio на
+локальном хосте, а LM Link выполняет вывод на удалённом GPU-узле. Для всех
+уровней ассистента это по-прежнему локальный инференс — партии не уходят во
+внешнее облако (см. §10). Обучение `v4-7B` выполняется на удалённом узле
+(T-104b), готовый GGUF загружается в LM Studio и отдаётся через LM Link;
+конфигурация — `GPU_TRAINING_GUIDE.md` §6.3. Маршрутизация бэкендов и fallback
+описаны в `BackendRouter` (T-123/T-125), адрес бэкенда — `LLM_LOCAL_BACKEND_URL`
+(см. [DEPLOYMENT_GPU_TUNNEL.md](DEPLOYMENT_GPU_TUNNEL.md)).
+
 ---
 
 ## 4. Схема базы данных (PostgreSQL)
@@ -209,7 +226,9 @@ prompts(id, level VARCHAR(32) UNIQUE, content TEXT,
 audit_logs(id, timestamp, actor, action, target_id,
            details JSONB, prev_hash, current_hash)
 
--- Semantic cache (T-032, итерация 19): exact + vector поиск
+-- Semantic cache (T-032, итерация 19; KI-034/T-032b, итерация 66):
+-- exact + vector поиск. prompt_hash включает analysis_hash главной линии
+-- и фактов; комментарий целой партии ищется только exact, semantic — чат
 semantic_cache(id, fen_hash, fen_embedding vector(768), level,
                prompt_hash, response_text TEXT, created_at)
 
@@ -277,6 +296,8 @@ multipv)` — уникальный ключ кэша движка + `engine_cach
 | `GET` | `/v1/admin/exports/jobs/{id}/download` | Скачать готовый JSONL (409 — не готово, 410 — файл вне `EXPORT_DIR`). |
 | `POST` | `/v1/ingest` | Загрузка аннотированных партий в RAG (админ). |
 | `GET` | `/v1/health` | Healthcheck движка, БД, LLM. |
+| `DELETE` | `/v1/users/me` | GDPR: удаление аккаунта и всех данных пользователя (партии, ходы, мотивы, комментарии, правки, аудит); только владелец (T-139). |
+| `GET` | `/v1/users/me/export` | GDPR: экспорт данных пользователя — возвращает подписанную ссылку с коротким TTL и отдельным scope на скачивание архива (T-139/KI-057). |
 
 **Аутентификация:** JWT (`POST /auth/register|login|refresh|logout`,
 `GET /auth/me`; access 15 мин + refresh 7 дней; заголовок
@@ -320,6 +341,12 @@ JWT, анонимно — по IP; тир (`free` 50k / `pro` 500k) читает
 success/cancel/return URL; клиент не может подменить redirect. Без
 `STRIPE_SECRET_KEY`/`STRIPE_PRICE_ID` billing-эндпоинты отвечают 503
 `billing_not_configured`, приложение работает.
+
+**GDPR (T-139, RULES §7.3):** `DELETE /v1/users/me` удаляет аккаунт и связанные
+данные (games/moves/motifs/commentaries/edits/usage/llm_calls) с записью в
+аудит; `GET /v1/users/me/export` возвращает подписанную ссылку с коротким TTL и
+отдельным scope на скачивание архива (KI-057). Оба эндпоинта требуют JWT и
+доступны только владельцу данных; детали и порядок работ — `TODO.md` T-139.
 
 ---
 
@@ -423,8 +450,17 @@ success/cancel/return URL; клиент не может подменить redir
   локально». Для «клубного» разрешён fallback в DeepSeek только при
   недоступности локальной LLM (`BackendRouter`, T-123); при доступном GPU
   партия не покидает хост.
-- **GDPR**: право на удаление, экспорт данных.
-- **Масштабирование**: горизонтальное, stateless API, движки в пуле.
+- **Распределённый локальный инференс (LM Link)**: локальный хост (AMD RX 9060
+  XT) подключается к удалённому GPU-узлу (NVIDIA RTX 3060 12 GB, CUDA) через
+  LM Studio / LM Link — это расширение локального бэкенда из §3, а не облачный
+  провайдер. Обучение `v4-7B` выполняется на удалённом узле (T-104b), инференс
+  GGUF — через LM Studio / LM Link. При недоступности узла сохраняется прежний
+  fallback `BackendRouter` → DeepSeek для уровня «клуб» по настройкам
+  приватности; «новичок» остаётся локальным, «гроссмейстер» — облачным
+  (T-123/T-125). Конфиг и порядок описаны в `DEPLOYMENT_GPU_TUNNEL.md`.
+- **GDPR**: право на удаление и экспорт данных реализовано через
+  `DELETE /v1/users/me` и `GET /v1/users/me/export` (§5, T-139).
+- **Масштабирование**: горизонтательное, stateless API, движки в пуле.
 - **Отказоустойчивость**: fallback локальная LLM → облачная; кэш
   retrieval.
 - **Admin Control Plane**: защищённая панель `/admin` (`starlette-admin`)
