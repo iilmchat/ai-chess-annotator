@@ -61,6 +61,7 @@ from app.observability import (
 )
 from app.prompts import seed_prompts, warm_prompt_cache
 from app.prompts.pubsub import watch_prompt_updates
+from app.rag.cache import RetrievalCache
 from app.rag.context import make_rag_context_builder
 from app.tracing import TraceMiddleware, current_trace_id
 from app.web import SPAStaticFiles
@@ -90,6 +91,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.engine_cache = engine_cache
         app.state.engine_pool = EnginePool(cfg, cache=engine_cache)
+        # T-018: кэш retrieval по fen_hash; best-effort, как engine cache.
+        retrieval_cache = RetrievalCache(cfg) if cfg.retrieval_cache_enabled else None
+        app.state.retrieval_cache = retrieval_cache
         redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
             cfg.redis_url, decode_responses=True
         )
@@ -131,6 +135,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 logger.info("engine_cache_cleanup", deleted=deleted_engine)
             except Exception as exc:
                 logger.warning("engine_cache_cleanup_failed", error=str(exc))
+        # T-018: физическая чистка retrieval_cache старше TTL (best-effort).
+        if retrieval_cache is not None:
+            try:
+                deleted_retrieval = await retrieval_cache.cleanup_expired()
+                logger.info("retrieval_cache_cleanup", deleted=deleted_retrieval)
+            except Exception as exc:
+                logger.warning("retrieval_cache_cleanup_failed", error=str(exc))
         # KI-053: recovery зависших running-джоб при старте API.
         await recover_stale_export_jobs(cfg)
         app.state.rag_context_builder = make_rag_context_builder(cfg)

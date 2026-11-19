@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.rag.cache import RetrievalCache, retrieval_fen_hash
 from app.rag.context import make_rag_context_builder
 from app.rag.embedder import (
     DIMENSION,
@@ -16,10 +17,12 @@ __all__ = [
     "DIMENSION",
     "Embedder",
     "HashEmbedder",
+    "RetrievalCache",
     "find_similar_positions",
     "get_embedder",
     "ingest_pgn_text",
     "make_rag_context_builder",
     "parse_pgn_games",
     "position_document",
+    "retrieval_fen_hash",
 ]

@@ -357,7 +357,9 @@ def test_gm_commentary_includes_rag_context(
     game_id = asyncio.run(_seed_game())
     fake_llm = _LegalFakeLLM()
 
-    async def fake_rag(parsed: object, analyses: object) -> str:
+    async def fake_rag(
+        parsed: object, analyses: object, level: str = "gm"
+    ) -> str:
         return "# Похожие позиции из базы аннотаций (RAG)\n\n- Тестовая аннотация про d4"
 
     monkeypatch.setattr(
