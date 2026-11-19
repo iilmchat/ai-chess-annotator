@@ -4,7 +4,8 @@
 **Статус:** ✅ завершена — утечка контекста чужих партий устранена,
 `retrieval_cache` активирован, отчёт по RULES §2.18 (7 разделов).
 **Ветка:** `iter/66-cache-hardening` (от `main` @ `d280042`).
-**Коммиты:** `27290dd` (cache), `2fd2c9a` (RAG).
+**Коммиты:** `27290dd` (cache), `2fd2c9a` (RAG), `6b5c2d3` (docs),
+`a73a1fb` (fix RAG).
 
 **Исходное состояние.** `semantic_cache` искал ответ по FEN позиции и
 `prompt_hash(level, model, system_prompt, style/question/history)`. Ходов
@@ -49,8 +50,10 @@
 | `docs/development/SPEC.md` | §2.3: retrieval-кэш и уровни top_k; §4: ключ semantic cache с `analysis_hash` |
 
 **Не трогались:** `.gitignore` и `docs/development/reports/v1.2.0/ITERATION-66-INFRA.md`
-(параллельная инфраструктурная работа), а также предшествующие правки
-`TODO.md`/`CHANGELOG.md`/`SPEC.md`/`GPU_TRAINING_GUIDE.md` (RoadMap v1.3–v2.0).
+(параллельная инфраструктурная работа) и `GPU_TRAINING_GUIDE.md`.
+Предшествующие правки RoadMap в `TODO.md`/`CHANGELOG.md`/`SPEC.md`
+сохранены: наши изменения вносились точечными правками и вошли в
+docs-коммит вместе с ними.
 
 ---
 
@@ -58,13 +61,13 @@
 
 | Слой | Тест | Что проверено |
 | :--- | :--- | :--- |
-| Unit | `test_cache_isolation.py` (7) | Две транспозиции с одинаковым финальным FEN дают разные `analysis_hash`; хеш детерминирован и не зависит от метаданных; `prompt_hash` меняется; exact-only lookup не вызывает эмбеддер; семантический lookup его вызывает; поля `use_cache` в схемах API |
+| Unit | `test_cache_isolation.py` (6) | Две транспозиции с одинаковым финальным FEN дают разные `analysis_hash`; хеш детерминирован и не зависит от метаданных; `prompt_hash` меняется; exact-only lookup не вызывает эмбеддер; семантический lookup его вызывает; поля `use_cache` в схемах API |
 | Unit | `test_retrieval_cache.py` (5) | FEN без номера хода; TTL ≥ 1; выключенный кэш не трогает БД; отказ БД → `None`/без исключения; пустые id не пишутся |
 | Integration | `test_commentary_cache_isolation.py` (2) | Две партии с идентичным FEN → разные тексты, `cached=False`, `llm.calls == 2`; `use_cache=False` не создаёт строк в `semantic_cache` |
 | Integration | `test_retrieval_cache.py` (5) | miss → `top_k_ids` → hit без вызова `embedder`; устаревшая запись — miss; `cleanup_expired`; club `top_k=1`, gm `top_k=3`, beginner — без RAG; club выключен по умолчанию |
 | Регресс | `tests/integration/test_rag.py::test_gm_commentary_includes_rag_context` | gm видит RAG, club — нет при дефолтном `RAG_CLUB_ENABLED=false` |
 
-Новых тестов: **19** (7 + 5 + 2 + 5). Интеграционные требуют PostgreSQL;
+Новых тестов: **18** (6 + 5 + 2 + 5). Интеграционные требуют PostgreSQL;
 для проверки в этой итерации БД поднята через `docker compose up -d postgres
 redis`, схема — `alembic upgrade head`.
 
@@ -73,12 +76,13 @@ redis`, схема — `alembic upgrade head`.
 ## 3. Результаты
 
 **Build:** 0 ошибок / 0 предупреждений (Python, сборка не требуется).
-**Tests:** {{TESTS_RESULT}} ({{PYTEST_TIME}}, exit 0).
+**Tests:** 1487 passed, 17 skipped, 1 xfailed, 6 warnings
+(138.65 с, exit 0).
 
 | Проверка | Команда | Результат |
 | :--- | :--- | :--- |
-| Новые + затронутые | `pytest -q <8 файлов>` | `19 passed` (exit 0) |
-| Полная сюита | `pytest -q` | {{TESTS_RESULT}} ({{PYTEST_TIME}}, exit 0) |
+| Новые | `pytest -q <4 файла>` | `18 passed` (exit 0) |
+| Полная сюита | `pytest -q` | `1487 passed, 17 skipped, 1 xfailed, 6 warnings in 138.65 s` (exit 0) |
 | Линтер | `ruff check .` | `All checks passed!` |
 | Типы | `mypy app` | `Success: no issues found in 92 source files` |
 | Схема | `alembic upgrade head && alembic check` | `No new upgrade operations detected.` (миграция не нужна) |
@@ -129,9 +133,10 @@ UPDATE created_at -= 31 day    # cache.lookup(FEN) → None
   матрица уровней и тесты не меняются; включение требует явной настройки.
 - **Интеграционные тесты зависят от PostgreSQL.** Без БД они `skip`
   (существующая практика проекта); в этой итерации БД поднята локально.
-- **Полная сюита медленная** из-за live-тестов LLM/движка и Docker-задержек
-  в этой среде; acceptance-проверки (новые тесты, ruff, mypy, alembic) —
-  быстрые и зелёные.
+- **Число skipped зависит от окружения.** С поднятыми Postgres/Redis
+  пропусков 17 (LM Studio/libcairo2); без Redis их было 41. Live-тесты
+  LLM на этой машине не запускались; acceptance-проверки (новые тесты,
+  ruff, mypy, alembic) — зелёные в обоих конфигурациях.
 - **Параллельные правки в рабочей копии** (RoadMap, `.gitignore`, infra-отчёт)
   не являются частью этой итерации и не были перезаписаны.
 
