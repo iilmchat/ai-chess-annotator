@@ -230,7 +230,15 @@ async def _find_similar_positions_impl(
             .limit(top_k)
         )
         rows = (await db_session.scalars(statement)).all()
-        await retrieval.store(canonical, [int(row.id) for row in rows])
+        # Fake-строки в unit-тестах могут не нести id — кэш best-effort,
+        # поэтому не пишем запись, если идентификаторы недоступны.
+        row_ids = [
+            int(value)
+            for value in (getattr(row, "id", None) for row in rows)
+            if value is not None
+        ]
+        if row_ids:
+            await retrieval.store(canonical, row_ids)
     finally:
         if owns_session:
             await db_session.close()

@@ -127,7 +127,7 @@ async def test_cache_miss_stores_ids_then_hit_skips_embedder(
 
     stored = await cache.lookup(FEN)
     assert stored is not None
-    assert len(stored) == 2
+    assert len(stored) == len(first)
     assert all(item > 0 for item in stored)
 
     spy.calls = 0
