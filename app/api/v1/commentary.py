@@ -80,6 +80,13 @@ class CommentaryRequest(BaseModel):
             "DEFAULT_LANGUAGE"
         ),
     )
+    use_cache: bool = Field(
+        default=True,
+        description=(
+            "Читать/писать semantic_cache (T-032b). false — обход кэша "
+            "для отладки и eval"
+        ),
+    )
 
 
 class CommentaryResponse(BaseModel):
@@ -144,7 +151,13 @@ async def create_commentary(
     """
     await get_accessible_game(session, payload.analysis_id, user)
     language = _request_language(payload, request)
-    rag_context = _rag_builder(request) if payload.level == "gm" else None
+    cfg = getattr(request.app.state, "settings", None) or get_settings()
+    # T-018: gm использует полный retrieval; club — только при включённом
+    # RAG_CLUB_ENABLED (уменьшенный top_k).
+    use_rag = payload.level == "gm" or (
+        payload.level == "club" and cfg.rag_club_enabled
+    )
+    rag_context = _rag_builder(request) if use_rag else None
     # T-030: метрики вызова LLM в llm_calls (операция + владелец + партия).
     with llm_call_context(
         operation="commentary",
@@ -159,7 +172,8 @@ async def create_commentary(
             payload.style,
             language=language,
             rag_context=rag_context,
-            settings=getattr(request.app.state, "settings", None),
+            settings=cfg,
+            use_cache=payload.use_cache,
         )
 
     row = Commentary(
@@ -204,6 +218,10 @@ async def create_commentary_stream(
     """
     await get_accessible_game(session, payload.analysis_id, user)
     language = _request_language(payload, request)
+    cfg = getattr(request.app.state, "settings", None) or get_settings()
+    use_rag = payload.level == "gm" or (
+        payload.level == "club" and cfg.rag_club_enabled
+    )
     # T-030: генератор исполняется после возврата ответа, поэтому контекст
     # вызова LLM выставляется обёрткой вокруг итерации стрима.
     return EventSourceResponse(
@@ -214,8 +232,10 @@ async def create_commentary_stream(
                 payload.level,
                 payload.style,
                 language=language,
-                settings=getattr(request.app.state, "settings", None),
+                settings=cfg,
                 user_id=user.id,
+                rag_context=_rag_builder(request) if use_rag else None,
+                use_cache=payload.use_cache,
             ),
             operation="commentary",
             actor_id=user.id,

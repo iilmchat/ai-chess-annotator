@@ -31,6 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import (
+    analysis_hash,
     cache_usage,
     commentary_position_fen,
     lookup,
@@ -78,9 +79,11 @@ __all__ = [
     "pv_positions",
 ]
 
-#: Функция, добавляющая RAG-контекст к пакету фактов (T-017).
+#: Функция, добавляющая RAG-контекст к пакету фактов (T-017/T-018).
+#: Уровень нужен, чтобы включить уменьшенный retrieval только для `club`
+#: при `RAG_CLUB_ENABLED=true`.
 RagContextBuilder = Callable[
-    [ParsedGame, list[MoveAnalysis]], Awaitable[str | None]
+    [ParsedGame, list[MoveAnalysis], str], Awaitable[str | None]
 ]
 
 logger = structlog.get_logger(__name__)
@@ -238,12 +241,15 @@ async def generate_commentary(
     settings: Settings | None = None,
     client: BaseLLMClient | None = None,
     rag_context: RagContextBuilder | None = None,
+    use_cache: bool = True,
 ) -> GeneratedCommentary:
     """Сгенерировать и провалидировать комментарий для сохранённой партии.
 
     Args:
         language: ``ru``/``en`` (T-106); ``None`` — из `DEFAULT_LANGUAGE`.
             Выбор промпта и retry-подсказки зависит от языка.
+        use_cache: ``False`` полностью обходит кэш (чтение и запись) —
+            режим отладки/eval (T-032b).
 
     Raises:
         NotFoundError: партии или её анализа нет в БД.
@@ -263,17 +269,30 @@ async def generate_commentary(
     system_prompt = _with_style(system_prompt, style, lang)
 
     model = client.model if client is not None else model_for_level(cfg, level)
+    # KI-034: ключ комментария включает всю историю партии и пакет фактов —
+    # без analysis_hash похожий FEN другой партии дал бы чужой текст.
     prompt_hash_value = make_prompt_hash(
-        level, model, system_prompt, style=style
+        level,
+        model,
+        system_prompt,
+        style=style,
+        analysis_hash_value=analysis_hash(parsed, analyses),
     )
     position_fen = commentary_position_fen(parsed, analyses)
     lookup_started = time.perf_counter()
-    hit = await lookup(
-        session,
-        fen=position_fen,
-        level=level,
-        prompt_hash_value=prompt_hash_value,
-        settings=cfg,
+    # Векторный fallback для целой партии запрещён: только exact по
+    # fen_hash + analysis_hash + level + prompt_hash.
+    hit = (
+        await lookup(
+            session,
+            fen=position_fen,
+            level=level,
+            prompt_hash_value=prompt_hash_value,
+            settings=cfg,
+            allow_semantic=False,
+        )
+        if use_cache
+        else None
     )
     lookup_ms = int((time.perf_counter() - lookup_started) * 1000)
     if hit is not None:
@@ -289,7 +308,7 @@ async def generate_commentary(
 
     package = build_fact_package(parsed, analyses, level)
     if rag_context is not None:
-        extra = await rag_context(parsed, analyses)
+        extra = await rag_context(parsed, analyses, level)
         if extra:
             package = f"{package}\n\n{extra}"
 
@@ -311,14 +330,15 @@ async def generate_commentary(
         if owns_client:
             await llm.aclose()
 
-    await store(
-        session,
-        fen=position_fen,
-        level=level,
-        prompt_hash_value=prompt_hash_value,
-        response_text=text,
-        settings=cfg,
-    )
+    if use_cache:
+        await store(
+            session,
+            fen=position_fen,
+            level=level,
+            prompt_hash_value=prompt_hash_value,
+            response_text=text,
+            settings=cfg,
+        )
     return GeneratedCommentary(
         text=text, usage=usage, validated=True, attempts=attempts
     )

@@ -75,6 +75,13 @@ class ChatRequest(BaseModel):
             "(T-072); 0 — стартовая позиция, None — контекста нет"
         ),
     )
+    use_cache: bool = Field(
+        default=True,
+        description=(
+            "Читать/писать semantic_cache (T-032b). false — обход кэша "
+            "для отладки и eval"
+        ),
+    )
 
     @field_validator("message")
     @classmethod
@@ -124,6 +131,7 @@ async def chat_stream(
                 settings=getattr(request.app.state, "settings", None),
                 language=language,
                 selected_ply=payload.selected_ply,
+                use_cache=payload.use_cache,
             ),
             operation="chat",
             actor_id=user.id,
@@ -172,6 +180,7 @@ async def chat(
             settings=getattr(request.app.state, "settings", None),
             language=language,
             selected_ply=payload.selected_ply,
+            use_cache=payload.use_cache,
         )
     return ChatResponse(
         reply=result.reply,

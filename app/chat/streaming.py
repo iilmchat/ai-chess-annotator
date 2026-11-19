@@ -80,6 +80,7 @@ async def stream_chat(
     client: BaseLLMClient | None = None,
     language: str = "ru",
     selected_ply: int | None = None,
+    use_cache: bool = True,
 ) -> AsyncIterator[dict[str, str]]:
     """Ответить на вопрос потоком SSE-событий.
 
@@ -130,12 +131,16 @@ async def stream_chat(
         )
         position_fen = chat_position_fen(parsed)
         lookup_started = time.perf_counter()
-        hit = await lookup(
-            session,
-            fen=position_fen,
-            level=level,
-            prompt_hash_value=prompt_hash_value,
-            settings=cfg,
+        hit = (
+            await lookup(
+                session,
+                fen=position_fen,
+                level=level,
+                prompt_hash_value=prompt_hash_value,
+                settings=cfg,
+            )
+            if use_cache
+            else None
         )
         lookup_ms = int((time.perf_counter() - lookup_started) * 1000)
         if hit is not None:
@@ -241,13 +246,17 @@ async def stream_chat(
 
         tokens_in = estimate_tokens(prompt) + estimate_tokens(system_prompt)
         tokens_out = estimate_tokens(reply)
-        stored = await store(
-            session,
-            fen=position_fen,
-            level=level,
-            prompt_hash_value=prompt_hash_value,
-            response_text=reply,
-            settings=cfg,
+        stored = (
+            await store(
+                session,
+                fen=position_fen,
+                level=level,
+                prompt_hash_value=prompt_hash_value,
+                response_text=reply,
+                settings=cfg,
+            )
+            if use_cache
+            else False
         )
         if stored:
             await session.commit()

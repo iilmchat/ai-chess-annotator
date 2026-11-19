@@ -2,6 +2,7 @@
 
 from app.cache.semantic import (
     CacheHit,
+    analysis_hash,
     cache_usage,
     chat_position_fen,
     cleanup_expired_cache,
@@ -15,6 +16,7 @@ from app.cache.semantic import (
 
 __all__ = [
     "CacheHit",
+    "analysis_hash",
     "cache_usage",
     "chat_position_fen",
     "cleanup_expired_cache",
