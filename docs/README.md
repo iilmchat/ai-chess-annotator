@@ -77,7 +77,7 @@
 | Документ | Что внутри |
 | :--- | :--- |
 | [CHANGELOG.md](CHANGELOG.md) | История версий (Keep a Changelog), секции `[1.0.0]` и `[Unreleased]` |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-058 со статусами, severity и планом закрытия |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Реестр проблем KI-001…KI-061 со статусами, severity и планом закрытия (KI-034 Closed, KI-060 Open) |
 
 ### Тесты и данные
 
