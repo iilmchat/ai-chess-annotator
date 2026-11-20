@@ -4044,3 +4044,68 @@ v4 — LoRA/PEFT на **489 чистых записях DeepSeek**, экспор
 - 7B+чистые данные на GPU 12+ ГБ VRAM; повторный eval по
   `V4_EVAL_GUIDE.md`.
 - KI-060: CJK/объём данных — после 7B-прогона.
+
+---
+
+## Итерация 66 — Cache Hardening и v4-7B eval (T-018, T-032b, KI-034, T-104b)
+
+**Дата:** 2026-11-19/20
+**Статус:** ✅ кэш/изоляция завершены; ⚠️ T-104b in progress (7B = 3.20/10
+ниже порога 7/10)
+**Ветка:** `iter/66-cache-hardening` → `main` (merge `75c59dd`)
+**Отчёты:** `reports/v1.5.0/ITERATION-66.md` (7 разделов),
+`reports/v1.2.0/ITERATION-66-INFRA.md`, `reports/LLM_EVAL_V4_7B.md`,
+`reports/LLM_EVAL_V3_VS_V4_7B.md`
+
+### Что сделано
+
+- [x] **KI-034 / T-032b (утечка контекста чужой партии).** `analysis_hash`
+  главной линии и пакета фактов входит в `prompt_hash`; `/v1/commentary` и
+  `/v1/commentary/stream` ищут только exact (векторный fallback отключён),
+  чат сохраняет семантический поиск с точным `prompt_hash`. В теле запросов
+  четырёх эндпоинтов добавлен `use_cache: bool = true`. Тест на две
+  транспозиции с одинаковым FEN: второй ответ не из кэша, `llm.calls == 2`.
+- [x] **T-018 (активация `retrieval_cache`).** Новый `app/rag/cache.py`:
+  SHA256 FEN без номера хода, TTL `RETRIEVAL_CACHE_TTL_DAYS=30`, best-effort
+  логирование. `find_similar_positions` при попадании читает аннотации по
+  `top_k_ids` без вызова embedding-модели. Club-RAG под флагом
+  `RAG_CLUB_ENABLED=false` (reduced top_k), gm — полный `rag_top_k`.
+  Схема БД не менялась (`alembic check` — 0 операций).
+- [x] **T-104b (обучение и eval v4-7B).** RTX 3060 12 GB, QLoRA 4-bit,
+  556 записей v4, `train_loss=1.849`, GGUF q8_0 8.1 ГБ загружен в LM
+  Studio; eval на 5 партиях (`club`, замороженный набор): **3.20/10**
+  против baseline v3 **3.60/10** (Δ −0.40), CJK **0/5** после пост-фильтра
+  (один ответ дал `commentary_cjk_stripped`). Добавлен ignore `*.gguf`.
+- [x] **Документация.** RoadMap Фаз 9–12 (T-135…T-142), SPEC §2.3/§4,
+  GPU_TRAINING_GUIDE §6.3, CHANGELOG `[Unreleased]`, KNOWN_ISSUES (KI-034
+  Closed, KI-060 Open с метриками 7B), индекс отчётов.
+
+### Что не сделано и почему
+
+- **T-104b не закрыт:** 3.20/10 < 4.40/10 (baseline 4B) и < 7/10;
+  CJK-критерий формально выполнен, но дрейф генерируется моделью и
+  устраняется пост-фильтром. Остаётся `[~] in progress`.
+- **LM Link на узле Offline** (`tsnet_up_failed`, политика
+  Windows/Tailscale) — удалённый инференс через LM Link не подтверждён;
+  eval выполнялся через отдельный llama-server (а не через LM Studio API).
+- **Redis hot-слой и hit rate T-032b** — оптимизация/метрики, не изоляция
+  данных; вынесены в backlog и не блокируют закрытие KI-034.
+
+### Метрики
+
+- **Backend-тесты:** **1487 passed, 17 skipped, 1 xfailed, 6 warnings**
+  (138.65 с, exit 0; 18 новых тестов).
+- **ruff:** `All checks passed!`; **mypy:** `Success: no issues found in
+  92 source files`; **alembic check:** `No new upgrade operations
+  detected`.
+- **Frontend:** typecheck/build — по результатам финального прогона
+  интеграции (см. отчёт пуша).
+- **7B eval:** 3.20/10 (факт 3.00 / польза 3.00 / стиль 3.60), объяснения
+  40% (2/5), CJK 0.00% (0/5) после пост-фильтра.
+
+### Что дальше
+
+- T-104b: дообучение/данные для порога 4.40→7/10, починить LM Link на
+  узле, повторить eval на 30–50 партиях (T-024).
+- Redis hot-слой и метрики hit rate (остаток T-032b).
+- KI-060: CJK-дрейф у источника, расширение диапазона детектора.

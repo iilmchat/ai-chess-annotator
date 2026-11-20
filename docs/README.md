@@ -65,7 +65,11 @@
 | [reports/v0.10.0/](development/reports/v0.10.0/) | Отчёт итерации 33 — frontend auth-UX (KI-055) и retention экспортов (KI-054) |
 | [reports/v0.11.0/](development/reports/v0.11.0/) | Отчёт итерации 34 — security review (T-110), GHCR (T-027), English prompts (T-106), Grafana alerts (T-113) |
 | [reports/v1.0.0/](development/reports/v1.0.0/) | Отчёт итерации 35 — финализация v1.0.0: английские PDF/чат/ошибки API (KI-058), `/history` плейсхолдер, admin `export_jobs`, blind-test script, финальные docs (`ITERATION-35.md`) |
-| [reports/v1.5.0/](development/reports/v1.5.0/) | Отчёты итераций 46–65: LoRA/данные, eval v3/v4, судья, подготовка v4, кэш экспорта, семантика оценок, SEE, тесты Policy и закрытие KI-030 (`ITERATION-65.md`) |
+| [reports/v1.5.0/](development/reports/v1.5.0/) | Отчёты итераций 46–66: LoRA/данные, eval v3/v4, судья, подготовка v4, кэш экспорта, семантика оценок, SEE, тесты Policy и закрытие KI-030 (`ITERATION-65.md`), изоляция semantic cache и `retrieval_cache` (`ITERATION-66.md`) |
+| [reports/v1.5.0/ITERATION-66.md](development/reports/v1.5.0/ITERATION-66.md) | Итерация 66: KI-034 (утечка контекста чужой партии) и T-018 (`retrieval_cache`), 7 разделов по RULES §2.18 |
+| [reports/v1.2.0/ITERATION-66-INFRA.md](development/reports/v1.2.0/ITERATION-66-INFRA.md) | Итерация 66 (infra): обучение v4-7B на RTX 3060 12 GB, GGUF и eval; ранбук и ограничения (T-104b) |
+| [reports/LLM_EVAL_V4_7B.md](development/reports/LLM_EVAL_V4_7B.md) | LLM-as-judge: eval v4-7B — 3.20/10, CJK 0/5 после пост-фильтра (T-104b) |
+| [reports/LLM_EVAL_V3_VS_V4_7B.md](development/reports/LLM_EVAL_V3_VS_V4_7B.md) | Сравнение v3 (3.60) → v4-7B (3.20), Δ −0.40 (T-104b) |
 | [reports/LLM_EVAL.md](development/reports/LLM_EVAL.md) | LLM-as-judge: средние оценки по трём шкалам (T-023) |
 
 ### Состояние проекта

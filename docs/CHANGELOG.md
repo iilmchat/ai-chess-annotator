@@ -340,6 +340,12 @@
   инференса через LM Studio / LM Link и обучение `v4-7B` на RTX 3060 12 GB
   зафиксированы в `SPEC.md` §3/§10, `GPU_TRAINING_GUIDE.md` §6.3 и `TODO.md`
   (T-135…T-142, перенос T-123 в Фазу 11).
+- **Итоги обучения и eval v4-7B (T-104b, итерация 66):** QLoRA 4-bit на
+  удалённом узле RTX 3060 12 GB (556 записей v4, loss 1.849, GGUF q8_0
+  8.1 ГБ), eval на 5 партиях — **3.20/10** против baseline v3 **3.60/10**
+  (Δ **−0.40**), CJK **0/5** после пост-фильтра. Порог 7/10 не достигнут:
+  T-104b остаётся in progress, KI-060 — Open. Отчёты: `LLM_EVAL_V4_7B.md`,
+  `LLM_EVAL_V3_VS_V4_7B.md`, `v1.2.0/ITERATION-66-INFRA.md`.
 - **KI-030 закрыт: LoRA 3B и 7B отклонены, возврат к 4B (итерация 48).**
   `chess-annotator-3b` (Qwen2.5-3B) — **2.87/10**, `qwen-7b-tokenizer`
   (Qwen2.5-7B) — **3.33/10** против **4.40/10** у zero-shot Qwen3-4B.

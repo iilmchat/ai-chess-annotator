@@ -1157,6 +1157,18 @@
   RTX 3060 12 GB, инференс GGUF — через LM Studio / LM Link. T-104b
   вынесен в приоритетную [Фазу 9](#фаза-9-ai-quality-breakthrough--safe-caching-v130);
   конфигурация описана в `GPU_TRAINING_GUIDE.md` §6.3.
+  **Итерация 66 (in progress):** обучение `v4-7B` на удалённом узле
+  **RTX 3060 12 GB** выполнено — QLoRA 4-bit, 556 записей v4,
+  `train_loss=1.849` (7 шагов, ~18.8 мин), экспорт GGUF q8_0 (8.1 ГБ) и
+  загрузка в LM Studio. Eval на 5 партиях (`club`, замороженный набор,
+  судья DeepSeek): **3.20/10** (факт 3.00 / польза 3.00 / стиль 3.60)
+  против baseline v3 **3.60/10** (Δ **−0.40**), объяснения 40% (2/5),
+  **CJK 0.00% (0/5)** после пост-фильтра (в логе eval один ответ дал
+  `commentary_cjk_stripped`, 56 иероглифов). Порог 7/10 и ориентир
+  4.40/10 не взяты: T-104b остаётся **[~] in progress**, KI-060 — Open.
+  LM Link на узле Offline (`tsnet_up_failed`), eval шёл через отдельный
+  llama-server. Отчёты: `v1.2.0/ITERATION-66-INFRA.md`,
+  `LLM_EVAL_V4_7B.md`, `LLM_EVAL_V3_VS_V4_7B.md`.
 - **T-105.** On-prem профиль без облачных LLM (`LLM_PROVIDER=local`).
 - **T-106.** Английская локализация комментариев. **[x]** — выполнено в
   T-046 (итерация 34): `*_en.txt`, `DEFAULT_LANGUAGE`, `language`/
