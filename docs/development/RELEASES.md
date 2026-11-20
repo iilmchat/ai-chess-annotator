@@ -4069,7 +4069,7 @@ v4 — LoRA/PEFT на **489 чистых записях DeepSeek**, экспор
   SHA256 FEN без номера хода, TTL `RETRIEVAL_CACHE_TTL_DAYS=30`, best-effort
   логирование. `find_similar_positions` при попадании читает аннотации по
   `top_k_ids` без вызова embedding-модели. Club-RAG под флагом
-  `RAG_CLUB_ENABLED=false` (reduced top_k), gm — полный `rag_top_k`.
+  `RAG_CLUB_ENABLED=false` (уменьшенный top_k), gm — полный `rag_top_k`.
   Схема БД не менялась (`alembic check` — 0 операций).
 - [x] **T-104b (обучение и eval v4-7B).** RTX 3060 12 GB, QLoRA 4-bit,
   556 записей v4, `train_loss=1.849`, GGUF q8_0 8.1 ГБ загружен в LM
@@ -4098,8 +4098,8 @@ v4 — LoRA/PEFT на **489 чистых записях DeepSeek**, экспор
 - **ruff:** `All checks passed!`; **mypy:** `Success: no issues found in
   92 source files`; **alembic check:** `No new upgrade operations
   detected`.
-- **Frontend:** typecheck/build — по результатам финального прогона
-  интеграции (см. отчёт пуша).
+- **Frontend:** `pnpm --dir web typecheck` — `tsc --noEmit`, exit 0;
+  `pnpm --dir web build` — `✓ built in 11.16s`, exit 0.
 - **7B eval:** 3.20/10 (факт 3.00 / польза 3.00 / стиль 3.60), объяснения
   40% (2/5), CJK 0.00% (0/5) после пост-фильтра.
 
