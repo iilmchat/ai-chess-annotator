@@ -256,11 +256,20 @@ class Settings(BaseSettings):
     #: Сколько раз переспрашивать LLM в чате при нелегальных ходах.
     chat_max_retries: int = 2
 
-    # RAG (T-017)
-    #: Сколько похожих аннотированных партий подмешивать в пакет фактов.
+    # RAG (T-017/T-018)
+    #: Сколько похожих аннотированных партий подмешивать в пакет фактов
+    #: для уровня gm (SPEC §3 — полный retrieval).
     rag_top_k: int = 3
     #: Включать RAG-контекст для уровня gm.
     rag_enabled: bool = True
+    #: T-018/SPEC §3: уменьшенный retrieval для уровня «клуб». По умолчанию
+    #: выключен, чтобы не менять поведение/тесты текущей матрицы уровней.
+    rag_club_enabled: bool = False
+    #: top_k для клуба (1–2 позиции против полного rag_top_k у gm).
+    rag_club_top_k: int = 2
+    #: T-018: кэш retrieval по fen_hash (`retrieval_cache`).
+    retrieval_cache_enabled: bool = True
+    retrieval_cache_ttl_days: int = 30
     llm_timeout_s: float = 120.0
     llm_max_retries: int = 2
     llm_retry_backoff_s: float = 0.5

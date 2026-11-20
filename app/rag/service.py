@@ -28,6 +28,7 @@ from app.db.models import AnnotatedGame
 from app.db.session import SessionLocal
 from app.ingestion.parser import parse_fen
 from app.observability import get_tracer
+from app.rag.cache import RetrievalCache
 from app.rag.embedder import Embedder, get_embedder, position_document
 from app.tracing import trace_id_for_span
 
@@ -157,6 +158,7 @@ async def find_similar_positions(
     *,
     session: AsyncSession | None = None,
     embedder: Embedder | None = None,
+    cache: RetrievalCache | None = None,
 ) -> list[str]:
     """Найти аннотации партий с ближайшей позицией (косинусное расстояние).
 
@@ -168,6 +170,8 @@ async def find_similar_positions(
         top_k: сколько результатов вернуть.
         session: сессия БД; если не передана — создаётся своя.
         embedder: эмбеддер; по умолчанию `get_embedder()`.
+        cache: слой `retrieval_cache`; по умолчанию создаётся из настроек.
+            При попадании в кэш embedding не вычисляется (T-018).
 
     Returns:
         Тексты аннотаций (или описание партии, если аннотации нет).
@@ -183,7 +187,7 @@ async def find_similar_positions(
         span.set_attribute("rag.top_k", top_k)
         try:
             texts = await _find_similar_positions_impl(
-                fen, top_k, session=session, embedder=embedder
+                fen, top_k, session=session, embedder=embedder, cache=cache
             )
         except Exception as exc:
             span.record_exception(exc)
@@ -200,15 +204,24 @@ async def _find_similar_positions_impl(
     *,
     session: AsyncSession | None,
     embedder: Embedder | None,
+    cache: RetrievalCache | None,
 ) -> list[str]:
     """Тело :func:`find_similar_positions` без OTel-обвязки."""
-    board = parse_fen(fen)
-    emb = embedder or get_embedder()
-    vector = await emb.embed(position_document(board.fen()))
-
+    canonical = parse_fen(fen).fen()
+    retrieval = cache if cache is not None else RetrievalCache()
     owns_session = session is None
     db_session = session if session is not None else SessionLocal()
     try:
+        # T-018: попадание в кэш — читаем аннотации по id, эмбеддер не
+        # вызывается. Устаревшие id (строк удалены) → обычный поиск.
+        cached_ids = await retrieval.lookup(canonical)
+        if cached_ids is not None:
+            cached_rows = await _load_by_ids(db_session, cached_ids[:top_k])
+            if cached_rows:
+                return [_describe(row) for row in cached_rows]
+
+        emb = embedder or get_embedder()
+        vector = await emb.embed(position_document(canonical))
         distance = AnnotatedGame.embedding.cosine_distance(vector)
         statement = (
             select(AnnotatedGame)
@@ -217,11 +230,35 @@ async def _find_similar_positions_impl(
             .limit(top_k)
         )
         rows = (await db_session.scalars(statement)).all()
+        # Fake-строки в unit-тестах могут не нести id — кэш best-effort,
+        # поэтому не пишем запись, если идентификаторы недоступны.
+        row_ids = [
+            int(value)
+            for value in (getattr(row, "id", None) for row in rows)
+            if value is not None
+        ]
+        if row_ids:
+            await retrieval.store(canonical, row_ids)
     finally:
         if owns_session:
             await db_session.close()
 
     return [_describe(row) for row in rows]
+
+
+async def _load_by_ids(
+    session: AsyncSession, ids: list[int]
+) -> list[AnnotatedGame]:
+    """Загрузить аннотации по id, сохранив порядок из кэша."""
+    if not ids:
+        return []
+    rows = (
+        await session.scalars(
+            select(AnnotatedGame).where(AnnotatedGame.id.in_(ids))
+        )
+    ).all()
+    by_id = {int(row.id): row for row in rows}
+    return [by_id[item] for item in ids if item in by_id]
 
 
 def _describe(row: AnnotatedGame) -> str:

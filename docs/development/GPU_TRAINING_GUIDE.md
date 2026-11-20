@@ -652,6 +652,34 @@ python scripts/train_lora.py --dry-run --dataset data/gold_dataset_v4.jsonl
 `build_gold_dataset_v2.py --limit 20` и сверьте расход по счёту DeepSeek:
 стоимость растёт линейно от числа записей и длины пакета.
 
+### 6.3. Целевая конфигурация v4-7B: RTX 3060 12 GB + LM Link
+
+Для финального варианта `v4-7B` (чистый датасет `v4`, 489 записей DeepSeek —
+см. `TODO.md` T-134) целевой является не 24 ГБ RTX 4090 и не T4 16 ГБ, а
+удалённый узел с **NVIDIA RTX 3060 12 GB (CUDA)**: 12 ГБ VRAM достаточно для
+QLoRA 4-bit (`--load-in-4bit`) модели Qwen2.5-7B при `--max-length 2048`,
+`--batch-size 1`, `--grad-accum 16` и `--gradient-checkpointing` (в §10.3 для
+24 ГБ используется batch 4 — здесь он уменьшен под 12 ГБ). Гиперпараметры
+из §6.2 сохраняются: `--epochs 1 --lr 1e-4`. Узел доступен с локальной машины
+(AMD RX 9060 XT) через **LM Studio / LM Link**; оркестрация связки описана в
+`SPEC.md` §3/§10 и в `TODO.md` (Фаза 9, T-104b).
+
+```bash
+python scripts/train_lora.py \
+    --dataset data/gold_dataset_v4.jsonl \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --output-dir models/lora-club-v4-7b \
+    --epochs 1 --lr 1e-4 \
+    --batch-size 1 --grad-accum 16 \
+    --max-length 2048 --load-in-4bit --gradient-checkpointing
+```
+
+Готовый адаптер смерживается и конвертируется в GGUF (§10.5/§10.6), после чего
+загружается в LM Studio на локальном хосте и отдаётся через **LM Link** как
+локальный бэкенд (`LLM_LOCAL_BACKEND_URL`, T-123/T-126). При `CUDA OOM` на
+12 ГБ — `--max-length 1024` (см. §10.3), но это ухудшает совпадение формата
+обучения и инференса и допустимо только для диагностики.
+
 ---
 
 ## 7. Перенос адаптера обратно

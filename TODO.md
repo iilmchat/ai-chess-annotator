@@ -6,6 +6,24 @@
 
 Работай сверху вниз. Не перескакивай через зависимости.
 
+## Оглавление
+
+1. [Фаза 0. Foundation](#фаза-0-foundation-1-неделя)
+2. [Фаза 1. Ingestion + Engine](#фаза-1-ingestion--engine-1-неделя)
+3. [Фаза 2. Motif Detector + Policy Layer](#фаза-2-motif-detector--policy-layer-1-неделя)
+4. [Фаза 3. LLM Generation + Validator](#фаза-3-llm-generation--validator-1-неделя)
+5. [Фаза 4. RAG](#фаза-4-rag-1-неделя)
+6. [Фаза 5. Frontend + Chat + Human-in-the-loop](#фаза-5-frontend--chat--human-in-the-loop-1-неделя)
+7. [Фаза 6. Качество, метрики, релиз MVP](#фаза-6-качество-метрики-релиз-mvp-1-неделя)
+8. [Фаза 7. Production Hardening & Admin Panel](#фаза-7-production-hardening--admin-panel-45-недель)
+9. [Фаза 8. Frontend UX, LLM Evals и CI](#фаза-8-frontend-ux-llm-evals-и-ci-итерации-2023)
+10. [Фаза 9. AI Quality Breakthrough & Safe Caching (v1.3.0)](#фаза-9-ai-quality-breakthrough--safe-caching-v130)
+11. [Фаза 10. Hardening, Performance & Compliance (v1.4.0)](#фаза-10-hardening-performance--compliance-v140)
+12. [Фаза 11. Production Go-Live & Live Integrations (v1.5.0)](#фаза-11-production-go-live--live-integrations-v150)
+13. [Фаза 12. Enterprise & Scale (v2.0.0)](#фаза-12-enterprise--scale-v200)
+14. [Backlog (после MVP)](#backlog-после-mvp)
+15. [Как обновлять этот файл](#как-обновлять-этот-файл)
+
 ---
 
 ## Фаза 0. Foundation (1 неделя)
@@ -178,7 +196,7 @@
   релевантности).
 - **Оценка:** 2.5
 
-### [ ] T-018. Retrieval-слой в `/v1/commentary`
+### [x] T-018. Retrieval-слой в `/v1/commentary`
 - **Зависит от:** T-016, T-017
 - **Что:** для каждого критического хода — top-k аннотаций из базы →
   в «пакет фактов» для LLM (влияет на промпт гроссмейстерского уровня
@@ -186,6 +204,15 @@
 - **DoD:** e2e-тест: при наличии retrieved-контекста промпт содержит
   его; для новичка retrieval опционален.
 - **Оценка:** 1.5
+- **Статус итерации 66:** **[x]** — активирован `retrieval_cache`:
+  `app/rag/cache.py` (SHA256 FEN без номера хода, TTL
+  `RETRIEVAL_CACHE_TTL_DAYS=30`, upsert DELETE+INSERT, best-effort log
+  через structlog); `find_similar_positions` при попадании загружает
+  аннотации по `top_k_ids` и не вызывает эмбеддер. Для `club` добавлен
+  опциональный retrieval (`RAG_CLUB_ENABLED=false` по умолчанию,
+  `rag_club_top_k=1..2`), gm использует `rag_top_k`. Тесты: unit
+  (ключ/TTL/деградация) + integration (miss → запись → hit без embedder,
+  TTL, club/gm top_k). Схема БД не менялась (`alembic check` — 0 изменений).
 
 ---
 
@@ -490,7 +517,8 @@
   Тесты: `test_semantic_cache.py`, `test_cache_integration.py`; smoke:
   второй одинаковый комментарий — 0.030 с (< 100 мс).
   Остаток (Redis hot-слой, метрики hit/miss, engine-cache, `cache=off`)
-  — T-032b.
+  — T-032b. **Итерация 66:** engine-cache и `cache=off` (`use_cache`)
+  закрыты, KI-034 закрыт; остаются Redis hot-слой и метрики hit rate.
 - **Что:** кэш ответов LLM и результатов движка по нормализованному FEN:
   точный ключ `(fen_hash, level, prompt_slug+version, model)` +
   семантический поиск по эмбеддингу позиции в `semantic_cache`
@@ -503,7 +531,7 @@
   hit/miss/инвалидации; hit rate виден в метриках.
 - **Оценка:** 4
 
-### [ ] T-032b. Semantic Cache: Redis hot-слой и метрики
+### [x] T-032b. Semantic Cache: Redis hot-слой и метрики
 - **Зависит от:** T-032
 - **Что:** Redis hot-слой exact-ключа, метрики hit/miss и
   сэкономленных токенов, кэш результатов движка (engine), флаг
@@ -512,6 +540,12 @@
 - **DoD:** повторный exact-запрос не ходит в Postgres при горячем
   Redis; метрики видны; engine-кэш не смешивается с LLM.
 - **Оценка:** 2
+- **Статус итерации 66:** **[x]** в части изоляции (KI-034) и флага
+  обхода кэша. Добавлены `analysis_hash` в `prompt_hash`, exact-only для
+  целой партии, `use_cache: bool = True` во всех четырёх эндпоинтах
+  комментария/чата. Engine-кэш (T-108) и метрики `llm_calls.cache_hit`
+  (KI-046) уже работали. **Остаток в backlog:** Redis hot-слой, hit rate
+  в админке/OTel — отдельная задача, KI-034 закрыт и от них не зависит.
 
 ### [x] T-033. Prompt Injection Guardrails (итерация 18)
 - **Зависит от:** T-022, T-030
@@ -1116,6 +1150,13 @@
   сгенерировано **556 записей** v4-датасета через DeepSeek, максимальный
   ответ — **1884 токена**, обрезки нет (лимит `max_tokens=2048`, T-122);
   chat-SSE-остаток KI-060 закрыт.
+  **Обновление RoadMap (после итерации 65):** появился доступ к удалённому
+  узлу с **NVIDIA RTX 3060 12 GB (CUDA)** через **LM Studio / LM Link** в
+  связке с локальной машиной (AMD RX 9060 XT). Инфраструктурный блокер снят:
+  обучение `v4-7B` на чистом датасете `v4` (T-134) переносится на
+  RTX 3060 12 GB, инференс GGUF — через LM Studio / LM Link. T-104b
+  вынесен в приоритетную [Фазу 9](#фаза-9-ai-quality-breakthrough--safe-caching-v130);
+  конфигурация описана в `GPU_TRAINING_GUIDE.md` §6.3.
 - **T-105.** On-prem профиль без облачных LLM (`LLM_PROVIDER=local`).
 - **T-106.** Английская локализация комментариев. **[x]** — выполнено в
   T-046 (итерация 34): `*_en.txt`, `DEFAULT_LANGUAGE`, `language`/
@@ -1234,30 +1275,10 @@
   передаётся в `OpenAICompatibleClient` вместо `LLM_MAX_TOKENS=1024`,
   который обрезал русский текст и давал 729 отказов валидатора из 824
   партий; тесты и документация.
-- **T-123.** Cloud Deployment via Reverse SSH GPU Tunnel.
-  **Зависит от:** T-013 (LLM factory/router).
-  **Что:** по образцу соседнего проекта VetAssistant пробросить порт LM
-  Studio (локальная станция с RTX 3060) на облачный VPS через reverse
-  SSH-туннель, чтобы cloud-backend ходил в локальную модель.
-  **Детали:** `BackendRouter` в `app/llm/factory.py` с circuit-breaker:
-  если локальный GPU доступен через туннель (например,
-  `http://172.17.0.1:8034/v1`) — используем его; если ПК выключен или
-  недоступен — fallback на DeepSeek API.
-  **DoD:** local-first маршрутизация через туннель; circuit-breaker
-  открывается на ошибках соединения/таймаутах с cooldown;
-  автоматический fallback на DeepSeek; метрики/логи выбора маршрута;
-  конфиг через env (URL туннеля, таймауты, cooldown); unit-тесты
-  роутера (reachable/unreachable/circuit-open/fallback).
-  **Статус итерации 58:** доставлена первая половина — `BackendRouter`
-  (T-125) с local-first fallback, circuit-breaker'ом и env-конфигом
-  `LLM_ROUTER_LOCAL_TIMEOUT_S`/`LLM_ROUTER_COOLDOWN_S`; остаётся сам
-  reverse SSH-туннель и переключение `VLLM_BASE_URL` на облачный адрес
-  туннеля (T-123).
-  **Статус итерации 59:** конфиг и документация готовы (T-126):
-  `LLM_LOCAL_BACKEND_URL`, `LLM_LOCAL_TIMEOUT_S`,
-  `LLM_ROUTER_COOLDOWN_S` в `Settings` + гайд
-  `docs/development/DEPLOYMENT_GPU_TUNNEL.md`; остаётся практический
-  деплой на Selectel и живая проверка туннеля.
+- **T-123.** Перенесён в
+  [Фазу 11](#фаза-11-production-go-live--live-integrations-v150)
+  (v1.5.0, Production Go-Live & Live Integrations); полная формулировка и
+  история статусов сохранены там.
 - **T-126.** Reverse SSH GPU tunnel: конфиг и документация (T-123).
   **[x]** — выполнено в итерации 59: `Settings` получил
   `LLM_LOCAL_BACKEND_URL` (адрес LM Studio глазами приложения; на VPS —
@@ -1356,6 +1377,192 @@
   `llm_eval_results_v4.json` и `llm_eval_results_v3.json`; KI-030
   **Closed** с выводом «7B+шумные > 3B+чистые; для 7/10 нужны
   7B+чистые и GPU 12+ ГБ VRAM». README/CHANGELOG/LLM_EVAL обновлены.
+
+---
+
+## Фаза 9. AI Quality Breakthrough & Safe Caching (v1.3.0)
+
+**Главный приоритет** (вынесена вперёд облачного деплоя). Решение Владельца и
+Архитектора: инфраструктурный блокер снят — доступен удалённый узел с
+**NVIDIA RTX 3060 12 GB (CUDA)** через **LM Studio / LM Link** в связке с
+локальной машиной (AMD RX 9060 XT). Архитектура связки — `SPEC.md` §3/§10,
+конфигурация обучения — `GPU_TRAINING_GUIDE.md` §6.3.
+
+**Перенос задач из других разделов (без дублирования формулировок):**
+[T-104b](#backlog-после-mvp) (Backlog — обучение `v4-7B` на RTX 3060 12 GB),
+T-018 ([Фаза 4](#фаза-4-rag-1-неделя) — подключение `retrieval_cache`),
+T-032b ([Фаза 7](#фаза-7-production-hardening--admin-panel-45-недель) —
+изоляция `semantic_cache` по `analysis_hash`, KI-034).
+
+### [ ] T-135. Семантическая валидация атрибуции мотивов и лучшего хода (KI-023)
+- **Зависит от:** T-131, T-010, T-124
+- **Что:** расширить `app/commentary/semantic.py` проверкой того, что текст
+  комментария верно атрибуирует мотивы (`hanging_piece`, `fork`, связки) и
+  лучший ход конкретному полуходу: утверждения «мотив X на ходу N» и «лучший
+  ход Y» сверяются с `MoveAnalysis` и мотивами из пакета фактов. Расхождение →
+  `semantic_problems` → retry, на последней попытке — вырезание
+  offending-предложения (по образцу T-131).
+- **DoD:** unit-тесты на верную/неверную атрибуцию мотива и лучшего хода
+  (RU/EN), включая случай «лучший ход из PV»; 3+ интеграционных теста на
+  замороженном наборе T-124; доля ложных срабатываний на 5 партиях ≤ 5%;
+  `ruff`/`mypy`/`pytest` зелёные; KI-023 обновлён в реестре; отчёт §2.18.
+- **Оценка:** 2
+
+### [ ] T-136. Бенчмарк детектора мотивов (KI-019)
+- **Зависит от:** T-010, T-132, T-124
+- **Что:** бенчмарк качества `app/motifs/detector.py` на размеченной выборке
+  позиций: precision/recall по типам мотивов отдельно для `hanging_piece` и
+  `fork` (SEE из T-132), отчёт с разбивкой по фазам партии и базовыми числами
+  до/после T-132. Результат — в `LLM_EVAL.md` (или отдельном отчёте) со
+  ссылкой на KI-019.
+- **DoD:** скрипт бенчмарка и fixtures зафиксированы в репо; базовые метрики
+  (recall ≥ 80% по T-010) записаны в отчёт; порог регрессии добавлен в CI;
+  `ruff`/`mypy`/`pytest` зелёные; KI-019 обновлён; отчёт §2.18.
+- **Оценка:** 1.5
+
+### [ ] T-137. Адаптивный бюджет времени движка `deadline_ms` (KI-017)
+- **Зависит от:** T-008, T-108, T-109b
+- **Что:** параметр `deadline_ms` (в `Settings` и в запросе `/v1/analyze`)
+  ограничивает суммарное время анализа по всем полуходам; `EngineService`
+  перераспределяет остаток бюджета между ходами (глубина/movetime
+  уменьшаются ближе к концу партии). Кэш T-108 не должен скрывать просадки:
+  метрика реального времени уходит в LLMOps (T-109b).
+- **DoD:** партии 200+ полуходов укладываются в SLA ≤ 30 с (SPEC §9) на
+  тестовом прогоне; unit-тесты распределения бюджета на fake UCI + 1
+  интеграционный тест с реальным Stockfish depth=10; при `deadline_ms=0`
+  поведение прежнее; `ruff`/`mypy`/`pytest` зелёные; KI-017 обновлён;
+  отчёт §2.18.
+- **Оценка:** 2
+
+### [ ] T-138. Строгий парсинг movetext PGN (KI-012)
+- **Зависит от:** T-007
+- **Что:** заменить молчаливое обрывание разбора на неизвестном токене
+  (например, `2. Zz9`) на явную ошибку: исключение
+  `app/errors.py::InvalidPgnMovetextError` → 400 с кодом `invalid_pgn_movetext`
+  и номером полухода; сообщение локализуется через `Accept-Language` (KI-058).
+  Валидные NAG, комментарии и варианты продолжают разбираться как раньше.
+- **DoD:** unit-тесты на неизвестный токен, оборванный movetext, валидные
+  NAG/варианты; интеграционный тест `POST /v1/analyze` → 400 вместо
+  укороченной партии; `ruff`/`mypy`/`pytest` зелёные; KI-012 обновлён;
+  отчёт §2.18.
+- **Оценка:** 1
+
+---
+
+## Фаза 10. Hardening, Performance & Compliance (v1.4.0)
+
+**Перенос задач из Фазы 7 (без дублирования формулировок):**
+T-029b и T-033b ([Фаза 7](#фаза-7-production-hardening--admin-panel-45-недель))
+— Prompt Registry v2 с rollback и Guardrails v2.
+
+### [ ] T-139. GDPR-эндпоинты и подписанные URL экспортов (KI-057)
+- **Зависит от:** T-041, T-028b, T-045
+- **Что:** `DELETE /v1/users/me` — удаление аккаунта и всех связанных данных
+  (games/moves/motifs/commentaries/edits/usage/llm_calls) с записью в аудит;
+  `GET /v1/users/me/export` — запуск/получение экспорта с подписанной ссылкой
+  короткого TTL и отдельным scope (вместо только JWT/cookie админки).
+  Контракт зафиксирован в `SPEC.md` §5 и в `RULES.md` §7.3.
+- **DoD:** оба эндпоинта описаны в OpenAPI и покрыты интеграционными тестами
+  (удаление изолировано по владельцу, чужой пользователь → 404; ссылка
+  протухает и не принимается с чужим scope); запись удаления в аудит;
+  `ruff`/`mypy`/`pytest` зелёные; KI-057 обновлён; отчёт §2.18.
+- **Оценка:** 3
+
+### [ ] T-140. Real-Backend E2E в CI со Stub-LLM (KI-040)
+- **Зависит от:** T-036b, T-040, T-005
+- **Что:** отдельный CI-job поднимает Postgres + Redis + Stockfish + Stub-LLM
+  (детерминированные ответы по фикстурам, без внешней сети) и прогоняет
+  реальный Playwright-набор из T-036b без `page.route`-моков — полный сценарий
+  PGN → `/v1/analyze` → `/v1/commentary` → чат. Stub-LLM хранится в репо как
+  тестовая фикстура и не требует ключей провайдера.
+- **DoD:** job зелёный в GitHub Actions на каждом PR; 5 real-backend
+  сценариев проходят без моков страниц; артефакты trace/screenshot/video при
+  падении; `ruff`/`mypy`/`pytest`/`pnpm typecheck` зелёные; KI-040 обновлён;
+  отчёт §2.18.
+- **Оценка:** 2
+
+---
+
+## Фаза 11. Production Go-Live & Live Integrations (v1.5.0)
+
+**Главный инфраструктурный шаг:** деплой облачного VPS ещё не произведён —
+сначала отлаживается гибридная связка LM Link (локальный хост → удалённый
+RTX 3060 12 GB), затем VPS + reverse SSH-туннель.
+
+### [ ] T-123. Cloud Deployment via Reverse SSH GPU Tunnel
+- **Зависит от:** T-013 (LLM factory/router).
+- **Что:** по образцу соседнего проекта VetAssistant пробросить порт LM
+  Studio (локальная станция с RTX 3060) на облачный VPS через reverse
+  SSH-туннель, чтобы cloud-backend ходил в локальную модель.
+- **Детали:** `BackendRouter` в `app/llm/factory.py` с circuit-breaker:
+  если локальный GPU доступен через туннель (например,
+  `http://172.17.0.1:8034/v1`) — используем его; если ПК выключен или
+  недоступен — fallback на DeepSeek API.
+- **DoD:** local-first маршрутизация через туннель; circuit-breaker
+  открывается на ошибках соединения/таймаутах с cooldown;
+  автоматический fallback на DeepSeek; метрики/логи выбора маршрута;
+  конфиг через env (URL туннеля, таймауты, cooldown); unit-тесты
+  роутера (reachable/unreachable/circuit-open/fallback).
+- **Оценка:** 3
+- **Статус итерации 58:** доставлена первая половина — `BackendRouter`
+  (T-125) с local-first fallback, circuit-breaker'ом и env-конфигом
+  `LLM_ROUTER_LOCAL_TIMEOUT_S`/`LLM_ROUTER_COOLDOWN_S`; остаётся сам
+  reverse SSH-туннель и переключение `VLLM_BASE_URL` на облачный адрес
+  туннеля (T-123).
+- **Статус итерации 59:** конфиг и документация готовы (T-126):
+  `LLM_LOCAL_BACKEND_URL`, `LLM_LOCAL_TIMEOUT_S`,
+  `LLM_ROUTER_COOLDOWN_S` в `Settings` + гайд
+  `docs/development/DEPLOYMENT_GPU_TUNNEL.md`; остаётся практический
+  деплой на Selectel и живая проверка туннеля.
+- **Перемещение:** перенесено из Backlog в Фазу 11 без изменения текста и
+  истории; деплой VPS остаётся следующим шагом после T-140.
+
+**Перенос задачи из Фазы 6 (без дублирования формулировок):**
+T-027 ([Фаза 6](#фаза-6-качество-метрики-релиз-mvp-1-неделя)) — публикация
+образа в GHCR; CI-job добавлен в T-046.
+
+### [ ] T-141. Автоматизация cron и retention (KI-048, KI-049, KI-054)
+- **Зависит от:** T-109, T-045
+- **Что:** запланировать и задокументировать периодические задачи:
+  `scripts/prune_llm_calls.py` (KI-048), `scripts/prune_export_jobs.py`
+  (KI-054), ежемесячную агрегацию `usage_daily` (KI-049) с устранением
+  fire-and-forget durable-upsert; конфиг cron в `docker-compose.prod.yml`
+  и в `DEPLOYMENT_GPU_TUNNEL.md`/`GETTING_STARTED.md`, алерт при падении джобы.
+- **DoD:** все три джобы имеют cron-расписание и dry-run режим; тест на
+  идемпотентность upsert'а `usage_daily`; retention не удаляет свежие записи;
+  `ruff`/`mypy`/`pytest` зелёные; KI-048/KI-049/KI-054 обновлены; отчёт §2.18.
+- **Оценка:** 1.5
+
+### [ ] T-142. Живая активация SMTP и Stripe (KI-056, KI-059)
+- **Зависит от:** T-082, T-083, T-028b
+- **Что:** переключить `EMAIL_SENDER=smtp` на реальные SMTP-креды и прогнать
+  verify/reset/forgot-password письма; активировать Stripe в test-mode
+  (keys/webhook secret/price id) и проверить полный флоу checkout → webhook →
+  `users.tier` → portal; все секреты — только в ENV/Vault, `.env.example`
+  остаётся с плейсхолдерами (RULES §7.1).
+- **DoD:** письма реально доставляются в staging (подтверждение в логе);
+  Stripe-checkout и webhook проходят с реальными test-mode ключами, а при их
+  отсутствии приложение работает по-прежнему (503 `billing_not_configured`);
+  runbook обновлён; `ruff`/`mypy`/`pytest`/E2E зелёные; KI-056/KI-059
+  обновлены; отчёт §2.18.
+- **Оценка:** 2
+
+---
+
+## Фаза 12. Enterprise & Scale (v2.0.0)
+
+- **T-101.** Leela Chess Zero как второй движок для гроссмейстерского уровня
+  (формулировка — в [Backlog](#backlog-после-mvp)).
+- **T-111.** Multi-tenant организации и RBAC (роли `owner/admin/editor/viewer`,
+  изоляция по `org_id`) — формулировка в [Backlog](#backlog-после-mvp).
+- **T-118.** SSO/SAML для админки (OIDC-провайдер, SCIM-провижининг) —
+  формулировка в [Backlog](#backlog-после-mvp).
+- **T-112.** A/B-эксперименты версий промптов с автоматической оценкой
+  LLM-as-judge и выбором победителя — формулировка в
+  [Backlog](#backlog-после-mvp).
+
+> Фаза 12 запланирована как укрупнённая: детализация задач и оценки даются
+> отдельным дизайн-документом до начала работ (RULES §5.1).
 
 ---
 

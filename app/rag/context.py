@@ -1,9 +1,10 @@
-"""RAG-контекст для комментария гроссмейстерского уровня (T-017).
+"""RAG-контекст для комментария (T-017/T-018).
 
 Для 2–3 ключевых моментов партии (`blunder`/`mistake`/`inaccuracy`) ищет
 похожие позиции в `annotated_games` и добавляет найденные аннотации в пакет
-фактов отдельным разделом. Только для `gm`: новичку и клубу база
-аннотаций не нужна (SPEC §3).
+фактов отдельным разделом. Полный retrieval — для `gm` (SPEC §3); для
+уровня `club` он опционален (`RAG_CLUB_ENABLED`) и использует уменьшенный
+`top_k`. Новичку база аннотаций не нужна.
 
 Сбой RAG не должен ломать генерацию: любая ошибка поиска логируется, и
 контекст просто не добавляется.
@@ -20,6 +21,7 @@ from app.config import Settings, get_settings
 from app.db.session import SessionLocal
 from app.engine.models import MoveAnalysis
 from app.ingestion.models import ParsedGame
+from app.rag.cache import RetrievalCache
 from app.rag.service import find_similar_positions
 
 __all__ = ["make_rag_context_builder"]
@@ -28,10 +30,9 @@ logger = structlog.get_logger(__name__)
 
 _KEY_CLASSES = frozenset({"blunder", "mistake", "inaccuracy"})
 _MAX_KEY_MOMENTS = 3
-_MAX_PER_POSITION = 2
 
 type RagContextBuilder = Callable[
-    [ParsedGame, list[MoveAnalysis]], Awaitable[str | None]
+    [ParsedGame, list[MoveAnalysis], str], Awaitable[str | None]
 ]
 type SessionFactory = Callable[[], AsyncSession]
 
@@ -40,15 +41,25 @@ def make_rag_context_builder(
     settings: Settings | None = None,
     *,
     session_factory: SessionFactory | None = None,
+    cache: RetrievalCache | None = None,
 ) -> RagContextBuilder:
-    """Собрать функцию `(ParsedGame, analyses) -> str | None` для эндпоинта."""
+    """Собрать функцию `(ParsedGame, analyses, level) -> str | None`."""
     cfg = settings or get_settings()
     factory = session_factory or SessionLocal
+    retrieval = cache if cache is not None else RetrievalCache(cfg)
 
     async def builder(
-        parsed: ParsedGame, analyses: list[MoveAnalysis]
+        parsed: ParsedGame,
+        analyses: list[MoveAnalysis],
+        level: str = "gm",
     ) -> str | None:
         if not cfg.rag_enabled:
+            return None
+        if level == "gm":
+            top_k = cfg.rag_top_k
+        elif level == "club" and cfg.rag_club_enabled:
+            top_k = cfg.rag_club_top_k
+        else:
             return None
 
         key_moments = [
@@ -69,7 +80,7 @@ def make_rag_context_builder(
                 )
                 try:
                     texts = await find_similar_positions(
-                        fen, top_k=_MAX_PER_POSITION, session=session
+                        fen, top_k=top_k, session=session, cache=retrieval
                     )
                 except Exception as exc:  # RAG не должен ломать генерацию
                     logger.warning("rag_lookup_failed", error=str(exc))

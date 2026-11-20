@@ -198,6 +198,7 @@ async def answer_question(
     client: BaseLLMClient | None = None,
     language: str = "ru",
     selected_ply: int | None = None,
+    use_cache: bool = True,
 ) -> ChatAnswer:
     """Ответить на вопрос пользователя по сохранённому анализу партии.
 
@@ -252,12 +253,16 @@ async def answer_question(
     )
     position_fen = chat_position_fen(parsed)
     lookup_started = time.perf_counter()
-    hit = await lookup(
-        session,
-        fen=position_fen,
-        level=level,
-        prompt_hash_value=prompt_hash_value,
-        settings=cfg,
+    hit = (
+        await lookup(
+            session,
+            fen=position_fen,
+            level=level,
+            prompt_hash_value=prompt_hash_value,
+            settings=cfg,
+        )
+        if use_cache
+        else None
     )
     lookup_ms = int((time.perf_counter() - lookup_started) * 1000)
     if hit is not None:
@@ -296,13 +301,17 @@ async def answer_question(
         if owns_client:
             await llm.aclose()
 
-    stored = await store(
-        session,
-        fen=position_fen,
-        level=level,
-        prompt_hash_value=prompt_hash_value,
-        response_text=reply,
-        settings=cfg,
+    stored = (
+        await store(
+            session,
+            fen=position_fen,
+            level=level,
+            prompt_hash_value=prompt_hash_value,
+            response_text=reply,
+            settings=cfg,
+        )
+        if use_cache
+        else False
     )
     if stored:
         # У чата нет собственной записи в БД; коммитим только кэш.

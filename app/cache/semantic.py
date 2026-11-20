@@ -7,10 +7,16 @@
 2. **semantic** — косинусное расстояние между `fen_embedding` запроса и
    записями с тем же `level + prompt_hash`; порог по умолчанию 0.05.
 
-`prompt_hash` включает системный промпт, модель и style/question: без
-него кэш вернул бы ответ на другой вопрос или после смены промпта.
+`prompt_hash` включает системный промпт, модель, style/question и
+(для комментария целой партии) `analysis_hash` — отпечаток последовательности
+ходо́в и фактов анализа. Без него две разные партии, пришедшие в похожую
+позицию, получили бы комментарий друг друга (KI-034/T-032b).
 `created_at` + TTL отсекает старые записи; `cleanup_expired_cache`
 удаляет их физически.
+
+Векторный fallback включается только там, где история партии не влияет на
+ответ (чат по конкретной позиции). Для комментария целой партии он
+отключается вызовом `lookup(..., allow_semantic=False)`.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from app.rag.embedder import Embedder, get_embedder, position_document
 
 __all__ = [
     "CacheHit",
+    "analysis_hash",
     "cache_usage",
     "chat_position_fen",
     "cleanup_expired_cache",
@@ -80,8 +87,16 @@ def make_prompt_hash(
     style: str | None = None,
     question: str | None = None,
     history: str | None = None,
+    analysis_hash_value: str | None = None,
 ) -> str:
-    """Отпечаток «уровень + модель + sysprompt + style/question/history»."""
+    """Отпечаток входа LLM: уровень, модель, промпт + контекст запроса.
+
+    ``analysis_hash_value`` — детерминированный отпечаток партии (KI-034):
+    для комментария целой партии в него входят все ходы и пакет фактов.
+    Две партии с похожим FEN, но разной историей получают разные хеши и
+    не переиспользуют комментарий друг друга. Для чата поле пустое: там
+    контекст привязан к вопросу/истории через ``question``/``history``.
+    """
     payload = "\x1f".join(
         (
             level,
@@ -90,8 +105,38 @@ def make_prompt_hash(
             style or "",
             question or "",
             history or "",
+            analysis_hash_value or "",
         )
     )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def analysis_hash(parsed: ParsedGame, analyses: list[MoveAnalysis]) -> str:
+    """sha256 нормализованной главной линии + фактов анализа партии (KI-034).
+
+    Хеш не зависит от метаданных (имена, event, дата) — по RULES §7.3 они
+    не должны попадать во внешние системы. Зато он меняется при любом
+    отличии в последовательности ходов, оценках, лучшем ходе,
+    классификации или мотивах: комментарий к партии A не может быть
+    выдан за комментарий к партии B, даже если позиции совпадают.
+    """
+    mainline = "\x1f".join(f"{move.ply}:{move.san}" for move in parsed.moves)
+    facts = "\x1f".join(
+        "\x1e".join(
+            (
+                str(item.ply),
+                item.played_move_san,
+                item.played_move_uci,
+                item.best_move_san,
+                str(item.eval_before),
+                str(item.eval_after),
+                str(item.delta_cp),
+                item.classification,
+            )
+        )
+        for item in analyses
+    )
+    payload = "\x1d".join((parsed.initial_fen, parsed.final_fen, mainline, facts))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -147,8 +192,14 @@ async def lookup(
     prompt_hash_value: str,
     settings: Settings | None = None,
     embedder: Embedder | None = None,
+    allow_semantic: bool = True,
 ) -> CacheHit | None:
-    """Найти ответ кэша: exact, затем semantic (если разрешён)."""
+    """Найти ответ кэша: exact, затем semantic (если разрешён).
+
+    ``allow_semantic=False`` отключает векторный fallback: комментарий
+    целой партии ищется только по полному ключу (позиция + анализ + уровень
+    + промпт). Эмбеддер в этом режиме не вызывается вообще (KI-034).
+    """
     cfg = settings or get_settings()
     if not cfg.semantic_cache_enabled:
         return None
@@ -177,6 +228,11 @@ async def lookup(
     if exact is not None:
         logger.info("semantic_cache_hit", kind="exact", level=level)
         return CacheHit(text=exact.response_text, kind="exact")
+
+    if not allow_semantic:
+        logger.debug("semantic_cache_semantic_skipped", level=level)
+        logger.info("semantic_cache_miss", level=level)
+        return None
 
     try:
         emb = embedder or get_embedder(cfg)

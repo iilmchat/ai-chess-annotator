@@ -29,6 +29,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import (
+    analysis_hash,
     commentary_position_fen,
     lookup,
     make_prompt_hash,
@@ -36,7 +37,12 @@ from app.cache import (
     store,
 )
 from app.commentary.semantic import has_cjk, sanitize_cjk
-from app.commentary.service import load_analyses, load_game, pv_positions
+from app.commentary.service import (
+    RagContextBuilder,
+    load_analyses,
+    load_game,
+    pv_positions,
+)
 from app.config import Settings, get_settings
 from app.db.models import Commentary, Level
 from app.engine.validator import extract_moves_from_text, validate_moves
@@ -77,6 +83,8 @@ async def stream_commentary(
     settings: Settings | None = None,
     client: BaseLLMClient | None = None,
     user_id: int | None = None,
+    rag_context: RagContextBuilder | None = None,
+    use_cache: bool = True,
 ) -> AsyncIterator[dict[str, str]]:
     """Сгенерировать комментарий потоком SSE-событий.
 
@@ -85,6 +93,8 @@ async def stream_commentary(
         user_id: владелец создаваемой записи `commentaries.user_id`
             (T-028/KI-035). ``None`` — служебная/тестовая генерация без
             пользователя (legacy-поведение).
+        rag_context: опциональный retrieval для `gm`/`club` (T-017/T-018).
+        use_cache: ``False`` обходит чтение и запись кэша (T-032b).
     """
     cfg = settings or get_settings()
     lang = resolve_language(language, None, cfg.default_language)
@@ -117,17 +127,28 @@ async def stream_commentary(
             system_prompt = f"{system_prompt}\n\n{label}: {style}"
 
         model = client.model if client is not None else model_for_level(cfg, level)
+        # KI-034: analysis_hash связывает кэш со всей историей партии.
         prompt_hash_value = make_prompt_hash(
-            level, model, system_prompt, style=style
+            level,
+            model,
+            system_prompt,
+            style=style,
+            analysis_hash_value=analysis_hash(parsed, analyses),
         )
         position_fen = commentary_position_fen(parsed, analyses)
         lookup_started = time.perf_counter()
-        hit = await lookup(
-            session,
-            fen=position_fen,
-            level=level,
-            prompt_hash_value=prompt_hash_value,
-            settings=cfg,
+        # Только exact: векторный fallback для целой партии опасен (KI-034).
+        hit = (
+            await lookup(
+                session,
+                fen=position_fen,
+                level=level,
+                prompt_hash_value=prompt_hash_value,
+                settings=cfg,
+                allow_semantic=False,
+            )
+            if use_cache
+            else None
         )
         lookup_ms = int((time.perf_counter() - lookup_started) * 1000)
         if hit is not None:
@@ -175,6 +196,10 @@ async def stream_commentary(
             )
 
         package = build_fact_package(parsed, analyses, level)
+        if rag_context is not None:
+            extra = await rag_context(parsed, analyses, level)
+            if extra:
+                package = f"{package}\n\n{extra}"
         llm = client if client is not None else get_llm_client(level, cfg)
         llm.set_level(level)
         yield sse_event("meta", model=llm.model, level=level, language=lang)
@@ -241,14 +266,15 @@ async def stream_commentary(
             ),
             validated=True,
         )
-        await store(
-            session,
-            fen=position_fen,
-            level=level,
-            prompt_hash_value=prompt_hash_value,
-            response_text=text,
-            settings=cfg,
-        )
+        if use_cache:
+            await store(
+                session,
+                fen=position_fen,
+                level=level,
+                prompt_hash_value=prompt_hash_value,
+                response_text=text,
+                settings=cfg,
+            )
         session.add(row)
         await session.commit()
         # KI-046: id появился — привязываем уже записанные вызовы LLM
